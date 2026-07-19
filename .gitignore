@@ -1,0 +1,5 @@
+.streamlit/secrets.toml
+pi3_local.db
+__pycache__/
+*.pyc
+.venv/
