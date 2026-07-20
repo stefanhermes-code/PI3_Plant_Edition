@@ -27,6 +27,7 @@ from db import (
     PHASE_NAMES,
     SEVERITIES,
     ComponentStreamReading,
+    FallplateSectionPosition,
     FoamGrade,
     ProductionEvent,
     ProductionPhase,
@@ -56,7 +57,9 @@ PHASE_OPTIONAL_COLUMNS = [
     "phase_start", "phase_end", "is_steady_state",
     "mixer_rpm_setpoint", "mixer_rpm_actual_mean",
     "conveyor_speed_setpoint", "conveyor_speed_actual_mean",
-    "air_injection_rate", "air_pressure_bar",
+    "air_injection_rate_setpoint", "air_injection_rate_actual",
+    "air_pressure_setpoint_bar", "air_pressure_actual_bar",
+    "ratio_index_target", "ratio_index_actual",
     "laydown_mode", "section_positions_note",
     "sidewall_width_mm", "foam_height_actual_mean_mm", "notes",
 ]
@@ -64,9 +67,13 @@ PHASE_OPTIONAL_COLUMNS = [
 STREAM_REQUIRED_COLUMNS = ["production_run_id", "phase_name", "stream_name"]
 STREAM_OPTIONAL_COLUMNS = [
     "flow_unit", "flow_setpoint", "flow_actual_mean", "flow_actual_min",
-    "flow_actual_max", "flow_actual_sd", "pressure_actual_mean_bar",
-    "temperature_setpoint_c", "temperature_actual_mean_c", "notes",
+    "flow_actual_max", "flow_actual_sd", "flow_total_qty", "pressure_actual_mean_bar",
+    "temperature_setpoint_c", "temperature_actual_mean_c",
+    "calibration_status", "calibration_note", "notes",
 ]
+
+FALLPLATE_REQUIRED_COLUMNS = ["production_run_id", "phase_name", "section_number"]
+FALLPLATE_OPTIONAL_COLUMNS = ["position_mm", "angle_deg", "notes"]
 
 EVENT_REQUIRED_COLUMNS = ["production_run_id", "event_type", "event_ts"]
 EVENT_OPTIONAL_COLUMNS = ["phase_name", "severity", "description", "action_taken"]
@@ -187,13 +194,28 @@ if runs:
             conveyor_speed_actual_mean = c4.number_input("Conveyor m/min — actual mean", min_value=0.0, step=0.01)
 
             c5, c6, c7, c8 = st.columns(4)
-            air_injection_rate = c5.number_input("Air injection rate", min_value=0.0, step=0.1)
-            air_pressure_bar = c6.number_input("Air pressure (bar)", min_value=0.0, step=0.05)
-            sidewall_width_mm = c7.number_input("Sidewall width (mm)", min_value=0.0, step=1.0)
-            foam_height_actual_mean_mm = c8.number_input("Foam height — actual mean (mm)", min_value=0.0, step=1.0)
+            air_injection_rate_setpoint = c5.number_input("Air injection rate — setpoint", min_value=0.0, step=0.1)
+            air_injection_rate_actual = c6.number_input("Air injection rate — actual", min_value=0.0, step=0.1)
+            air_pressure_setpoint_bar = c7.number_input("Air pressure (bar) — setpoint", min_value=0.0, step=0.05)
+            air_pressure_actual_bar = c8.number_input("Air pressure (bar) — actual", min_value=0.0, step=0.05)
+
+            c9, c10, c11, c12 = st.columns(4)
+            sidewall_width_mm = c9.number_input("Sidewall width (mm)", min_value=0.0, step=1.0)
+            foam_height_actual_mean_mm = c10.number_input("Foam height — actual mean (mm)", min_value=0.0, step=1.0)
+            ratio_index_target = c11.number_input(
+                "Ratio / index — target", min_value=0.0, step=0.1,
+                help="Intended stoichiometric ratio or index for this phase (from the recipe engine).",
+            )
+            ratio_index_actual = c12.number_input(
+                "Ratio / index — actual", min_value=0.0, step=0.1,
+                help="Reconstructed actual ratio/index from measured stream totals. The single strongest "
+                "diagnostic field for explaining density/compression/cure drift.",
+            )
 
             laydown_mode = st.text_input("Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)")
-            section_positions_note = st.text_area("Section / geometry positions (free text)")
+            section_positions_note = st.text_area(
+                "Other geometry notes (structured fall-plate section positions are entered below)"
+            )
             notes = st.text_area("Phase notes")
 
             submitted = st.form_submit_button("Save phase")
@@ -212,8 +234,12 @@ if runs:
                             mixer_rpm_actual_mean=mixer_rpm_actual_mean or None,
                             conveyor_speed_setpoint=conveyor_speed_setpoint or None,
                             conveyor_speed_actual_mean=conveyor_speed_actual_mean or None,
-                            air_injection_rate=air_injection_rate or None,
-                            air_pressure_bar=air_pressure_bar or None,
+                            air_injection_rate_setpoint=air_injection_rate_setpoint or None,
+                            air_injection_rate_actual=air_injection_rate_actual or None,
+                            air_pressure_setpoint_bar=air_pressure_setpoint_bar or None,
+                            air_pressure_actual_bar=air_pressure_actual_bar or None,
+                            ratio_index_target=ratio_index_target or None,
+                            ratio_index_actual=ratio_index_actual or None,
                             laydown_mode=laydown_mode,
                             section_positions_note=section_positions_note,
                             sidewall_width_mm=sidewall_width_mm or None,
@@ -273,8 +299,12 @@ if runs:
                                     mixer_rpm_actual_mean=row.get("mixer_rpm_actual_mean"),
                                     conveyor_speed_setpoint=row.get("conveyor_speed_setpoint"),
                                     conveyor_speed_actual_mean=row.get("conveyor_speed_actual_mean"),
-                                    air_injection_rate=row.get("air_injection_rate"),
-                                    air_pressure_bar=row.get("air_pressure_bar"),
+                                    air_injection_rate_setpoint=row.get("air_injection_rate_setpoint"),
+                                    air_injection_rate_actual=row.get("air_injection_rate_actual"),
+                                    air_pressure_setpoint_bar=row.get("air_pressure_setpoint_bar"),
+                                    air_pressure_actual_bar=row.get("air_pressure_actual_bar"),
+                                    ratio_index_target=row.get("ratio_index_target"),
+                                    ratio_index_actual=row.get("ratio_index_actual"),
                                     laydown_mode=str(row.get("laydown_mode", "") or ""),
                                     section_positions_note=str(row.get("section_positions_note", "") or ""),
                                     sidewall_width_mm=row.get("sidewall_width_mm"),
@@ -300,6 +330,9 @@ if runs:
                         "Steady-state": p.is_steady_state,
                         "Mixer rpm (actual)": p.mixer_rpm_actual_mean,
                         "Conveyor m/min (actual)": p.conveyor_speed_actual_mean,
+                        "Ratio/index (target / actual)": (
+                            f"{p.ratio_index_target or '—'} / {p.ratio_index_actual or '—'}"
+                        ),
                         "Laydown mode": p.laydown_mode,
                     }
                     for p in all_phases
@@ -307,6 +340,126 @@ if runs:
                 hide_index=True,
                 use_container_width=True,
             )
+
+    # -----------------------------------------------------------------------
+    # Fall-plate / pour-plate section positions (structured geometry per phase)
+    # -----------------------------------------------------------------------
+    all_phases_for_form_top = session.query(ProductionPhase).order_by(ProductionPhase.phase_start.desc()).all()
+
+    st.markdown("**Fall-plate / pour-plate section positions**")
+    st.caption(
+        "Structured height/angle per section for fall-plate or pour-plate lines (typically 4-6 sections). "
+        "Requires a phase to exist first."
+    )
+    if not all_phases_for_form_top:
+        st.info("Add a phase above before recording section positions.")
+    else:
+        tab_manual_fp, tab_import_fp = st.tabs(["Manual entry", "CSV / Excel import"])
+
+        with tab_manual_fp:
+            phase_for_fp = st.selectbox(
+                "Phase *",
+                all_phases_for_form_top,
+                format_func=lambda p: f"Run #{p.production_run_id} — {p.phase_name} ({p.phase_start})",
+                key="fallplate_phase_select",
+            )
+            with st.form("add_fallplate_section"):
+                c1, c2 = st.columns(2)
+                section_number = c1.number_input("Section number *", min_value=1, step=1, value=1)
+                position_mm = c2.number_input("Position (mm above conveyor datum)", step=1.0)
+                angle_deg = st.number_input("Angle (degrees, optional)", step=0.5)
+                fp_notes = st.text_area("Notes", key="fp_notes")
+                submitted = st.form_submit_button("Save section position")
+                if submitted:
+                    session.add(
+                        FallplateSectionPosition(
+                            production_phase_id=phase_for_fp.id,
+                            section_number=int(section_number),
+                            position_mm=position_mm or None,
+                            angle_deg=angle_deg or None,
+                            notes=fp_notes,
+                        )
+                    )
+                    session.commit()
+                    st.success("Section position saved.")
+                    st.rerun()
+
+        with tab_import_fp:
+            st.caption(
+                "Required columns: " + ", ".join(FALLPLATE_REQUIRED_COLUMNS) + " (phase_name must match an "
+                "existing phase on that run). Optional columns: " + ", ".join(FALLPLATE_OPTIONAL_COLUMNS)
+            )
+            uploaded_fp = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="fallplate_upload")
+            if uploaded_fp:
+                try:
+                    df_fp = pd.read_csv(uploaded_fp) if uploaded_fp.name.endswith(".csv") else pd.read_excel(uploaded_fp)
+                except Exception as exc:
+                    st.error(f"Could not read file: {exc}")
+                    df_fp = None
+
+                if df_fp is not None:
+                    missing_cols = [c for c in FALLPLATE_REQUIRED_COLUMNS if c not in df_fp.columns]
+                    if missing_cols:
+                        st.error(f"File is missing required column(s): {', '.join(missing_cols)}. Import rejected.")
+                    else:
+                        good_rows, bad_rows, resolved_phase_ids = [], [], []
+                        for _, row in df_fp.iterrows():
+                            match = next(
+                                (
+                                    p for p in all_phases_for_form_top
+                                    if p.production_run_id == row.get("production_run_id")
+                                    and p.phase_name == row.get("phase_name")
+                                ),
+                                None,
+                            )
+                            if match and row.get("section_number") is not None:
+                                good_rows.append(row)
+                                resolved_phase_ids.append(match.id)
+                            else:
+                                bad_rows.append(row)
+
+                        st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
+                        if bad_rows:
+                            st.warning(
+                                "Flagged rows reference a production_run_id/phase_name combination with no "
+                                "matching phase, or are missing section_number."
+                            )
+                            st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+
+                        if good_rows and st.button("Confirm import", key="confirm_fallplate_import"):
+                            for row, phase_id in zip(good_rows, resolved_phase_ids):
+                                session.add(
+                                    FallplateSectionPosition(
+                                        production_phase_id=phase_id,
+                                        section_number=int(row["section_number"]),
+                                        position_mm=row.get("position_mm"),
+                                        angle_deg=row.get("angle_deg"),
+                                        notes=str(row.get("notes", "") or ""),
+                                    )
+                                )
+                            session.commit()
+                            st.success(f"Imported {len(good_rows)} section position(s) from {uploaded_fp.name}.")
+                            st.rerun()
+
+        recent_fp = (
+            session.query(FallplateSectionPosition).order_by(FallplateSectionPosition.id.desc()).limit(30).all()
+        )
+        if recent_fp:
+            with st.expander(f"Recent section positions ({len(recent_fp)} shown, max 30)"):
+                st.dataframe(
+                    [
+                        {
+                            "Phase": fp.production_phase_id,
+                            "Section": fp.section_number,
+                            "Position (mm)": fp.position_mm,
+                            "Angle (deg)": fp.angle_deg,
+                            "Notes": fp.notes,
+                        }
+                        for fp in recent_fp
+                    ],
+                    hide_index=True,
+                    use_container_width=True,
+                )
 else:
     st.info("Create a production run above before adding phases.")
 
@@ -362,7 +515,16 @@ else:
                 flow_actual_sd = c5.number_input("Flow — actual std. dev.", min_value=0.0, step=0.01)
                 pressure_actual_mean_bar = c6.number_input("Pressure — actual mean (bar)", min_value=0.0, step=0.1)
                 temperature_setpoint_c = c7.number_input("Temperature — setpoint (°C)", step=0.1)
-                temperature_actual_mean_c = st.number_input("Temperature — actual mean (°C)", step=0.1)
+                c8, c9 = st.columns(2)
+                temperature_actual_mean_c = c8.number_input("Temperature — actual mean (°C)", step=0.1)
+                flow_total_qty = c9.number_input(
+                    "Total delivered this phase (same base unit as flow unit, kg or L)", min_value=0.0, step=0.1
+                )
+                c10, c11 = st.columns(2)
+                calibration_status = c10.selectbox(
+                    "Instrument calibration status", ["", "Valid", "Expired", "Failed", "Not Verified"]
+                )
+                calibration_note = c11.text_input("Calibration note (e.g. cal. due date, certificate ref.)")
                 notes = st.text_area("Notes")
 
                 submitted = st.form_submit_button("Save stream reading")
@@ -380,9 +542,12 @@ else:
                                 flow_actual_min=flow_actual_min or None,
                                 flow_actual_max=flow_actual_max or None,
                                 flow_actual_sd=flow_actual_sd or None,
+                                flow_total_qty=flow_total_qty or None,
                                 pressure_actual_mean_bar=pressure_actual_mean_bar or None,
                                 temperature_setpoint_c=temperature_setpoint_c or None,
                                 temperature_actual_mean_c=temperature_actual_mean_c or None,
+                                calibration_status=calibration_status or None,
+                                calibration_note=calibration_note,
                                 notes=notes,
                                 source_file_reference="manual entry",
                             )
@@ -445,9 +610,12 @@ else:
                                     flow_actual_min=row.get("flow_actual_min"),
                                     flow_actual_max=row.get("flow_actual_max"),
                                     flow_actual_sd=row.get("flow_actual_sd"),
+                                    flow_total_qty=row.get("flow_total_qty"),
                                     pressure_actual_mean_bar=row.get("pressure_actual_mean_bar"),
                                     temperature_setpoint_c=row.get("temperature_setpoint_c"),
                                     temperature_actual_mean_c=row.get("temperature_actual_mean_c"),
+                                    calibration_status=str(row.get("calibration_status", "") or "") or None,
+                                    calibration_note=str(row.get("calibration_note", "") or ""),
                                     notes=str(row.get("notes", "") or ""),
                                     source_file_reference=uploaded.name,
                                 )
@@ -469,8 +637,10 @@ else:
                         "Flow sp": r.flow_setpoint,
                         "Flow actual mean": r.flow_actual_mean,
                         "Unit": r.flow_unit,
+                        "Total delivered": r.flow_total_qty,
                         "Pressure (bar)": r.pressure_actual_mean_bar,
                         "Temp actual (°C)": r.temperature_actual_mean_c,
+                        "Calibration": r.calibration_status or "—",
                     }
                     for r in recent_streams
                 ],

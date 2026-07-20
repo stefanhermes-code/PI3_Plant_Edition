@@ -264,12 +264,20 @@ class ProductionPhase(Base):
     mixer_rpm_actual_mean = Column(Float)
     conveyor_speed_setpoint = Column(Float)  # m/min
     conveyor_speed_actual_mean = Column(Float)  # m/min
-    air_injection_rate = Column(Float)  # NL/min or % command
-    air_pressure_bar = Column(Float)
+    air_injection_rate_setpoint = Column(Float)  # NL/min or % command
+    air_injection_rate_actual = Column(Float)  # NL/min or % command
+    air_pressure_setpoint_bar = Column(Float)
+    air_pressure_actual_bar = Column(Float)
     laydown_mode = Column(String(100))  # trough / fall-plate / liquid laydown / traversing / direct
-    section_positions_note = Column(Text)  # free-text geometry note (fall-plate section heights, etc.)
+    section_positions_note = Column(Text)  # free-text for geometry not covered by structured fall-plate rows below
     sidewall_width_mm = Column(Float)
     foam_height_actual_mean_mm = Column(Float)
+
+    # Target-vs-actual stoichiometric ratio/index for this phase - the report's
+    # single highest-value diagnostic field (explains density/compression/cure
+    # drift better than any individual stream reading).
+    ratio_index_target = Column(Float)
+    ratio_index_actual = Column(Float)
 
     notes = Column(Text)
     source_file_reference = Column(String(300))  # "manual entry" or CSV filename
@@ -293,11 +301,35 @@ class ComponentStreamReading(Base):
     flow_actual_min = Column(Float)
     flow_actual_max = Column(Float)
     flow_actual_sd = Column(Float)
+    flow_total_qty = Column(Float)  # total delivered this phase - same base unit as flow_unit (kg or L, not per-minute)
     pressure_actual_mean_bar = Column(Float)
     temperature_setpoint_c = Column(Float)
     temperature_actual_mean_c = Column(Float)
+    calibration_status = Column(String(50))  # Valid / Expired / Failed / Not Verified
+    calibration_note = Column(Text)
     notes = Column(Text)
     source_file_reference = Column(String(300))
+
+    phase = relationship("ProductionPhase")
+
+
+# ---------------------------------------------------------------------------
+# 6h. fallplate_section_positions (structured laydown geometry per phase)
+#
+# Replaces free-text-only section_positions_note with actual mm/degree
+# values per section, since fall-plate lines commonly have 4-6 independently
+# positioned sections that materially affect density profile and bun
+# squareness.
+# ---------------------------------------------------------------------------
+class FallplateSectionPosition(Base):
+    __tablename__ = "fallplate_section_positions"
+
+    id = Column(Integer, primary_key=True)
+    production_phase_id = Column(Integer, ForeignKey("production_phases.id"), nullable=False)
+    section_number = Column(Integer, nullable=False)
+    position_mm = Column(Float)
+    angle_deg = Column(Float)
+    notes = Column(Text)
 
     phase = relationship("ProductionPhase")
 
@@ -689,6 +721,7 @@ ALL_MODELS = [
     ProductionRun,
     ProductionPhase,
     ComponentStreamReading,
+    FallplateSectionPosition,
     ProductionEvent,
     RawMaterialLotUse,
     Sample,
