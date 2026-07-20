@@ -19,6 +19,7 @@ from db import (
     AdjustmentConclusion,
     ApprovalRecord,
     FoamGrade,
+    Machine,
     MaintenanceLicenseRecord,
     PhysicalPropertyResult,
     Plant,
@@ -60,6 +61,18 @@ def seed_demo_data(session) -> str:
         description="Flexible slabstock foam family for mattress comfort layers.",
     )
     session.add(family)
+    session.flush()
+
+    machine = Machine(
+        plant_id=plant.id,
+        name="Line 1",
+        machine_code="LINE-1",
+        oem="Hennecke",
+        model="HK-R 5000 (demo)",
+        active=True,
+        notes="Fictional machine for internal demonstration only.",
+    )
+    session.add(machine)
     session.flush()
 
     grade_28mh = FoamGrade(
@@ -240,7 +253,7 @@ def seed_demo_data(session) -> str:
             run_date=dt.date.today() - dt.timedelta(days=(6 - i) * 7),
             batch_reference=f"BATCH-{i:03d}",
             block_reference=f"BLK-{i:03d}",
-            machine_id="LINE-1",
+            machine_id=machine.id,
             operator_or_team_reference="Demo team",
             notes="Demo data - not a real production run.",
         )
@@ -355,7 +368,7 @@ def seed_demo_data(session) -> str:
             run_date=dt.date.today() - dt.timedelta(days=j),
             batch_reference=f"BATCH-R{j:03d}",
             block_reference=f"BLK-R{j:03d}",
-            machine_id="LINE-1",
+            machine_id=machine.id,
             operator_or_team_reference="Demo team",
             notes="Demo data - routine batch, not a trial.",
         )

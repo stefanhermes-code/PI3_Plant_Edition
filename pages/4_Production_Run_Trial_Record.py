@@ -29,6 +29,7 @@ from db import (
     ComponentStreamReading,
     FallplateSectionPosition,
     FoamGrade,
+    Machine,
     ProductionEvent,
     ProductionPhase,
     ProductionRun,
@@ -111,10 +112,21 @@ with st.expander("Add production run", expanded=False):
         recipe_version = st.selectbox(
             "Recipe version *", versions, format_func=lambda v: v.version_label if v else "—"
         )
+        machines_for_plant = (
+            session.query(Machine)
+            .filter(Machine.plant_id == grade.product_family.plant_id, Machine.active.is_(True))
+            .all()
+            if grade
+            else []
+        )
+        machine = st.selectbox(
+            "Machine / foaming line" + ("" if machines_for_plant else " (none set up for this plant yet)"),
+            [None] + machines_for_plant,
+            format_func=lambda m: "— not selected —" if m is None else f"{m.name} ({m.oem or 'OEM —'})",
+        )
         run_date = st.date_input("Run date", value=dt.date.today())
         batch_reference = st.text_input("Batch reference")
         block_reference = st.text_input("Block reference")
-        machine_id = st.text_input("Machine ID")
         operator = st.text_input("Operator / team reference")
         notes = st.text_area("Notes")
 
@@ -130,7 +142,7 @@ with st.expander("Add production run", expanded=False):
                     run_date=run_date,
                     batch_reference=batch_reference,
                     block_reference=block_reference,
-                    machine_id=machine_id,
+                    machine_id=machine.id if machine else None,
                     operator_or_team_reference=operator,
                     notes=notes,
                 )
@@ -151,7 +163,7 @@ if runs:
                     "Date": r.run_date,
                     "Batch": r.batch_reference,
                     "Block": r.block_reference,
-                    "Machine": r.machine_id,
+                    "Machine": r.machine.name if r.machine else "—",
                 }
                 for r in runs
             ],

@@ -136,6 +136,34 @@ class Plant(Base):
 
 
 # ---------------------------------------------------------------------------
+# 1b. machines (foaming lines) - basic identity, one plant has many machines
+#
+# Lets process parameters on a production run connect to the actual
+# equipment that produced them (OEM vocabulary differs - Laader Berg,
+# Hennecke, Cannon, etc. - but PI3 stores the machine-neutral identity here;
+# capability/limit fields such as rated conveyor speed or sidewall range can
+# be added later without disrupting this).
+# ---------------------------------------------------------------------------
+MACHINE_OEMS = ["Laader Berg", "Hennecke", "Cannon", "Other"]
+
+
+class Machine(Base):
+    __tablename__ = "machines"
+
+    id = Column(Integer, primary_key=True)
+    plant_id = Column(Integer, ForeignKey("plants.id"), nullable=False)
+    name = Column(String(200), nullable=False)  # e.g. "Line 1", "Maxfoam A"
+    machine_code = Column(String(50))
+    oem = Column(String(50))  # Laader Berg / Hennecke / Cannon / Other
+    model = Column(String(200))
+    active = Column(Boolean, default=True)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    plant = relationship("Plant")
+
+
+# ---------------------------------------------------------------------------
 # 2. product_families
 # ---------------------------------------------------------------------------
 class ProductFamily(Base):
@@ -222,13 +250,14 @@ class ProductionRun(Base):
     run_date = Column(Date)
     batch_reference = Column(String(200))
     block_reference = Column(String(200))
-    machine_id = Column(String(200))
+    machine_id = Column(Integer, ForeignKey("machines.id"))  # which foaming line actually ran this
     operator_or_team_reference = Column(String(200))
     notes = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
     plant = relationship("Plant")
     foam_grade = relationship("FoamGrade")
+    machine = relationship("Machine")
     recipe_version = relationship("RecipeVersion", back_populates="production_runs")
     runtime_records = relationship("RuntimeDataRecord", back_populates="production_run")
     trial_records = relationship("TrialRecord", back_populates="production_run")
@@ -714,6 +743,7 @@ class MaintenanceLicenseRecord(Base):
 
 ALL_MODELS = [
     Plant,
+    Machine,
     ProductFamily,
     FoamGrade,
     RecipeVersion,
