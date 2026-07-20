@@ -450,6 +450,53 @@ class TrialRecord(Base):
 
 
 # ---------------------------------------------------------------------------
+# 8b. physical_property_definitions / methods / uoms
+#
+# Master reference list (84 properties) supplied by the business as
+# Flexible_PU_Foam_Physical_Properties_Master.xlsx. Each property can have
+# several valid measuring-method standards (ISO/ASTM/etc. are alternatives,
+# not interchangeable) and several valid units, hence the separate
+# one-to-many reference tables rather than flat columns.
+#
+# No back-populated collections are defined here (methods/uoms are always
+# queried directly by property_definition_id from page code) - see the
+# _NoDeepCopyMixin note above and the ProductionRun/ProductionPhase
+# precedent: a bidirectional collection here would make every
+# PhysicalPropertyDefinition selectbox option carry a live, non-empty
+# backref list once methods/uoms exist, which is exactly the shape that
+# breaks Streamlit's widget-state deepcopy even with the mixin in place
+# for *this* object - simplest to avoid the collection entirely.
+# ---------------------------------------------------------------------------
+class PhysicalPropertyDefinition(Base):
+    __tablename__ = "physical_property_definitions"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False, unique=True)
+    what_it_measures = Column(Text)
+    category = Column(String(20))  # Comfort / Technical / Both
+    is_common = Column(Boolean, default=False)
+    sort_order = Column(Integer)
+
+
+class PhysicalPropertyMethod(Base):
+    __tablename__ = "physical_property_methods"
+
+    id = Column(Integer, primary_key=True)
+    property_definition_id = Column(Integer, ForeignKey("physical_property_definitions.id"), nullable=False)
+    method_code = Column(String(300), nullable=False)  # e.g. "ASTM D3574 Test A"
+    sort_order = Column(Integer)
+
+
+class PhysicalPropertyUOM(Base):
+    __tablename__ = "physical_property_uoms"
+
+    id = Column(Integer, primary_key=True)
+    property_definition_id = Column(Integer, ForeignKey("physical_property_definitions.id"), nullable=False)
+    unit_label = Column(String(50), nullable=False)
+    sort_order = Column(Integer)
+
+
+# ---------------------------------------------------------------------------
 # 9. physical_property_results
 # ---------------------------------------------------------------------------
 class PhysicalPropertyResult(Base):
@@ -458,15 +505,18 @@ class PhysicalPropertyResult(Base):
     id = Column(Integer, primary_key=True)
     trial_record_id = Column(Integer, ForeignKey("trial_records.id"), nullable=False)
     sample_id = Column(Integer, ForeignKey("samples.id"))  # nullable: older rows predate sample tracking
-    property_name = Column(String(100), nullable=False)  # density, hardness, tensile, elongation, compression_set, airflow
+    property_definition_id = Column(Integer, ForeignKey("physical_property_definitions.id"))  # nullable for legacy/"Other"
+    property_method_id = Column(Integer, ForeignKey("physical_property_methods.id"))  # nullable
+    property_name = Column(String(200), nullable=False)  # snapshot text, auto-filled from the chosen definition
     target_value = Column(Float)
     actual_value = Column(Float)
     unit = Column(String(50))
     pass_fail = Column(String(20))  # Pass / Fail
-    test_method = Column(String(200))
+    test_method = Column(String(300))  # snapshot text, auto-filled from the chosen method
     method_revision = Column(String(50))
     replicate_no = Column(Integer)
     tested_at = Column(Date)
+    notes = Column(Text)
 
     trial_record = relationship("TrialRecord", back_populates="physical_property_results")
     sample = relationship("Sample")
@@ -614,6 +664,9 @@ ALL_MODELS = [
     ConditioningSegment,
     RuntimeDataRecord,
     TrialRecord,
+    PhysicalPropertyDefinition,
+    PhysicalPropertyMethod,
+    PhysicalPropertyUOM,
     PhysicalPropertyResult,
     QualityObservation,
     AdjustmentConclusion,

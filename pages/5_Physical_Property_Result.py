@@ -12,7 +12,18 @@ import datetime as dt
 import streamlit as st
 
 from auth import logout_button, require_login
-from db import ZONE_LABELS, ConditioningSegment, PhysicalPropertyResult, Sample, TrialRecord, get_session, init_db
+from db import (
+    ZONE_LABELS,
+    ConditioningSegment,
+    PhysicalPropertyDefinition,
+    PhysicalPropertyMethod,
+    PhysicalPropertyResult,
+    PhysicalPropertyUOM,
+    Sample,
+    TrialRecord,
+    get_session,
+    init_db,
+)
 from helpers import combine_date_time, page_setup, show_advisory_footer
 
 page_setup("Physical Property Result")
@@ -27,8 +38,6 @@ trials = session.query(TrialRecord).order_by(TrialRecord.created_at.desc()).all(
 if not trials:
     st.warning("Create a trial first (Production Run / Trial Record page).")
     st.stop()
-
-PROPERTY_NAMES = ["Density", "Hardness", "Tensile strength", "Elongation", "Compression set", "Airflow", "Other"]
 
 # ---------------------------------------------------------------------------
 # Samples
@@ -163,59 +172,118 @@ else:
 st.divider()
 st.subheader("📏 Physical property results")
 
+property_defs = (
+    session.query(PhysicalPropertyDefinition)
+    .order_by(PhysicalPropertyDefinition.is_common.desc(), PhysicalPropertyDefinition.sort_order)
+    .all()
+)
+if not property_defs:
+    st.warning(
+        "The physical property master list has not been loaded yet. Run the migration that seeds "
+        "physical_property_definitions/methods/uoms before recording results."
+    )
+
 with st.expander("Add physical property result", expanded=False):
+    trial = st.selectbox(
+        "Trial *",
+        trials,
+        format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name} ({t.status})",
+        key="result_trial_select",
+    )
+    samples_for_run = (
+        session.query(Sample).filter(Sample.production_run_id == trial.production_run_id).all()
+        if trial
+        else []
+    )
+    sample = st.selectbox(
+        "Sample (optional, but recommended for comparability)",
+        [None] + samples_for_run,
+        format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
+        key="result_sample_select",
+    )
+    property_def = st.selectbox(
+        "Property * (⭐ = most commonly tested; full list searchable below)",
+        property_defs,
+        format_func=lambda p: f"⭐ {p.name}" if p.is_common else p.name,
+        key="result_property_select",
+    )
+    if property_def:
+        st.caption(f"{property_def.what_it_measures} — category: {property_def.category}")
+
+    methods_for_property = (
+        session.query(PhysicalPropertyMethod)
+        .filter(PhysicalPropertyMethod.property_definition_id == property_def.id)
+        .order_by(PhysicalPropertyMethod.sort_order)
+        .all()
+        if property_def
+        else []
+    )
+    uoms_for_property = (
+        session.query(PhysicalPropertyUOM)
+        .filter(PhysicalPropertyUOM.property_definition_id == property_def.id)
+        .order_by(PhysicalPropertyUOM.sort_order)
+        .all()
+        if property_def
+        else []
+    )
+
     with st.form("add_property_result"):
-        trial = st.selectbox(
-            "Trial *",
-            trials,
-            format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name} ({t.status})",
-            key="result_trial_select",
+        c1, c2 = st.columns(2)
+        method_choice = c1.selectbox(
+            "Measuring method *",
+            methods_for_property,
+            format_func=lambda m: m.method_code,
         )
-        samples_for_run = (
-            session.query(Sample).filter(Sample.production_run_id == trial.production_run_id).all()
-            if trial
-            else []
+        method_other = c1.text_input("Or type a method not listed above")
+        uom_choice = c2.selectbox(
+            "Unit of measure *",
+            uoms_for_property,
+            format_func=lambda u: u.unit_label,
         )
-        sample = st.selectbox(
-            "Sample (optional, but recommended for comparability)",
-            [None] + samples_for_run,
-            format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
-        )
-        property_name = st.selectbox("Property *", PROPERTY_NAMES)
-        c1, c2, c3 = st.columns(3)
-        target_value = c1.number_input("Target value", step=0.1)
-        actual_value = c2.number_input("Actual value", step=0.1)
-        unit = c3.text_input("Unit (e.g. kg/m3, N, kPa, %)")
-        c4, c5, c6 = st.columns(3)
-        test_method = c4.text_input("Test method (e.g. ASTM D3574, ISO 845)")
-        method_revision = c5.text_input("Method revision (e.g. 2017)")
-        replicate_no = c6.number_input("Replicate no.", min_value=1, step=1, value=1)
+        uom_other = c2.text_input("Or type a unit not listed above")
+
+        c3, c4, c5 = st.columns(3)
+        target_value = c3.number_input("Target value", step=0.1)
+        actual_value = c4.number_input("Actual value", step=0.1)
+        method_revision = c5.text_input("Method edition / revision (e.g. 2017)")
+        replicate_no = st.number_input("Replicate no.", min_value=1, step=1, value=1)
         tested_at = st.date_input("Tested on", value=dt.date.today())
+        notes = st.text_area("Notes (e.g. specimen geometry, orientation, deflection, temperature)")
         submitted = st.form_submit_button("Save result")
         if submitted:
-            pass_fail = None
-            if target_value and actual_value:
-                # simple +/-10% band as a working default; refine with real specs later
-                lower, upper = target_value * 0.9, target_value * 1.1
-                pass_fail = "Pass" if lower <= actual_value <= upper else "Fail"
-            session.add(
-                PhysicalPropertyResult(
-                    trial_record_id=trial.id,
-                    sample_id=sample.id if sample else None,
-                    property_name=property_name,
-                    target_value=target_value or None,
-                    actual_value=actual_value or None,
-                    unit=unit,
-                    pass_fail=pass_fail,
-                    test_method=test_method,
-                    method_revision=method_revision,
-                    replicate_no=int(replicate_no),
-                    tested_at=tested_at,
+            final_method = method_other.strip() or (method_choice.method_code if method_choice else "")
+            final_unit = uom_other.strip() or (uom_choice.unit_label if uom_choice else "")
+            if not property_def:
+                st.error("Select a property.")
+            elif not final_method:
+                st.error("A measuring method is required — pick one or type a custom one.")
+            else:
+                pass_fail = None
+                if target_value and actual_value:
+                    # simple +/-10% band as a working default; refine with real specs later
+                    lower, upper = target_value * 0.9, target_value * 1.1
+                    pass_fail = "Pass" if lower <= actual_value <= upper else "Fail"
+                session.add(
+                    PhysicalPropertyResult(
+                        trial_record_id=trial.id,
+                        sample_id=sample.id if sample else None,
+                        property_definition_id=property_def.id,
+                        property_method_id=method_choice.id if (method_choice and not method_other.strip()) else None,
+                        property_name=property_def.name,
+                        target_value=target_value or None,
+                        actual_value=actual_value or None,
+                        unit=final_unit,
+                        pass_fail=pass_fail,
+                        test_method=final_method,
+                        method_revision=method_revision,
+                        replicate_no=int(replicate_no),
+                        tested_at=tested_at,
+                        notes=notes,
+                    )
                 )
-            )
-            session.commit()
-            st.success("Physical property result saved.")
-            st.rerun()
+                session.commit()
+                st.success("Physical property result saved.")
+                st.rerun()
 
 st.divider()
 st.subheader("Results by trial")
@@ -238,6 +306,7 @@ for t in trials:
                     "Rev.": r.method_revision,
                     "Replicate": r.replicate_no,
                     "Tested": r.tested_at,
+                    "Notes": r.notes,
                 }
                 for r in t.physical_property_results
             ],
