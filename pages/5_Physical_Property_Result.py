@@ -17,6 +17,8 @@ import streamlit as st
 
 from auth import logout_button, require_login
 from db import (
+    CONDITIONING_TYPE_DEFAULTS,
+    CONDITIONING_TYPES,
     ZONE_LABELS,
     ConditioningSegment,
     PhysicalPropertyDefinition,
@@ -115,30 +117,49 @@ if not samples:
     st.info("Add a sample above before recording conditioning.")
 else:
     with st.expander("Add conditioning segment", expanded=False):
+        sample_for_cond = st.selectbox(
+            "Sample *",
+            samples,
+            format_func=lambda s: f"Sample #{s.id} — {s.zone_label} (run {s.production_run_id})",
+            key="cond_sample_select",
+        )
+        condition_choice = st.selectbox(
+            "Condition type *",
+            CONDITIONING_TYPES,
+            key="cond_type_select",
+        )
+        condition_other = None
+        if condition_choice == "Other (specify)":
+            condition_other = st.text_input("Specify condition type", key="cond_type_other")
+        default_temp, default_rh = CONDITIONING_TYPE_DEFAULTS[condition_choice]
+
         with st.form("add_conditioning"):
-            sample_for_cond = st.selectbox(
-                "Sample *",
-                samples,
-                format_func=lambda s: f"Sample #{s.id} — {s.zone_label} (run {s.production_run_id})",
-            )
-            condition_type = st.text_input("Condition type * (e.g. Standard 23°C/50%RH)")
             c1, c2 = st.columns(2)
-            temperature_c = c1.number_input("Temperature (°C)", step=0.1)
-            relative_humidity_pct = c2.number_input("Relative humidity (%)", min_value=0.0, max_value=100.0, step=1.0)
+            temperature_c = c1.number_input(
+                "Temperature (°C)", step=0.1, value=default_temp if default_temp is not None else 0.0,
+                help="Prefilled from the condition type's nominal value - adjust to the actual chamber reading.",
+            )
+            relative_humidity_pct = c2.number_input(
+                "Relative humidity (%)", min_value=0.0, max_value=100.0, step=1.0,
+                value=default_rh if default_rh is not None else 0.0,
+            )
             segment_start = combine_date_time("Segment start", "cond_start")
             segment_end = combine_date_time("Segment end", "cond_end")
             notes = st.text_area("Notes", key="cond_notes")
             submitted = st.form_submit_button("Save conditioning segment")
             if submitted:
-                if not condition_type:
-                    st.error("Condition type is required.")
+                final_condition_type = (
+                    (condition_other or "").strip() if condition_choice == "Other (specify)" else condition_choice
+                )
+                if not final_condition_type:
+                    st.error("Specify a condition type.")
                 elif segment_end < segment_start:
                     st.error("Segment end must not be before segment start.")
                 else:
                     session.add(
                         ConditioningSegment(
                             sample_id=sample_for_cond.id,
-                            condition_type=condition_type,
+                            condition_type=final_condition_type,
                             temperature_c=temperature_c or None,
                             relative_humidity_pct=relative_humidity_pct or None,
                             segment_start=segment_start,

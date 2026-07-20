@@ -110,6 +110,24 @@ EVENT_TYPES = [
     "Other",
 ]
 SEVERITIES = ["Low", "Medium", "High"]
+
+# Most common conditioning situations for flexible PU foam testing, per
+# ISO 291 (standard atmospheres) and ASTM D3574 conditioning practice.
+# Each maps to a suggested (temperature_c, relative_humidity_pct) default -
+# these prefill the numeric fields but are always editable, since the
+# actual chamber reading is what matters, not the nominal condition name.
+CONDITIONING_TYPE_DEFAULTS = {
+    "Standard 23°C / 50% RH": (23.0, 50.0),
+    "Ambient / plant floor (uncontrolled)": (None, None),
+    "Dry heat aging 70°C": (70.0, None),
+    "Dry heat aging 100°C": (100.0, None),
+    "Humid aging 50°C / 95% RH": (50.0, 95.0),
+    "Low temperature -20°C": (-20.0, None),
+    "Low temperature -40°C": (-40.0, None),
+    "Other (specify)": (None, None),
+}
+CONDITIONING_TYPES = list(CONDITIONING_TYPE_DEFAULTS.keys())
+
 ZONE_LABELS = [
     "Head-Left-Top", "Head-Center-Top", "Head-Right-Top",
     "Middle-Left-Top", "Middle-Center-Top", "Middle-Right-Top",
