@@ -1,4 +1,11 @@
-"""Screen 5: Production Run / Trial Record
+"""Screen 5: Production Run
+
+The primary, self-sufficient record of a batch: recipe used, machine
+parameters, and (elsewhere) the quality results it produced. This is
+routine, everyday data entry - it does NOT require framing a run as an
+experiment. If a run is a deliberate trial/change investigation, flag it
+as one separately on the Trial / Experiment page; that is optional and
+most runs never need it.
 
 Includes the Mandatory-tier process-data capture recommended in "Expanding
 PI3 Plant Edition Production-Trial Data Capture for Polyurethane Foaming
@@ -27,7 +34,6 @@ from db import (
     RawMaterialLotUse,
     RecipeVersion,
     RuntimeDataRecord,
-    TrialRecord,
     get_session,
     init_db,
 )
@@ -69,12 +75,17 @@ LOT_REQUIRED_COLUMNS = ["production_run_id", "component_stream_name", "supplier_
 LOT_OPTIONAL_COLUMNS = ["notes"]
 
 
-page_setup("Production Run / Trial Record")
+page_setup("Production Run")
 init_db()
 require_login()
 logout_button()
 
-st.title("Production Run / Trial Record")
+st.title("Production Run")
+st.caption(
+    "Every batch made goes here: recipe used, machine parameters, and quality results. "
+    "This is routine data entry, not an experiment log — if this particular run is a "
+    "deliberate trial or change investigation, flag it as one on the Trial / Experiment page."
+)
 session = get_session()
 
 grades = session.query(FoamGrade).all()
@@ -82,7 +93,7 @@ if not grades:
     st.warning("Add a foam grade and recipe version first.")
     st.stop()
 
-with st.expander("Add production run + trial", expanded=False):
+with st.expander("Add production run", expanded=False):
     with st.form("add_run"):
         grade = st.selectbox("Foam grade *", grades, format_func=lambda g: g.grade_name)
         versions = (
@@ -98,19 +109,12 @@ with st.expander("Add production run + trial", expanded=False):
         block_reference = st.text_input("Block reference")
         machine_id = st.text_input("Machine ID")
         operator = st.text_input("Operator / team reference")
+        notes = st.text_area("Notes")
 
-        st.markdown("**Trial details**")
-        objective = st.text_area("Trial or change objective *")
-        hypothesis = st.text_area("Hypothesis")
-        what_changed = st.text_area("What changed vs. baseline")
-        responsible_person = st.text_input("Responsible person")
-
-        submitted = st.form_submit_button("Save production run + trial")
+        submitted = st.form_submit_button("Save production run")
         if submitted:
             if not recipe_version:
                 st.error("This foam grade has no recipe version yet — add one first.")
-            elif not objective:
-                st.error("Trial objective is required.")
             else:
                 run = ProductionRun(
                     plant_id=grade.product_family.plant_id,
@@ -121,52 +125,32 @@ with st.expander("Add production run + trial", expanded=False):
                     block_reference=block_reference,
                     machine_id=machine_id,
                     operator_or_team_reference=operator,
+                    notes=notes,
                 )
                 session.add(run)
-                session.flush()
-                trial = TrialRecord(
-                    production_run_id=run.id,
-                    trial_or_change_objective=objective,
-                    hypothesis=hypothesis,
-                    what_changed=what_changed,
-                    responsible_person=responsible_person,
-                    status="Open",
-                )
-                session.add(trial)
                 session.commit()
-                st.success("Production run and trial created.")
+                st.success("Production run created.")
                 st.rerun()
 
-st.divider()
-st.subheader("Trials")
-
-status_filter = st.multiselect("Status filter", ["Open", "Pending Closure", "Closed"], default=["Open", "Pending Closure", "Closed"])
-trials = session.query(TrialRecord).order_by(TrialRecord.created_at.desc()).all()
-trials = [t for t in trials if t.status in status_filter]
-
-if not trials:
-    st.info("No trials match the current filter.")
-
-for t in trials:
-    run = t.production_run
-    grade = run.foam_grade
-    status_icon = {"Open": "🟡", "Pending Closure": "🟠", "Closed": "🟢"}.get(t.status, "⚪")
-    with st.container(border=True):
-        st.markdown(
-            f"{status_icon} **Trial #{t.id}** — {grade.grade_name} · "
-            f"recipe {run.recipe_version.version_label} · run {run.run_date} · status `{t.status}`"
-        )
-        st.write(f"**Objective:** {t.trial_or_change_objective}")
-        if t.what_changed:
-            st.caption(f"Changed: {t.what_changed}")
-        if t.status != "Closed":
-            missing = t.missing_closeout_fields()
-            if missing:
-                st.caption(f"⏳ Missing before closure: {', '.join(missing)}")
-        else:
-            st.caption(f"Closed {t.date_closed} — reviewed by {t.reviewed_by}, approved by {t.approved_by}")
-
 runs = session.query(ProductionRun).order_by(ProductionRun.created_at.desc()).all()
+if runs:
+    with st.expander(f"Recent production runs ({len(runs)})"):
+        st.dataframe(
+            [
+                {
+                    "Run": r.id,
+                    "Grade": r.foam_grade.grade_name,
+                    "Recipe": r.recipe_version.version_label,
+                    "Date": r.run_date,
+                    "Batch": r.batch_reference,
+                    "Block": r.block_reference,
+                    "Machine": r.machine_id,
+                }
+                for r in runs
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
 
 # ---------------------------------------------------------------------------
 # Process phases

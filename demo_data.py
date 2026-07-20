@@ -283,12 +283,12 @@ def seed_demo_data(session) -> str:
         session.add_all(
             [
                 PhysicalPropertyResult(
-                    trial_record_id=trial.id, property_name="Density", target_value=28.0,
+                    production_run_id=run.id, trial_record_id=trial.id, property_name="Density", target_value=28.0,
                     actual_value=28.0 + (i * 0.05), unit="kg/m3", pass_fail="Pass",
                     test_method="ISO 845", tested_at=run.run_date,
                 ),
                 PhysicalPropertyResult(
-                    trial_record_id=trial.id, property_name="Hardness",
+                    production_run_id=run.id, trial_record_id=trial.id, property_name="Hardness",
                     target_value=140.0,
                     actual_value=d["hardness_actual"],
                     unit="N", pass_fail="Pass" if i == 5 else "Fail",
@@ -299,6 +299,7 @@ def seed_demo_data(session) -> str:
 
         session.add(
             QualityObservation(
+                production_run_id=run.id,
                 trial_record_id=trial.id,
                 observation_type=d["observation"],
                 severity=d["severity"],
@@ -314,6 +315,7 @@ def seed_demo_data(session) -> str:
 
         session.add(
             AdjustmentConclusion(
+                production_run_id=run.id,
                 trial_record_id=trial.id,
                 parameter_changed=d["what_changed"],
                 formulation_changed="catalyst" in d["what_changed"].lower() or "surfactant" in d["what_changed"].lower(),
@@ -328,6 +330,7 @@ def seed_demo_data(session) -> str:
 
         session.add(
             ApprovalRecord(
+                production_run_id=run.id,
                 trial_record_id=trial.id,
                 reviewed_by="Technical Manager",
                 approved_by="Plant Manager",
@@ -339,6 +342,65 @@ def seed_demo_data(session) -> str:
         )
 
         created_trials.append(trial)
+
+    # ---- Routine production runs (no trial at all) -----------------------
+    # These demonstrate the primary path: a normal batch gets a recipe,
+    # machine parameters, and quality results without ever touching the
+    # trial/experiment apparatus above.
+    for j in range(1, 3):
+        routine_run = ProductionRun(
+            plant_id=plant.id,
+            foam_grade_id=grade_28mh.id,
+            recipe_version_id=v06.id,
+            run_date=dt.date.today() - dt.timedelta(days=j),
+            batch_reference=f"BATCH-R{j:03d}",
+            block_reference=f"BLK-R{j:03d}",
+            machine_id="LINE-1",
+            operator_or_team_reference="Demo team",
+            notes="Demo data - routine batch, not a trial.",
+        )
+        session.add(routine_run)
+        session.flush()
+
+        session.add(
+            RuntimeDataRecord(
+                production_run_id=routine_run.id,
+                line_speed=3.2,
+                pump_speed_or_flow_data="Nominal",
+                temperature_data="Nominal",
+                pressure_data="Nominal",
+                ambient_temperature=24.0,
+                ambient_humidity=60.0,
+                rise_time=95.0,
+                curing_notes="Standard curing, routine batch.",
+                source_file_reference="demo seed",
+            )
+        )
+        session.add_all(
+            [
+                PhysicalPropertyResult(
+                    production_run_id=routine_run.id, property_name="Density", target_value=28.0,
+                    actual_value=28.1, unit="kg/m3", pass_fail="Pass",
+                    test_method="ISO 845", tested_at=routine_run.run_date,
+                ),
+                PhysicalPropertyResult(
+                    production_run_id=routine_run.id, property_name="Hardness", target_value=140.0,
+                    actual_value=139.0, unit="N", pass_fail="Pass",
+                    test_method="ISO 2439", tested_at=routine_run.run_date,
+                ),
+            ]
+        )
+        session.add(
+            QualityObservation(
+                production_run_id=routine_run.id,
+                observation_type="Routine check - no issues",
+                severity="Low",
+                frequency="One-off",
+                location_in_block="General block",
+                confidence_level="Confirmed",
+                observed_at=routine_run.run_date,
+            )
+        )
 
     session.flush()
     # Link the final resolving trial (T5) as the similar case for T1
@@ -366,7 +428,11 @@ def seed_demo_data(session) -> str:
     )
 
     session.commit()
-    return "Demo data created: 1 plant, 1 product family, 2 foam grades, 3 recipe versions, 5 closed trials with full closeout, quality observations, adjustments, approvals, and 1 similar-case link."
+    return (
+        "Demo data created: 1 plant, 1 product family, 2 foam grades, 3 recipe versions, "
+        "5 closed trials (with full closeout, quality observations, adjustments, approvals, and "
+        "1 similar-case link), plus 2 routine production runs with quality results and no trial at all."
+    )
 
 
 if __name__ == "__main__":

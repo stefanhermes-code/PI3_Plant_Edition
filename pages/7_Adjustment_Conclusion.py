@@ -23,7 +23,7 @@ session = get_session()
 
 trials = session.query(TrialRecord).filter(TrialRecord.status != "Closed").order_by(TrialRecord.created_at.desc()).all()
 if not trials:
-    st.info("No open trials. Create one on the Production Run / Trial Record page.")
+    st.info("No open trials. Create one on the Trial / Experiment page.")
     st.stop()
 
 trial = st.selectbox(
@@ -48,6 +48,7 @@ with st.form(f"add_adjustment_{trial.id}"):
     if submitted:
         session.add(
             AdjustmentConclusion(
+                production_run_id=trial.production_run_id,
                 trial_record_id=trial.id,
                 parameter_changed=parameter_changed,
                 formulation_changed=formulation_changed,

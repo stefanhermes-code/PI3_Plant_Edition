@@ -68,6 +68,7 @@ with st.form("approval_form"):
         else:
             session.add(
                 ApprovalRecord(
+                    production_run_id=trial.production_run_id,
                     trial_record_id=trial.id,
                     reviewed_by=reviewed_by,
                     approved_by=approved_by,

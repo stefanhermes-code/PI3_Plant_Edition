@@ -5,6 +5,10 @@ recommendation in "Expanding PI3 Plant Edition Production-Trial Data
 Capture": a lab result is only comparable if it is tied to where in the
 block the sample came from, its cure age, and its conditioning history —
 not analyzed as a bare number.
+
+Keyed primarily to the production run (every batch gets quality results,
+trial or not). Linking to a trial is optional and only relevant when the
+result is part of a formal experiment's evidence trail.
 """
 
 import datetime as dt
@@ -19,6 +23,7 @@ from db import (
     PhysicalPropertyMethod,
     PhysicalPropertyResult,
     PhysicalPropertyUOM,
+    ProductionRun,
     Sample,
     TrialRecord,
     get_session,
@@ -34,9 +39,9 @@ logout_button()
 st.title("Physical Property Result")
 session = get_session()
 
-trials = session.query(TrialRecord).order_by(TrialRecord.created_at.desc()).all()
-if not trials:
-    st.warning("Create a trial first (Production Run / Trial Record page).")
+runs = session.query(ProductionRun).order_by(ProductionRun.created_at.desc()).all()
+if not runs:
+    st.warning("Create a production run first (Production Run page).")
     st.stop()
 
 # ---------------------------------------------------------------------------
@@ -51,11 +56,11 @@ st.caption(
 
 with st.expander("Add sample", expanded=False):
     with st.form("add_sample"):
-        trial_for_sample = st.selectbox(
-            "Trial *",
-            trials,
-            format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name} ({t.status})",
-            key="sample_trial_select",
+        run_for_sample = st.selectbox(
+            "Production run *",
+            runs,
+            format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
+            key="sample_run_select",
         )
         zone_label = st.selectbox("Zone *", ZONE_LABELS)
         c1, c2, c3 = st.columns(3)
@@ -69,7 +74,7 @@ with st.expander("Add sample", expanded=False):
         if submitted:
             session.add(
                 Sample(
-                    production_run_id=trial_for_sample.production_run_id,
+                    production_run_id=run_for_sample.id,
                     sample_ts=sample_ts,
                     zone_label=zone_label,
                     x_mm=x_mm or None,
@@ -184,16 +189,23 @@ if not property_defs:
     )
 
 with st.expander("Add physical property result", expanded=False):
+    run = st.selectbox(
+        "Production run *",
+        runs,
+        format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
+        key="result_run_select",
+    )
+    trials_for_run = (
+        session.query(TrialRecord).filter(TrialRecord.production_run_id == run.id).all() if run else []
+    )
     trial = st.selectbox(
-        "Trial *",
-        trials,
-        format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name} ({t.status})",
+        "Link to trial (optional — only if this result is part of a formal experiment)",
+        [None] + trials_for_run,
+        format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
         key="result_trial_select",
     )
     samples_for_run = (
-        session.query(Sample).filter(Sample.production_run_id == trial.production_run_id).all()
-        if trial
-        else []
+        session.query(Sample).filter(Sample.production_run_id == run.id).all() if run else []
     )
     sample = st.selectbox(
         "Sample (optional, but recommended for comparability)",
@@ -265,7 +277,8 @@ with st.expander("Add physical property result", expanded=False):
                     pass_fail = "Pass" if lower <= actual_value <= upper else "Fail"
                 session.add(
                     PhysicalPropertyResult(
-                        trial_record_id=trial.id,
+                        production_run_id=run.id,
+                        trial_record_id=trial.id if trial else None,
                         sample_id=sample.id if sample else None,
                         property_definition_id=property_def.id,
                         property_method_id=method_choice.id if (method_choice and not method_other.strip()) else None,
@@ -286,13 +299,18 @@ with st.expander("Add physical property result", expanded=False):
                 st.rerun()
 
 st.divider()
-st.subheader("Results by trial")
+st.subheader("Results by production run")
 
-for t in trials:
-    if not t.physical_property_results:
+for r_run in runs:
+    results = (
+        session.query(PhysicalPropertyResult)
+        .filter(PhysicalPropertyResult.production_run_id == r_run.id)
+        .all()
+    )
+    if not results:
         continue
     with st.container(border=True):
-        st.markdown(f"**Trial #{t.id}** — {t.production_run.foam_grade.grade_name}")
+        st.markdown(f"**Run #{r_run.id}** — {r_run.foam_grade.grade_name} · {r_run.run_date}")
         st.dataframe(
             [
                 {
@@ -302,13 +320,14 @@ for t in trials:
                     "Unit": r.unit,
                     "Pass/Fail": r.pass_fail,
                     "Sample": f"#{r.sample_id} ({r.sample.zone_label})" if r.sample else "—",
+                    "Trial": f"#{r.trial_record_id}" if r.trial_record_id else "—",
                     "Method": r.test_method,
                     "Rev.": r.method_revision,
                     "Replicate": r.replicate_no,
                     "Tested": r.tested_at,
                     "Notes": r.notes,
                 }
-                for r in t.physical_property_results
+                for r in results
             ],
             hide_index=True,
             use_container_width=True,

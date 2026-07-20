@@ -399,6 +399,16 @@ class RuntimeDataRecord(Base):
 
 # ---------------------------------------------------------------------------
 # 8. trial_records
+#
+# Deliberately NOT the mandatory container for routine production/quality
+# data. A production run is a complete, self-sufficient record on its own
+# (recipe + machine parameters + quality results). TrialRecord is an
+# optional, secondary module you attach to a run only when it is genuinely
+# a deliberate experiment/change investigation with a hypothesis and a
+# formal closeout/approval requirement - most runs never touch this table.
+# See PhysicalPropertyResult / QualityObservation / AdjustmentConclusion /
+# ApprovalRecord below: they all key primarily off production_run_id, with
+# trial_record_id as an optional cross-reference.
 # ---------------------------------------------------------------------------
 class TrialRecord(Base):
     __tablename__ = "trial_records"
@@ -498,12 +508,17 @@ class PhysicalPropertyUOM(Base):
 
 # ---------------------------------------------------------------------------
 # 9. physical_property_results
+#
+# Keyed primarily to the production run (every batch produces quality
+# results, trial or not). trial_record_id is optional - set only when this
+# result is part of a formal experiment's evidence trail.
 # ---------------------------------------------------------------------------
 class PhysicalPropertyResult(Base):
     __tablename__ = "physical_property_results"
 
     id = Column(Integer, primary_key=True)
-    trial_record_id = Column(Integer, ForeignKey("trial_records.id"), nullable=False)
+    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
+    trial_record_id = Column(Integer, ForeignKey("trial_records.id"))  # optional: only for formal experiments
     sample_id = Column(Integer, ForeignKey("samples.id"))  # nullable: older rows predate sample tracking
     property_definition_id = Column(Integer, ForeignKey("physical_property_definitions.id"))  # nullable for legacy/"Other"
     property_method_id = Column(Integer, ForeignKey("physical_property_methods.id"))  # nullable
@@ -520,16 +535,20 @@ class PhysicalPropertyResult(Base):
 
     trial_record = relationship("TrialRecord", back_populates="physical_property_results")
     sample = relationship("Sample")
+    production_run = relationship("ProductionRun")
 
 
 # ---------------------------------------------------------------------------
 # 10. quality_observations  (NOT "defects" - approved terminology)
+#
+# Keyed primarily to the production run; trial_record_id is optional.
 # ---------------------------------------------------------------------------
 class QualityObservation(Base):
     __tablename__ = "quality_observations"
 
     id = Column(Integer, primary_key=True)
-    trial_record_id = Column(Integer, ForeignKey("trial_records.id"), nullable=False)
+    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
+    trial_record_id = Column(Integer, ForeignKey("trial_records.id"))  # optional: only for formal experiments
     observation_type = Column(String(200), nullable=False)  # e.g. shrinkage, hardness drift, collapse, splitting
     severity = Column(String(50))  # Low / Medium / High
     frequency = Column(String(50))  # One-off / Recurring
@@ -542,16 +561,23 @@ class QualityObservation(Base):
     observed_at = Column(Date)
 
     trial_record = relationship("TrialRecord", back_populates="quality_observations")
+    production_run = relationship("ProductionRun")
 
 
 # ---------------------------------------------------------------------------
 # 11. adjustment_conclusions  (NOT "corrective actions" - approved terminology)
+#
+# This stays a trial-scoped closeout artifact in practice (it captures the
+# deliberate change + result + reuse recommendation for a formal
+# investigation), but also carries production_run_id directly for
+# consistent querying alongside the rest of a run's quality data.
 # ---------------------------------------------------------------------------
 class AdjustmentConclusion(Base):
     __tablename__ = "adjustment_conclusions"
 
     id = Column(Integer, primary_key=True)
-    trial_record_id = Column(Integer, ForeignKey("trial_records.id"), nullable=False)
+    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
+    trial_record_id = Column(Integer, ForeignKey("trial_records.id"))  # optional
     parameter_changed = Column(String(200))
     formulation_changed = Column(Boolean, default=False)
     material_changed = Column(String(200))
@@ -563,16 +589,21 @@ class AdjustmentConclusion(Base):
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
     trial_record = relationship("TrialRecord", back_populates="adjustment_conclusions")
+    production_run = relationship("ProductionRun")
 
 
 # ---------------------------------------------------------------------------
 # 12. approval_records
+#
+# Also trial-scoped in practice (sign-off on a formal experiment's
+# closeout), with production_run_id carried directly for consistency.
 # ---------------------------------------------------------------------------
 class ApprovalRecord(Base):
     __tablename__ = "approval_records"
 
     id = Column(Integer, primary_key=True)
-    trial_record_id = Column(Integer, ForeignKey("trial_records.id"), nullable=False)
+    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
+    trial_record_id = Column(Integer, ForeignKey("trial_records.id"))  # optional
     reviewed_by = Column(String(200))
     approved_by = Column(String(200))
     approval_status = Column(String(50), default="Pending Review")

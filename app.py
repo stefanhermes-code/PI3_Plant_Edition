@@ -17,8 +17,10 @@ import streamlit as st
 from auth import current_user, logout_button, require_login
 from db import (
     FoamGrade,
+    PhysicalPropertyResult,
     Plant,
     ProductFamily,
+    ProductionRun,
     QualityObservation,
     TrialRecord,
     get_session,
@@ -112,30 +114,30 @@ def render_overview():
 
     st.divider()
 
-    # --- KPI cards ----------------------------------------------------------
-    all_trials = session.query(TrialRecord).all()
-    open_trials = [t for t in all_trials if t.status != "Closed"]
+    # --- KPI cards: production/quality first, experiments as a secondary metric ---
+    all_runs = session.query(ProductionRun).all()
     recurring_observations = (
         session.query(QualityObservation).filter(QualityObservation.frequency == "Recurring").all()
     )
-    unresolved_trials = [t for t in all_trials if t.status != "Closed" and not t.can_close()]
-    confirmed_lessons = [t for t in all_trials if t.status == "Closed" and t.conclusion]
+    all_results = session.query(PhysicalPropertyResult).filter(PhysicalPropertyResult.pass_fail.isnot(None)).all()
+    pass_count = len([r for r in all_results if r.pass_fail == "Pass"])
+    pass_rate = f"{round(100 * pass_count / len(all_results))}%" if all_results else "—"
+    active_trials = session.query(TrialRecord).filter(TrialRecord.status != "Closed").count()
 
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("Open trials", len(open_trials))
+    kpi1.metric("Production runs", len(all_runs))
     kpi2.metric("Recurring quality observations", len(recurring_observations))
-    kpi3.metric("Trials pending closeout requirements", len(unresolved_trials))
-    kpi4.metric("Confirmed / closed lessons", len(confirmed_lessons))
+    kpi3.metric("Physical property pass rate", pass_rate)
+    kpi4.metric("Active trials / experiments", active_trials)
 
     st.divider()
 
-    # --- Main table: recent issues by product family and severity ----------
+    # --- Main table: recent quality observations by product family/grade ----
     st.subheader("Recent quality observations")
 
     obs_rows = []
     for obs in session.query(QualityObservation).order_by(QualityObservation.observed_at.desc()).limit(25):
-        trial = obs.trial_record
-        run = trial.production_run if trial else None
+        run = obs.production_run
         grade = run.foam_grade if run else None
         family = grade.product_family if grade else None
         obs_rows.append(
@@ -143,11 +145,12 @@ def render_overview():
                 "Observed": obs.observed_at,
                 "Product family": family.name if family else "—",
                 "Foam grade": grade.grade_name if grade else "—",
+                "Run": f"#{run.id}" if run else "—",
                 "Observation type": obs.observation_type,
                 "Severity": obs.severity,
                 "Frequency": obs.frequency,
                 "Confidence": obs.confidence_level,
-                "Trial status": trial.status if trial else "—",
+                "Trial": f"#{obs.trial_record_id}" if obs.trial_record_id else "—",
             }
         )
 
@@ -161,8 +164,8 @@ def render_overview():
     # --- Action buttons ------------------------------------------------------
     st.subheader("Quick actions")
     a1, a2, a3, a4 = st.columns(4)
-    a1.page_link("pages/3_Recipe_Version_Record.py", label="Open a recipe version", icon="🧪")
-    a2.page_link("pages/4_Production_Run_Trial_Record.py", label="Add a trial", icon="➕")
+    a1.page_link("pages/4_Production_Run_Trial_Record.py", label="Add a production run", icon="➕")
+    a2.page_link("pages/5_Physical_Property_Result.py", label="Record a property result", icon="📏")
     a3.page_link("pages/6_Quality_Observation.py", label="Add a quality observation", icon="📋")
     a4.page_link("pages/9_Similar_Case_Retrieval.py", label="Ask PI3 / find similar cases", icon="🔎")
 
@@ -178,15 +181,19 @@ setup_pages = [
 ]
 
 production_pages = [
-    st.Page("pages/4_Production_Run_Trial_Record.py", title="Production Run / Trial Record", icon="⚙️"),
+    st.Page("pages/4_Production_Run_Trial_Record.py", title="Production Run", icon="⚙️"),
     st.Page("pages/5_Physical_Property_Result.py", title="Physical Property Result", icon="📏"),
     st.Page("pages/6_Quality_Observation.py", title="Quality Observation", icon="🔍"),
+]
+
+experiment_pages = [
+    st.Page("pages/13_Trial_Experiment.py", title="Trial / Experiment", icon="🧫"),
     st.Page("pages/7_Adjustment_Conclusion.py", title="Adjustment & Conclusion", icon="🛠️"),
     st.Page("pages/8_Approval_Review.py", title="Approval & Review", icon="✅"),
+    st.Page("pages/9_Similar_Case_Retrieval.py", title="Similar Case Retrieval", icon="🧭"),
 ]
 
 intelligence_pages = [
-    st.Page("pages/9_Similar_Case_Retrieval.py", title="Similar Case Retrieval", icon="🧭"),
     st.Page("pages/10_PI3_AI_Connectivity.py", title="PI3 / AI Connectivity", icon="🤖"),
 ]
 
@@ -199,7 +206,8 @@ pg = st.navigation(
     {
         "PI3 Plant Edition": [overview_page],
         "Setup": setup_pages,
-        "Production & Trials": production_pages,
+        "Production": production_pages,
+        "Experiments (optional)": experiment_pages,
         "Intelligence": intelligence_pages,
         "Admin": admin_pages,
     }
