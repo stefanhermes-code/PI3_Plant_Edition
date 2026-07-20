@@ -33,11 +33,17 @@ LOGO_PATH = "assets/htc_global_logo_blue_steel.png"
 
 st.set_page_config(page_title="PI3 - Flexible PU Foam Intelligence", page_icon="🧪", layout="wide")
 
-# Sidebar branding: HTC Global logo above the navigation menu, with the app
-# version underneath it (bump version.py on every commit/push).
-st.logo(LOGO_PATH, size="large")
+# Sidebar branding: a larger HTC Global logo with the app version right next
+# to it, above the navigation menu (bump version.py on every commit/push).
+# Built with columns rather than st.logo() so the version text can sit
+# beside the logo instead of being confined to st.logo()'s fixed header slot.
 with st.sidebar:
-    st.caption(f"PI3 Plant Edition · v{APP_VERSION}")
+    logo_col, version_col = st.columns([1, 1.4], vertical_alignment="center")
+    logo_col.image(LOGO_PATH, width=140)
+    with version_col:
+        st.markdown("**PI3 Plant Edition**")
+        st.caption(f"v{APP_VERSION}")
+    st.divider()
 
 # Light styling on top of the .streamlit/config.toml color theme.
 st.markdown(

@@ -37,6 +37,7 @@ from db import (
     ProductionPhase,
     ProductionRun,
     RawMaterialLotUse,
+    RecipeComponent,
     RecipeVersion,
     RuntimeDataRecord,
     get_session,
@@ -488,8 +489,26 @@ else:
                 format_func=lambda p: f"{p.phase_name} ({p.phase_start})",
                 key="stream_phase_select",
             )
+            recipe_components = (
+                session.query(RecipeComponent)
+                .filter(RecipeComponent.recipe_version_id == run.recipe_version_id)
+                .all()
+            )
+            if not recipe_components:
+                st.warning(
+                    "This run's recipe version has no components listed yet — add them on the Recipe "
+                    "Version Record page. Falling back to free text for now."
+                )
+            stream_choice = st.selectbox(
+                "Stream / raw material *",
+                recipe_components,
+                format_func=lambda c: f"{c.raw_material_name}" + (f" ({c.role_in_formulation})" if c.role_in_formulation else ""),
+                key="stream_choice_select",
+            ) if recipe_components else None
             with st.form("add_stream_reading"):
-                stream_name = st.text_input("Stream name * (e.g. Polyol A, TDI 80/20, Water blend, Catalyst)")
+                stream_other = st.text_input(
+                    "Or type a stream not in the recipe (e.g. blended stream, process air, water addition)"
+                )
                 flow_unit = st.selectbox("Flow unit", ["kg/min", "L/min"])
                 c1, c2, c3 = st.columns(3)
                 flow = c1.number_input("Flow", min_value=0.0, step=0.1)
@@ -507,13 +526,16 @@ else:
 
                 submitted = st.form_submit_button("Save stream reading")
                 if submitted:
-                    if not stream_name:
-                        st.error("Stream name is required.")
+                    final_stream_name = stream_other.strip() or (
+                        stream_choice.raw_material_name if stream_choice else ""
+                    )
+                    if not final_stream_name:
+                        st.error("Pick a stream from the recipe, or type one that isn't in it.")
                     else:
                         session.add(
                             ComponentStreamReading(
                                 production_phase_id=phase.id,
-                                stream_name=stream_name,
+                                stream_name=final_stream_name,
                                 flow_unit=flow_unit,
                                 flow=flow or None,
                                 flow_total_qty=flow_total_qty or None,
