@@ -1,5 +1,7 @@
 """Shared UI helpers for PI3 Plant Edition pages."""
 
+import datetime as dt
+
 import pandas as pd
 import streamlit as st
 
@@ -55,3 +57,28 @@ def selectbox_from_query(label, session, model, name_field="name", allow_none=Tr
 def show_advisory_footer():
     st.divider()
     st.caption(f"Advisory boundary: {ADVISORY_DISCLAIMER}")
+
+
+def combine_date_time(label, key_prefix, default_date=None, default_time=None):
+    """Render a date_input + time_input pair side by side and return a
+    combined datetime.datetime. Used wherever a phase boundary, event, or
+    sample timestamp needs both a date and a time from the operator."""
+    c1, c2 = st.columns(2)
+    d = c1.date_input(f"{label} — date", value=default_date or dt.date.today(), key=f"{key_prefix}_date")
+    t = c2.time_input(f"{label} — time", value=default_time or dt.datetime.now().time(), key=f"{key_prefix}_time")
+    return dt.datetime.combine(d, t)
+
+
+def parse_dt(value):
+    """Best-effort parse of a CSV/Excel cell into a datetime, or None."""
+    ts = pd.to_datetime(value, errors="coerce")
+    if pd.isna(ts):
+        return None
+    return ts.to_pydatetime()
+
+
+def parse_bool(value):
+    """Best-effort parse of a CSV/Excel cell into a bool."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "yes", "y")

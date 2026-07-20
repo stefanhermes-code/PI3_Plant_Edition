@@ -30,7 +30,32 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
-Base = declarative_base()
+
+class _NoDeepCopyMixin:
+    """Mixin applied to every ORM model via declarative_base(cls=...).
+
+    Streamlit's widget-state tracking (session_state.py: register_widget)
+    deepcopies a selectbox's option values to detect changes across reruns.
+    Several pages pass live ORM objects (Plant, FoamGrade, TrialRecord, ...)
+    directly as selectbox options. Once any bidirectional relationship
+    collection reachable from one of those objects becomes non-empty (e.g.
+    a trial gets its first physical property result), copy.deepcopy hits a
+    known SQLAlchemy/backref-collection incompatibility and raises
+    (AttributeError: '...' object has no attribute '_sa_instance_state', or
+    'InstanceState' object has no attribute 'obj').
+
+    These are already persistent, identity-mapped objects, so there is no
+    good reason to actually duplicate one: returning `self` from
+    __deepcopy__ sidesteps the incompatibility entirely and is semantically
+    fine here (nothing in this app relies on Streamlit's before/after value
+    comparison for these widgets - none of them use on_change=).
+    """
+
+    def __deepcopy__(self, memo):
+        return self
+
+
+Base = declarative_base(cls=_NoDeepCopyMixin)
 
 
 def _database_url() -> str:
@@ -61,6 +86,34 @@ CONFIDENCE_LEVELS = ["Confirmed", "Likely", "Unconfirmed", "Rejected"]
 APPROVAL_STATUSES = ["Draft", "Pending Review", "Approved", "Rejected"]
 TRIAL_STATUSES = ["Open", "Pending Closure", "Closed"]
 INSTALLATION_TYPES = ["Single Plant", "Multi-Plant", "Enterprise / Group"]
+
+# Process-data capture vocabularies (Mandatory-tier taxonomy, see
+# "Expanding PI3 Plant Edition Production-Trial Data Capture" report).
+PHASE_NAMES = [
+    "Pre-run / Calibration",
+    "Start-up",
+    "Stabilization",
+    "Steady-state",
+    "Adjustment / Grade change",
+    "Shutdown",
+]
+EVENT_TYPES = [
+    "Alarm",
+    "Intervention",
+    "Grade Change",
+    "Planned Pause",
+    "Unplanned Pause",
+    "Other",
+]
+SEVERITIES = ["Low", "Medium", "High"]
+ZONE_LABELS = [
+    "Head-Left-Top", "Head-Center-Top", "Head-Right-Top",
+    "Middle-Left-Top", "Middle-Center-Top", "Middle-Right-Top",
+    "Tail-Left-Top", "Tail-Center-Top", "Tail-Right-Top",
+    "Head-Center-Middle", "Middle-Center-Middle", "Tail-Center-Middle",
+    "Head-Center-Bottom", "Middle-Center-Bottom", "Tail-Center-Bottom",
+    "Other",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +232,147 @@ class ProductionRun(Base):
     recipe_version = relationship("RecipeVersion", back_populates="production_runs")
     runtime_records = relationship("RuntimeDataRecord", back_populates="production_run")
     trial_records = relationship("TrialRecord", back_populates="production_run")
+    # Note: phases/events/lot_uses/samples are deliberately NOT exposed as
+    # back-populated collections here. All page code queries those tables
+    # directly by production_run_id instead of via a run.phases-style
+    # relationship. Adding a bidirectional collection here made ProductionRun
+    # (and therefore any FoamGrade/ProductFamily selectbox reachable via
+    # RecipeVersion.production_runs) carry a live, non-empty backref
+    # collection once rows existed - and Streamlit's widget-state tracking
+    # deepcopies selectbox option objects, which crashes on SQLAlchemy
+    # InstrumentedList backref collections (AttributeError: '...' object has
+    # no attribute '_sa_instance_state'). Keeping these one-directional
+    # (see production_run = relationship(...) on each child model below)
+    # avoids that entirely.
+
+
+# ---------------------------------------------------------------------------
+# 6b. production_phases (Mandatory-tier: phase timestamps + machine settings)
+# ---------------------------------------------------------------------------
+class ProductionPhase(Base):
+    __tablename__ = "production_phases"
+
+    id = Column(Integer, primary_key=True)
+    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
+    phase_name = Column(String(50), nullable=False)
+    phase_start = Column(DateTime)
+    phase_end = Column(DateTime)
+    is_steady_state = Column(Boolean, default=False)
+
+    # Machine-level settings for this phase (setpoint / actual pattern).
+    mixer_rpm_setpoint = Column(Float)
+    mixer_rpm_actual_mean = Column(Float)
+    conveyor_speed_setpoint = Column(Float)  # m/min
+    conveyor_speed_actual_mean = Column(Float)  # m/min
+    air_injection_rate = Column(Float)  # NL/min or % command
+    air_pressure_bar = Column(Float)
+    laydown_mode = Column(String(100))  # trough / fall-plate / liquid laydown / traversing / direct
+    section_positions_note = Column(Text)  # free-text geometry note (fall-plate section heights, etc.)
+    sidewall_width_mm = Column(Float)
+    foam_height_actual_mean_mm = Column(Float)
+
+    notes = Column(Text)
+    source_file_reference = Column(String(300))  # "manual entry" or CSV filename
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    production_run = relationship("ProductionRun")
+
+
+# ---------------------------------------------------------------------------
+# 6c. component_stream_readings (Mandatory-tier: per raw-material stream)
+# ---------------------------------------------------------------------------
+class ComponentStreamReading(Base):
+    __tablename__ = "component_stream_readings"
+
+    id = Column(Integer, primary_key=True)
+    production_phase_id = Column(Integer, ForeignKey("production_phases.id"), nullable=False)
+    stream_name = Column(String(200), nullable=False)  # e.g. Polyol A, TDI 80/20, Water blend, Catalyst
+    flow_unit = Column(String(20), default="kg/min")
+    flow_setpoint = Column(Float)
+    flow_actual_mean = Column(Float)
+    flow_actual_min = Column(Float)
+    flow_actual_max = Column(Float)
+    flow_actual_sd = Column(Float)
+    pressure_actual_mean_bar = Column(Float)
+    temperature_setpoint_c = Column(Float)
+    temperature_actual_mean_c = Column(Float)
+    notes = Column(Text)
+    source_file_reference = Column(String(300))
+
+    phase = relationship("ProductionPhase")
+
+
+# ---------------------------------------------------------------------------
+# 6d. production_events (Mandatory-tier: alarms / interventions / grade changes)
+# ---------------------------------------------------------------------------
+class ProductionEvent(Base):
+    __tablename__ = "production_events"
+
+    id = Column(Integer, primary_key=True)
+    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
+    production_phase_id = Column(Integer, ForeignKey("production_phases.id"))
+    event_ts = Column(DateTime, nullable=False)
+    event_type = Column(String(50), nullable=False)
+    severity = Column(String(20))
+    description = Column(Text)
+    action_taken = Column(Text)
+    source_file_reference = Column(String(300))
+
+    production_run = relationship("ProductionRun")
+    phase = relationship("ProductionPhase")
+
+
+# ---------------------------------------------------------------------------
+# 6e. raw_material_lot_uses (Mandatory-tier: supplier lot actually consumed)
+# ---------------------------------------------------------------------------
+class RawMaterialLotUse(Base):
+    __tablename__ = "raw_material_lot_uses"
+
+    id = Column(Integer, primary_key=True)
+    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
+    component_stream_name = Column(String(200), nullable=False)
+    supplier_lot_no = Column(String(200), nullable=False)
+    notes = Column(Text)
+    source_file_reference = Column(String(300))
+
+    production_run = relationship("ProductionRun")
+
+
+# ---------------------------------------------------------------------------
+# 6f. samples (Mandatory-tier: sample-to-lab traceability backbone)
+# ---------------------------------------------------------------------------
+class Sample(Base):
+    __tablename__ = "samples"
+
+    id = Column(Integer, primary_key=True)
+    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
+    sample_ts = Column(DateTime)
+    zone_label = Column(String(50))
+    x_mm = Column(Float)
+    y_mm = Column(Float)
+    z_mm = Column(Float)
+    cure_age_hours = Column(Float)
+    notes = Column(Text)
+
+    production_run = relationship("ProductionRun")
+
+
+# ---------------------------------------------------------------------------
+# 6g. conditioning_segments (Mandatory-tier: conditioning history per sample)
+# ---------------------------------------------------------------------------
+class ConditioningSegment(Base):
+    __tablename__ = "conditioning_segments"
+
+    id = Column(Integer, primary_key=True)
+    sample_id = Column(Integer, ForeignKey("samples.id"), nullable=False)
+    condition_type = Column(String(200))  # e.g. "Standard 23C/50%RH", "Ambient plant floor"
+    temperature_c = Column(Float)
+    relative_humidity_pct = Column(Float)
+    segment_start = Column(DateTime)
+    segment_end = Column(DateTime)
+    notes = Column(Text)
+
+    sample = relationship("Sample")
 
 
 # ---------------------------------------------------------------------------
@@ -263,15 +457,19 @@ class PhysicalPropertyResult(Base):
 
     id = Column(Integer, primary_key=True)
     trial_record_id = Column(Integer, ForeignKey("trial_records.id"), nullable=False)
+    sample_id = Column(Integer, ForeignKey("samples.id"))  # nullable: older rows predate sample tracking
     property_name = Column(String(100), nullable=False)  # density, hardness, tensile, elongation, compression_set, airflow
     target_value = Column(Float)
     actual_value = Column(Float)
     unit = Column(String(50))
     pass_fail = Column(String(20))  # Pass / Fail
     test_method = Column(String(200))
+    method_revision = Column(String(50))
+    replicate_no = Column(Integer)
     tested_at = Column(Date)
 
     trial_record = relationship("TrialRecord", back_populates="physical_property_results")
+    sample = relationship("Sample")
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +606,12 @@ ALL_MODELS = [
     RecipeVersion,
     RecipeComponent,
     ProductionRun,
+    ProductionPhase,
+    ComponentStreamReading,
+    ProductionEvent,
+    RawMaterialLotUse,
+    Sample,
+    ConditioningSegment,
     RuntimeDataRecord,
     TrialRecord,
     PhysicalPropertyResult,
