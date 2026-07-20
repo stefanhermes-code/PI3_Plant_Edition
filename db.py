@@ -89,13 +89,17 @@ INSTALLATION_TYPES = ["Single Plant", "Multi-Plant", "Enterprise / Group"]
 
 # Process-data capture vocabularies (Mandatory-tier taxonomy, see
 # "Expanding PI3 Plant Edition Production-Trial Data Capture" report).
+# Limited to two snapshots deliberately: without a live PLC/OPC UA/MQTT link
+# or a machine data export/import, there is no honest way to capture the
+# in-between phases (start-up, stabilization, steady-state, adjustment) as
+# anything more than guesses. "Setup" is what was planned/configured before
+# or at the start of the run; "Finalized" is what was actually used, entered
+# at shutdown/completion. Recording the same fields at both points gives the
+# plan-vs-actual comparison for free, without needing a separate setpoint
+# column next to every actual column.
 PHASE_NAMES = [
-    "Pre-run / Calibration",
-    "Start-up",
-    "Stabilization",
-    "Steady-state",
-    "Adjustment / Grade change",
-    "Shutdown",
+    "Setup",
+    "Finalized",
 ]
 EVENT_TYPES = [
     "Alarm",
@@ -276,37 +280,37 @@ class ProductionRun(Base):
 
 
 # ---------------------------------------------------------------------------
-# 6b. production_phases (Mandatory-tier: phase timestamps + machine settings)
+# 6b. production_phases (two snapshots: Setup = planned, Finalized = actual)
+#
+# Each machine-setting field is recorded once per phase row. Because there
+# are only two phases, comparing the Setup row to the Finalized row for the
+# same production run IS the setpoint-vs-actual comparison - no separate
+# _setpoint/_actual column pair needed on top of that.
 # ---------------------------------------------------------------------------
 class ProductionPhase(Base):
     __tablename__ = "production_phases"
 
     id = Column(Integer, primary_key=True)
     production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
-    phase_name = Column(String(50), nullable=False)
+    phase_name = Column(String(50), nullable=False)  # "Setup" or "Finalized"
     phase_start = Column(DateTime)
     phase_end = Column(DateTime)
-    is_steady_state = Column(Boolean, default=False)
 
-    # Machine-level settings for this phase (setpoint / actual pattern).
-    mixer_rpm_setpoint = Column(Float)
-    mixer_rpm_actual_mean = Column(Float)
-    conveyor_speed_setpoint = Column(Float)  # m/min
-    conveyor_speed_actual_mean = Column(Float)  # m/min
-    air_injection_rate_setpoint = Column(Float)  # NL/min or % command
-    air_injection_rate_actual = Column(Float)  # NL/min or % command
-    air_pressure_setpoint_bar = Column(Float)
-    air_pressure_actual_bar = Column(Float)
+    # Machine-level settings for this phase.
+    mixer_rpm = Column(Float)
+    conveyor_speed = Column(Float)  # m/min
+    air_injection_rate = Column(Float)  # NL/min or % command
+    air_pressure_bar = Column(Float)
     laydown_mode = Column(String(100))  # trough / fall-plate / liquid laydown / traversing / direct
     section_positions_note = Column(Text)  # free-text for geometry not covered by structured fall-plate rows below
     sidewall_width_mm = Column(Float)
-    foam_height_actual_mean_mm = Column(Float)
+    foam_height_mm = Column(Float)
 
-    # Target-vs-actual stoichiometric ratio/index for this phase - the report's
-    # single highest-value diagnostic field (explains density/compression/cure
-    # drift better than any individual stream reading).
-    ratio_index_target = Column(Float)
-    ratio_index_actual = Column(Float)
+    # Stoichiometric ratio/index for this phase - the report's single
+    # highest-value diagnostic field (explains density/compression/cure
+    # drift better than any individual stream reading). Compare the Setup
+    # row's value to the Finalized row's value for the plan-vs-actual read.
+    ratio_index = Column(Float)
 
     notes = Column(Text)
     source_file_reference = Column(String(300))  # "manual entry" or CSV filename
@@ -316,7 +320,7 @@ class ProductionPhase(Base):
 
 
 # ---------------------------------------------------------------------------
-# 6c. component_stream_readings (Mandatory-tier: per raw-material stream)
+# 6c. component_stream_readings (per raw-material stream, per Setup/Finalized phase)
 # ---------------------------------------------------------------------------
 class ComponentStreamReading(Base):
     __tablename__ = "component_stream_readings"
@@ -325,15 +329,10 @@ class ComponentStreamReading(Base):
     production_phase_id = Column(Integer, ForeignKey("production_phases.id"), nullable=False)
     stream_name = Column(String(200), nullable=False)  # e.g. Polyol A, TDI 80/20, Water blend, Catalyst
     flow_unit = Column(String(20), default="kg/min")
-    flow_setpoint = Column(Float)
-    flow_actual_mean = Column(Float)
-    flow_actual_min = Column(Float)
-    flow_actual_max = Column(Float)
-    flow_actual_sd = Column(Float)
+    flow = Column(Float)
     flow_total_qty = Column(Float)  # total delivered this phase - same base unit as flow_unit (kg or L, not per-minute)
-    pressure_actual_mean_bar = Column(Float)
-    temperature_setpoint_c = Column(Float)
-    temperature_actual_mean_c = Column(Float)
+    pressure_bar = Column(Float)
+    temperature_c = Column(Float)
     calibration_status = Column(String(50))  # Valid / Expired / Failed / Not Verified
     calibration_note = Column(Text)
     notes = Column(Text)

@@ -9,11 +9,14 @@ most runs never need it.
 
 Includes the Mandatory-tier process-data capture recommended in "Expanding
 PI3 Plant Edition Production-Trial Data Capture for Polyurethane Foaming
-Lines": phase timestamps, per-stream setpoint/actual flow-pressure-temp
-statistics, machine settings (mixer/conveyor/laydown/sidewall), an
-alarm/intervention/grade-change event log, and raw-material lot tracking.
-No live PLC/OPC UA/MQTT connection exists yet, so every section supports
-both manual entry and CSV/Excel import (same pattern as Runtime Data).
+Lines", adapted to what's actually capturable without a live PLC/OPC UA/MQTT
+link or a machine data export/import: each run gets exactly two phase
+snapshots, Setup (planned/configured before the run) and Finalized (what
+actually happened, entered at shutdown). Recording the same machine-setting
+fields at both points gives the plan-vs-actual comparison directly, without
+a separate setpoint/actual column pair for every field. Every section
+supports both manual entry and CSV/Excel import (same pattern as Runtime
+Data).
 """
 
 import datetime as dt
@@ -39,7 +42,7 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import combine_date_time, page_setup, parse_bool, parse_dt, show_advisory_footer
+from helpers import combine_date_time, page_setup, parse_dt, show_advisory_footer
 
 RUNTIME_REQUIRED_COLUMNS = ["production_run_id"]
 RUNTIME_OPTIONAL_COLUMNS = [
@@ -55,21 +58,15 @@ RUNTIME_OPTIONAL_COLUMNS = [
 
 PHASE_REQUIRED_COLUMNS = ["production_run_id", "phase_name"]
 PHASE_OPTIONAL_COLUMNS = [
-    "phase_start", "phase_end", "is_steady_state",
-    "mixer_rpm_setpoint", "mixer_rpm_actual_mean",
-    "conveyor_speed_setpoint", "conveyor_speed_actual_mean",
-    "air_injection_rate_setpoint", "air_injection_rate_actual",
-    "air_pressure_setpoint_bar", "air_pressure_actual_bar",
-    "ratio_index_target", "ratio_index_actual",
-    "laydown_mode", "section_positions_note",
-    "sidewall_width_mm", "foam_height_actual_mean_mm", "notes",
+    "phase_start", "phase_end",
+    "mixer_rpm", "conveyor_speed", "air_injection_rate", "air_pressure_bar",
+    "ratio_index", "laydown_mode", "section_positions_note",
+    "sidewall_width_mm", "foam_height_mm", "notes",
 ]
 
 STREAM_REQUIRED_COLUMNS = ["production_run_id", "phase_name", "stream_name"]
 STREAM_OPTIONAL_COLUMNS = [
-    "flow_unit", "flow_setpoint", "flow_actual_mean", "flow_actual_min",
-    "flow_actual_max", "flow_actual_sd", "flow_total_qty", "pressure_actual_mean_bar",
-    "temperature_setpoint_c", "temperature_actual_mean_c",
+    "flow_unit", "flow", "flow_total_qty", "pressure_bar", "temperature_c",
     "calibration_status", "calibration_note", "notes",
 ]
 
@@ -177,9 +174,10 @@ if runs:
 st.divider()
 st.subheader("⏱️ Process phases")
 st.caption(
-    "Every run is a sequence of phases (pre-run, start-up, stabilization, steady-state, "
-    "adjustment/grade change, shutdown). Recording phase boundaries lets PI3 separate "
-    "steady-state data from transition/scrap material."
+    "Two snapshots per run: **Setup** (planned/configured before the run) and **Finalized** "
+    "(what actually happened, entered at shutdown). Enter the same fields at both points — "
+    "comparing Setup to Finalized for a run is the plan-vs-actual read, no separate setpoint "
+    "column needed."
 )
 
 if runs:
@@ -194,34 +192,24 @@ if runs:
         )
         with st.form("add_phase"):
             phase_name = st.selectbox("Phase *", PHASE_NAMES)
-            is_steady_state = st.checkbox("This is the steady-state phase")
             phase_start = combine_date_time("Phase start", "phase_start")
             phase_end = combine_date_time("Phase end", "phase_end")
 
             st.markdown("**Machine settings for this phase**")
             c1, c2, c3, c4 = st.columns(4)
-            mixer_rpm_setpoint = c1.number_input("Mixer rpm — setpoint", min_value=0.0, step=1.0)
-            mixer_rpm_actual_mean = c2.number_input("Mixer rpm — actual mean", min_value=0.0, step=1.0)
-            conveyor_speed_setpoint = c3.number_input("Conveyor m/min — setpoint", min_value=0.0, step=0.01)
-            conveyor_speed_actual_mean = c4.number_input("Conveyor m/min — actual mean", min_value=0.0, step=0.01)
+            mixer_rpm = c1.number_input("Mixer rpm", min_value=0.0, step=1.0)
+            conveyor_speed = c2.number_input("Conveyor speed (m/min)", min_value=0.0, step=0.01)
+            air_injection_rate = c3.number_input("Air injection rate", min_value=0.0, step=0.1)
+            air_pressure_bar = c4.number_input("Air pressure (bar)", min_value=0.0, step=0.05)
 
-            c5, c6, c7, c8 = st.columns(4)
-            air_injection_rate_setpoint = c5.number_input("Air injection rate — setpoint", min_value=0.0, step=0.1)
-            air_injection_rate_actual = c6.number_input("Air injection rate — actual", min_value=0.0, step=0.1)
-            air_pressure_setpoint_bar = c7.number_input("Air pressure (bar) — setpoint", min_value=0.0, step=0.05)
-            air_pressure_actual_bar = c8.number_input("Air pressure (bar) — actual", min_value=0.0, step=0.05)
-
-            c9, c10, c11, c12 = st.columns(4)
-            sidewall_width_mm = c9.number_input("Sidewall width (mm)", min_value=0.0, step=1.0)
-            foam_height_actual_mean_mm = c10.number_input("Foam height — actual mean (mm)", min_value=0.0, step=1.0)
-            ratio_index_target = c11.number_input(
-                "Ratio / index — target", min_value=0.0, step=0.1,
-                help="Intended stoichiometric ratio or index for this phase (from the recipe engine).",
-            )
-            ratio_index_actual = c12.number_input(
-                "Ratio / index — actual", min_value=0.0, step=0.1,
-                help="Reconstructed actual ratio/index from measured stream totals. The single strongest "
-                "diagnostic field for explaining density/compression/cure drift.",
+            c5, c6, c7 = st.columns(3)
+            sidewall_width_mm = c5.number_input("Sidewall width (mm)", min_value=0.0, step=1.0)
+            foam_height_mm = c6.number_input("Foam height (mm)", min_value=0.0, step=1.0)
+            ratio_index = c7.number_input(
+                "Ratio / index", min_value=0.0, step=0.1,
+                help="Stoichiometric ratio/index for this phase. Enter the intended value on the Setup "
+                "row and the reconstructed actual value on the Finalized row — comparing the two is the "
+                "single strongest diagnostic for explaining density/compression/cure drift.",
             )
 
             laydown_mode = st.text_input("Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)")
@@ -241,21 +229,15 @@ if runs:
                             phase_name=phase_name,
                             phase_start=phase_start,
                             phase_end=phase_end,
-                            is_steady_state=is_steady_state,
-                            mixer_rpm_setpoint=mixer_rpm_setpoint or None,
-                            mixer_rpm_actual_mean=mixer_rpm_actual_mean or None,
-                            conveyor_speed_setpoint=conveyor_speed_setpoint or None,
-                            conveyor_speed_actual_mean=conveyor_speed_actual_mean or None,
-                            air_injection_rate_setpoint=air_injection_rate_setpoint or None,
-                            air_injection_rate_actual=air_injection_rate_actual or None,
-                            air_pressure_setpoint_bar=air_pressure_setpoint_bar or None,
-                            air_pressure_actual_bar=air_pressure_actual_bar or None,
-                            ratio_index_target=ratio_index_target or None,
-                            ratio_index_actual=ratio_index_actual or None,
+                            mixer_rpm=mixer_rpm or None,
+                            conveyor_speed=conveyor_speed or None,
+                            air_injection_rate=air_injection_rate or None,
+                            air_pressure_bar=air_pressure_bar or None,
+                            ratio_index=ratio_index or None,
                             laydown_mode=laydown_mode,
                             section_positions_note=section_positions_note,
                             sidewall_width_mm=sidewall_width_mm or None,
-                            foam_height_actual_mean_mm=foam_height_actual_mean_mm or None,
+                            foam_height_mm=foam_height_mm or None,
                             notes=notes,
                             source_file_reference="manual entry",
                         )
@@ -306,21 +288,15 @@ if runs:
                                     phase_name=row["phase_name"],
                                     phase_start=parse_dt(row.get("phase_start")),
                                     phase_end=parse_dt(row.get("phase_end")),
-                                    is_steady_state=parse_bool(row.get("is_steady_state", False)),
-                                    mixer_rpm_setpoint=row.get("mixer_rpm_setpoint"),
-                                    mixer_rpm_actual_mean=row.get("mixer_rpm_actual_mean"),
-                                    conveyor_speed_setpoint=row.get("conveyor_speed_setpoint"),
-                                    conveyor_speed_actual_mean=row.get("conveyor_speed_actual_mean"),
-                                    air_injection_rate_setpoint=row.get("air_injection_rate_setpoint"),
-                                    air_injection_rate_actual=row.get("air_injection_rate_actual"),
-                                    air_pressure_setpoint_bar=row.get("air_pressure_setpoint_bar"),
-                                    air_pressure_actual_bar=row.get("air_pressure_actual_bar"),
-                                    ratio_index_target=row.get("ratio_index_target"),
-                                    ratio_index_actual=row.get("ratio_index_actual"),
+                                    mixer_rpm=row.get("mixer_rpm"),
+                                    conveyor_speed=row.get("conveyor_speed"),
+                                    air_injection_rate=row.get("air_injection_rate"),
+                                    air_pressure_bar=row.get("air_pressure_bar"),
+                                    ratio_index=row.get("ratio_index"),
                                     laydown_mode=str(row.get("laydown_mode", "") or ""),
                                     section_positions_note=str(row.get("section_positions_note", "") or ""),
                                     sidewall_width_mm=row.get("sidewall_width_mm"),
-                                    foam_height_actual_mean_mm=row.get("foam_height_actual_mean_mm"),
+                                    foam_height_mm=row.get("foam_height_mm"),
                                     notes=str(row.get("notes", "") or ""),
                                     source_file_reference=uploaded.name,
                                 )
@@ -339,12 +315,9 @@ if runs:
                         "Phase": p.phase_name,
                         "Start": p.phase_start,
                         "End": p.phase_end,
-                        "Steady-state": p.is_steady_state,
-                        "Mixer rpm (actual)": p.mixer_rpm_actual_mean,
-                        "Conveyor m/min (actual)": p.conveyor_speed_actual_mean,
-                        "Ratio/index (target / actual)": (
-                            f"{p.ratio_index_target or '—'} / {p.ratio_index_actual or '—'}"
-                        ),
+                        "Mixer rpm": p.mixer_rpm,
+                        "Conveyor m/min": p.conveyor_speed,
+                        "Ratio/index": p.ratio_index,
                         "Laydown mode": p.laydown_mode,
                     }
                     for p in all_phases
@@ -481,8 +454,8 @@ else:
 st.divider()
 st.subheader("🧪 Component stream readings")
 st.caption(
-    "Per raw-material stream (polyol, isocyanate, water/blowing agent, catalyst, etc.), the flow "
-    "setpoint vs. actual, pressure, and temperature for a given phase. A phase must exist first."
+    "Per raw-material stream (polyol, isocyanate, water/blowing agent, catalyst, etc.), the flow, "
+    "pressure, and temperature for a given phase (Setup or Finalized). A phase must exist first."
 )
 
 all_phases_for_form = session.query(ProductionPhase).order_by(ProductionPhase.phase_start.desc()).all()
@@ -518,25 +491,18 @@ else:
             with st.form("add_stream_reading"):
                 stream_name = st.text_input("Stream name * (e.g. Polyol A, TDI 80/20, Water blend, Catalyst)")
                 flow_unit = st.selectbox("Flow unit", ["kg/min", "L/min"])
-                c1, c2, c3, c4 = st.columns(4)
-                flow_setpoint = c1.number_input("Flow — setpoint", min_value=0.0, step=0.1)
-                flow_actual_mean = c2.number_input("Flow — actual mean", min_value=0.0, step=0.1)
-                flow_actual_min = c3.number_input("Flow — actual min", min_value=0.0, step=0.1)
-                flow_actual_max = c4.number_input("Flow — actual max", min_value=0.0, step=0.1)
-                c5, c6, c7 = st.columns(3)
-                flow_actual_sd = c5.number_input("Flow — actual std. dev.", min_value=0.0, step=0.01)
-                pressure_actual_mean_bar = c6.number_input("Pressure — actual mean (bar)", min_value=0.0, step=0.1)
-                temperature_setpoint_c = c7.number_input("Temperature — setpoint (°C)", step=0.1)
-                c8, c9 = st.columns(2)
-                temperature_actual_mean_c = c8.number_input("Temperature — actual mean (°C)", step=0.1)
-                flow_total_qty = c9.number_input(
+                c1, c2, c3 = st.columns(3)
+                flow = c1.number_input("Flow", min_value=0.0, step=0.1)
+                pressure_bar = c2.number_input("Pressure (bar)", min_value=0.0, step=0.1)
+                temperature_c = c3.number_input("Temperature (°C)", step=0.1)
+                flow_total_qty = st.number_input(
                     "Total delivered this phase (same base unit as flow unit, kg or L)", min_value=0.0, step=0.1
                 )
-                c10, c11 = st.columns(2)
-                calibration_status = c10.selectbox(
+                c4, c5 = st.columns(2)
+                calibration_status = c4.selectbox(
                     "Instrument calibration status", ["", "Valid", "Expired", "Failed", "Not Verified"]
                 )
-                calibration_note = c11.text_input("Calibration note (e.g. cal. due date, certificate ref.)")
+                calibration_note = c5.text_input("Calibration note (e.g. cal. due date, certificate ref.)")
                 notes = st.text_area("Notes")
 
                 submitted = st.form_submit_button("Save stream reading")
@@ -549,15 +515,10 @@ else:
                                 production_phase_id=phase.id,
                                 stream_name=stream_name,
                                 flow_unit=flow_unit,
-                                flow_setpoint=flow_setpoint or None,
-                                flow_actual_mean=flow_actual_mean or None,
-                                flow_actual_min=flow_actual_min or None,
-                                flow_actual_max=flow_actual_max or None,
-                                flow_actual_sd=flow_actual_sd or None,
+                                flow=flow or None,
                                 flow_total_qty=flow_total_qty or None,
-                                pressure_actual_mean_bar=pressure_actual_mean_bar or None,
-                                temperature_setpoint_c=temperature_setpoint_c or None,
-                                temperature_actual_mean_c=temperature_actual_mean_c or None,
+                                pressure_bar=pressure_bar or None,
+                                temperature_c=temperature_c or None,
                                 calibration_status=calibration_status or None,
                                 calibration_note=calibration_note,
                                 notes=notes,
@@ -617,15 +578,10 @@ else:
                                     production_phase_id=phase_id,
                                     stream_name=str(row["stream_name"]),
                                     flow_unit=str(row.get("flow_unit", "") or "kg/min"),
-                                    flow_setpoint=row.get("flow_setpoint"),
-                                    flow_actual_mean=row.get("flow_actual_mean"),
-                                    flow_actual_min=row.get("flow_actual_min"),
-                                    flow_actual_max=row.get("flow_actual_max"),
-                                    flow_actual_sd=row.get("flow_actual_sd"),
+                                    flow=row.get("flow"),
                                     flow_total_qty=row.get("flow_total_qty"),
-                                    pressure_actual_mean_bar=row.get("pressure_actual_mean_bar"),
-                                    temperature_setpoint_c=row.get("temperature_setpoint_c"),
-                                    temperature_actual_mean_c=row.get("temperature_actual_mean_c"),
+                                    pressure_bar=row.get("pressure_bar"),
+                                    temperature_c=row.get("temperature_c"),
                                     calibration_status=str(row.get("calibration_status", "") or "") or None,
                                     calibration_note=str(row.get("calibration_note", "") or ""),
                                     notes=str(row.get("notes", "") or ""),
@@ -646,12 +602,11 @@ else:
                     {
                         "Phase": r.phase.phase_name if r.phase else "—",
                         "Stream": r.stream_name,
-                        "Flow sp": r.flow_setpoint,
-                        "Flow actual mean": r.flow_actual_mean,
+                        "Flow": r.flow,
                         "Unit": r.flow_unit,
                         "Total delivered": r.flow_total_qty,
-                        "Pressure (bar)": r.pressure_actual_mean_bar,
-                        "Temp actual (°C)": r.temperature_actual_mean_c,
+                        "Pressure (bar)": r.pressure_bar,
+                        "Temp (°C)": r.temperature_c,
                         "Calibration": r.calibration_status or "—",
                     }
                     for r in recent_streams
