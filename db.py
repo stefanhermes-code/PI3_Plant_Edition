@@ -48,7 +48,10 @@ def _database_url() -> str:
 
 
 ENGINE = create_engine(_database_url(), pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=ENGINE, autoflush=False, autocommit=False)
+# expire_on_commit=False: keep already-loaded attributes readable after a
+# commit, since the session below is reused across Streamlit reruns rather
+# than recreated each time.
+SessionLocal = sessionmaker(bind=ENGINE, autoflush=False, autocommit=False, expire_on_commit=False)
 
 
 # ---------------------------------------------------------------------------
@@ -424,4 +427,17 @@ def init_db():
 
 
 def get_session():
-    return SessionLocal()
+    """Return a SQLAlchemy session that persists for the lifetime of the
+    Streamlit browser session (via st.session_state), rather than a fresh
+    session on every script rerun.
+
+    Streamlit widgets (e.g. st.selectbox) can hold onto ORM objects across
+    reruns. If each rerun created a brand-new session, the session backing
+    an object selected in an earlier rerun would already be gone, and
+    accessing a not-yet-loaded (lazy) relationship on it would raise
+    sqlalchemy.orm.exc.DetachedInstanceError. Reusing one session per
+    browser session keeps those objects attached and loadable.
+    """
+    if "_sa_session" not in st.session_state:
+        st.session_state["_sa_session"] = SessionLocal()
+    return st.session_state["_sa_session"]

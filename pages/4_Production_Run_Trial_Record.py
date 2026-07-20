@@ -37,7 +37,11 @@ if not grades:
 with st.expander("Add production run + trial", expanded=False):
     with st.form("add_run"):
         grade = st.selectbox("Foam grade *", grades, format_func=lambda g: g.grade_name)
-        versions = [v for v in grade.recipe_versions] if grade else []
+        versions = (
+            session.query(RecipeVersion).filter(RecipeVersion.foam_grade_id == grade.id).all()
+            if grade
+            else []
+        )
         recipe_version = st.selectbox(
             "Recipe version *", versions, format_func=lambda v: v.version_label if v else "—"
         )
