@@ -27,13 +27,17 @@ from db import (
     init_db,
 )
 from helpers import page_setup, show_advisory_footer
+from version import APP_VERSION
 
-LOGO_PATH = "assets/htc_global_logo.png"
+LOGO_PATH = "assets/htc_global_logo_blue_steel.png"
 
 st.set_page_config(page_title="PI3 - Flexible PU Foam Intelligence", page_icon="🧪", layout="wide")
 
-# Sidebar branding: HTC Global logo above the navigation menu.
+# Sidebar branding: HTC Global logo above the navigation menu, with the app
+# version underneath it (bump version.py on every commit/push).
 st.logo(LOGO_PATH, size="large")
+with st.sidebar:
+    st.caption(f"PI3 Plant Edition · v{APP_VERSION}")
 
 # Light styling on top of the .streamlit/config.toml color theme.
 st.markdown(
