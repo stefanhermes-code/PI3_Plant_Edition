@@ -15,7 +15,12 @@ ADVISORY_DISCLAIMER = (
 
 
 def page_setup(title: str):
-    st.set_page_config(page_title=f"PI3 Plant Edition - {title}", layout="wide")
+    """Kept for compatibility with existing pages, which all call this as
+    their first Streamlit command. Page config, sidebar logo, and global
+    styling are now set once in app.py (which runs first on every page view
+    under st.navigation), so this is intentionally a no-op — calling
+    st.set_page_config() a second time would raise an error."""
+    pass
 
 
 def confidence_badge(level: str) -> str:

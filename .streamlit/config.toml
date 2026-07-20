@@ -1,0 +1,8 @@
+[theme]
+# PI3 Plant Edition — industrial blue/teal palette, chosen for readability
+# over long working sessions rather than a stark white screen.
+primaryColor = "#1B6FA8"
+backgroundColor = "#F5F8FA"
+secondaryBackgroundColor = "#E4ECF1"
+textColor = "#1F2A33"
+font = "sans serif"
