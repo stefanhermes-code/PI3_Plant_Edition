@@ -82,3 +82,37 @@ def parse_bool(value):
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in ("true", "1", "yes", "y")
+
+
+def csv_excel_uploader(required_cols, optional_cols=None, key=None):
+    """Render a file uploader for bulk CSV/Excel import, parse it, and check
+    that the required columns are present. Used by every "CSV / Excel
+    import" tab across the app so the upload/parse/column-check boilerplate
+    (and its error messages) stay identical everywhere.
+
+    Returns (df, filename) once a valid file with all required columns has
+    been uploaded, or (None, None) otherwise (an st.error/st.caption has
+    already been shown as appropriate - callers don't need to repeat that).
+    """
+    optional_cols = optional_cols or []
+    cols_caption = "Required columns: " + ", ".join(required_cols)
+    if optional_cols:
+        cols_caption += ". Optional columns: " + ", ".join(optional_cols)
+    st.caption(cols_caption)
+
+    uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key=key)
+    if not uploaded:
+        return None, None
+
+    try:
+        df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
+    except Exception as exc:
+        st.error(f"Could not read file: {exc}")
+        return None, None
+
+    missing_cols = [c for c in required_cols if c not in df.columns]
+    if missing_cols:
+        st.error(f"File is missing required column(s): {', '.join(missing_cols)}. Import rejected.")
+        return None, None
+
+    return df, uploaded.name

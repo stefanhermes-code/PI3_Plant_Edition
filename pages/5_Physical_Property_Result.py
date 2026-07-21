@@ -13,6 +13,7 @@ result is part of a formal experiment's evidence trail.
 
 import datetime as dt
 
+import pandas as pd
 import streamlit as st
 
 from auth import logout_button, require_login
@@ -31,7 +32,13 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import combine_date_time, page_setup, show_advisory_footer
+from helpers import combine_date_time, csv_excel_uploader, page_setup, show_advisory_footer
+
+RESULT_REQUIRED_COLUMNS = ["production_run_id", "property_name", "test_method", "unit", "actual_value"]
+RESULT_OPTIONAL_COLUMNS = [
+    "target_value", "sample_id", "trial_record_id", "method_revision",
+    "replicate_no", "tested_at", "notes",
+]
 
 page_setup("Physical Property Result")
 init_db()
@@ -209,7 +216,9 @@ if not property_defs:
         "physical_property_definitions/methods/uoms before recording results."
     )
 
-with st.expander("Add physical property result", expanded=False):
+tab_result_manual, tab_result_import = st.tabs(["Add physical property result", "CSV / Excel import"])
+
+with tab_result_manual:
     run = st.selectbox(
         "Production run *",
         runs,
@@ -318,6 +327,97 @@ with st.expander("Add physical property result", expanded=False):
                 session.commit()
                 st.success("Physical property result saved.")
                 st.rerun()
+
+with tab_result_import:
+    st.caption(
+        "property_name must match a name in the physical property master list (case-insensitive). "
+        "test_method and unit are stored as typed — they don't need to match an existing method/UOM."
+    )
+    result_df, result_filename = csv_excel_uploader(
+        RESULT_REQUIRED_COLUMNS, RESULT_OPTIONAL_COLUMNS, key="result_upload"
+    )
+    if result_df is not None:
+        run_ids = {r.id for r in runs}
+        defs_by_name = {p.name.strip().lower(): p for p in property_defs}
+        samples_all = {s.id: s for s in session.query(Sample).all()}
+        trials_all = {t.id: t for t in session.query(TrialRecord).all()}
+
+        good_rows, bad_rows = [], []
+        for _, row in result_df.iterrows():
+            try:
+                prop_def = defs_by_name.get(str(row.get("property_name", "")).strip().lower())
+                run_ok = row.get("production_run_id") in run_ids
+                sample_val = row.get("sample_id")
+                sample_ok = pd.isna(sample_val) or int(sample_val) in samples_all
+                trial_val = row.get("trial_record_id")
+                trial_ok = pd.isna(trial_val) or int(trial_val) in trials_all
+                has_method_unit_value = (
+                    str(row.get("test_method", "")).strip()
+                    and str(row.get("unit", "")).strip()
+                    and not pd.isna(row.get("actual_value"))
+                )
+                ok = bool(prop_def and run_ok and sample_ok and trial_ok and has_method_unit_value)
+            except (TypeError, ValueError):
+                ok = False
+            if ok:
+                good_rows.append(row)
+            else:
+                bad_rows.append(row)
+
+        st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
+        if bad_rows:
+            st.warning(
+                "Flagged rows have an unrecognized property_name, production_run_id, sample_id, or "
+                "trial_record_id, or are missing test_method / unit / actual_value."
+            )
+            st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+
+        if good_rows and st.button("Confirm import", key="confirm_result_import"):
+            for row in good_rows:
+                prop_def = defs_by_name[str(row["property_name"]).strip().lower()]
+                test_method = str(row["test_method"]).strip()
+                method_match = next(
+                    (
+                        m
+                        for m in session.query(PhysicalPropertyMethod)
+                        .filter(PhysicalPropertyMethod.property_definition_id == prop_def.id)
+                        .all()
+                        if m.method_code.strip().lower() == test_method.lower()
+                    ),
+                    None,
+                )
+                target_val = row.get("target_value")
+                actual_val = row.get("actual_value")
+                pass_fail = None
+                if not pd.isna(target_val) and not pd.isna(actual_val) and target_val:
+                    lower, upper = target_val * 0.9, target_val * 1.1
+                    pass_fail = "Pass" if lower <= actual_val <= upper else "Fail"
+                sample_val = row.get("sample_id")
+                trial_val = row.get("trial_record_id")
+                replicate_val = row.get("replicate_no")
+                tested_val = pd.to_datetime(row.get("tested_at"), errors="coerce")
+                session.add(
+                    PhysicalPropertyResult(
+                        production_run_id=int(row["production_run_id"]),
+                        trial_record_id=int(trial_val) if not pd.isna(trial_val) else None,
+                        sample_id=int(sample_val) if not pd.isna(sample_val) else None,
+                        property_definition_id=prop_def.id,
+                        property_method_id=method_match.id if method_match else None,
+                        property_name=prop_def.name,
+                        target_value=target_val if not pd.isna(target_val) else None,
+                        actual_value=actual_val if not pd.isna(actual_val) else None,
+                        unit=str(row["unit"]).strip(),
+                        pass_fail=pass_fail,
+                        test_method=test_method,
+                        method_revision=str(row.get("method_revision", "") or ""),
+                        replicate_no=int(replicate_val) if not pd.isna(replicate_val) else 1,
+                        tested_at=tested_val.date() if not pd.isna(tested_val) else dt.date.today(),
+                        notes=str(row.get("notes", "") or ""),
+                    )
+                )
+            session.commit()
+            st.success(f"Imported {len(good_rows)} physical property result(s) from {result_filename}.")
+            st.rerun()
 
 st.divider()
 st.subheader("Results by production run")

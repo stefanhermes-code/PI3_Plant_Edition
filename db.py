@@ -128,6 +128,20 @@ CONDITIONING_TYPE_DEFAULTS = {
 }
 CONDITIONING_TYPES = list(CONDITIONING_TYPE_DEFAULTS.keys())
 
+RAW_MATERIAL_CATEGORIES = [
+    "Polyol",
+    "Isocyanate",
+    "Blowing agent",
+    "Catalyst",
+    "Surfactant",
+    "Flame retardant",
+    "Colorant / Pigment",
+    "Cross-linker / Chain extender",
+    "Filler",
+    "Additive",
+    "Other",
+]
+
 ZONE_LABELS = [
     "Head-Left-Top", "Head-Center-Top", "Head-Right-Top",
     "Middle-Left-Top", "Middle-Center-Top", "Middle-Right-Top",
@@ -243,6 +257,33 @@ class RecipeVersion(Base):
 
 
 # ---------------------------------------------------------------------------
+# Raw materials (master data)
+# ---------------------------------------------------------------------------
+class RawMaterial(Base):
+    """Master list of raw materials, so recipes can be built from a dropdown
+    instead of retyping (and mistyping) the same material name every time.
+
+    raw_material_name stays on RecipeComponent as the field of record (it is
+    what every existing page/report reads), but recipe components now also
+    carry raw_material_id so the same material can be traced/reported on
+    across every recipe that uses it. A component can still name a material
+    that isn't in this master list yet (free-text override), matching the
+    same dropdown-plus-custom-entry pattern used for streams and
+    conditioning types elsewhere in the app.
+    """
+
+    __tablename__ = "raw_materials"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    category = Column(String(100))
+    default_supplier = Column(String(200))
+    notes = Column(Text)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
 # 5. recipe_components
 # ---------------------------------------------------------------------------
 class RecipeComponent(Base):
@@ -250,6 +291,7 @@ class RecipeComponent(Base):
 
     id = Column(Integer, primary_key=True)
     recipe_version_id = Column(Integer, ForeignKey("recipe_versions.id"), nullable=False)
+    raw_material_id = Column(Integer, ForeignKey("raw_materials.id"))
     raw_material_name = Column(String(200), nullable=False)
     supplier = Column(String(200))
     php = Column(Float)  # parts per hundred (polyol)
@@ -257,6 +299,7 @@ class RecipeComponent(Base):
     notes = Column(Text)
 
     recipe_version = relationship("RecipeVersion", back_populates="components")
+    raw_material = relationship("RawMaterial")
 
 
 # ---------------------------------------------------------------------------
@@ -763,6 +806,7 @@ ALL_MODELS = [
     Machine,
     ProductFamily,
     FoamGrade,
+    RawMaterial,
     RecipeVersion,
     RecipeComponent,
     ProductionRun,

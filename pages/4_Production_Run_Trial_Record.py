@@ -43,7 +43,13 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import combine_date_time, page_setup, parse_dt, show_advisory_footer
+from helpers import combine_date_time, csv_excel_uploader, page_setup, parse_dt, show_advisory_footer
+
+RUN_REQUIRED_COLUMNS = ["foam_grade_id", "recipe_version_id"]
+RUN_OPTIONAL_COLUMNS = [
+    "machine_id", "run_date", "batch_reference", "block_reference",
+    "operator_or_team_reference", "notes",
+]
 
 RUNTIME_REQUIRED_COLUMNS = ["production_run_id"]
 RUNTIME_OPTIONAL_COLUMNS = [
@@ -99,55 +105,115 @@ if not grades:
     st.warning("Add a foam grade and recipe version first.")
     st.stop()
 
-with st.expander("Add production run", expanded=False):
-    with st.form("add_run"):
-        grade = st.selectbox("Foam grade *", grades, format_func=lambda g: g.grade_name)
-        versions = (
-            session.query(RecipeVersion).filter(RecipeVersion.foam_grade_id == grade.id).all()
-            if grade
-            else []
-        )
-        recipe_version = st.selectbox(
-            "Recipe version *", versions, format_func=lambda v: v.version_label if v else "—"
-        )
-        machines_for_plant = (
-            session.query(Machine)
-            .filter(Machine.plant_id == grade.product_family.plant_id, Machine.active.is_(True))
-            .all()
-            if grade
-            else []
-        )
-        machine = st.selectbox(
-            "Machine / foaming line" + ("" if machines_for_plant else " (none set up for this plant yet)"),
-            [None] + machines_for_plant,
-            format_func=lambda m: "— not selected —" if m is None else f"{m.name} ({m.oem or 'OEM —'})",
-        )
-        run_date = st.date_input("Run date", value=dt.date.today())
-        batch_reference = st.text_input("Batch reference")
-        block_reference = st.text_input("Block reference")
-        operator = st.text_input("Operator / team reference")
-        notes = st.text_area("Notes")
+tab_run_manual, tab_run_import = st.tabs(["Add production run", "CSV / Excel import"])
 
-        submitted = st.form_submit_button("Save production run")
-        if submitted:
-            if not recipe_version:
-                st.error("This foam grade has no recipe version yet — add one first.")
+with tab_run_manual:
+    with st.expander("Add production run", expanded=False):
+        with st.form("add_run"):
+            grade = st.selectbox("Foam grade *", grades, format_func=lambda g: g.grade_name)
+            versions = (
+                session.query(RecipeVersion).filter(RecipeVersion.foam_grade_id == grade.id).all()
+                if grade
+                else []
+            )
+            recipe_version = st.selectbox(
+                "Recipe version *", versions, format_func=lambda v: v.version_label if v else "—"
+            )
+            machines_for_plant = (
+                session.query(Machine)
+                .filter(Machine.plant_id == grade.product_family.plant_id, Machine.active.is_(True))
+                .all()
+                if grade
+                else []
+            )
+            machine = st.selectbox(
+                "Machine / foaming line" + ("" if machines_for_plant else " (none set up for this plant yet)"),
+                [None] + machines_for_plant,
+                format_func=lambda m: "— not selected —" if m is None else f"{m.name} ({m.oem or 'OEM —'})",
+            )
+            run_date = st.date_input("Run date", value=dt.date.today())
+            batch_reference = st.text_input("Batch reference")
+            block_reference = st.text_input("Block reference")
+            operator = st.text_input("Operator / team reference")
+            notes = st.text_area("Notes")
+
+            submitted = st.form_submit_button("Save production run")
+            if submitted:
+                if not recipe_version:
+                    st.error("This foam grade has no recipe version yet — add one first.")
+                else:
+                    run = ProductionRun(
+                        plant_id=grade.product_family.plant_id,
+                        foam_grade_id=grade.id,
+                        recipe_version_id=recipe_version.id,
+                        run_date=run_date,
+                        batch_reference=batch_reference,
+                        block_reference=block_reference,
+                        machine_id=machine.id if machine else None,
+                        operator_or_team_reference=operator,
+                        notes=notes,
+                    )
+                    session.add(run)
+                    session.commit()
+                    st.success("Production run created.")
+                    st.rerun()
+
+with tab_run_import:
+    st.caption(
+        "recipe_version_id must belong to the foam_grade_id on the same row. plant_id and machine "
+        "assignment are derived/validated from the foam grade automatically."
+    )
+    run_df, run_filename = csv_excel_uploader(RUN_REQUIRED_COLUMNS, RUN_OPTIONAL_COLUMNS, key="run_upload")
+    if run_df is not None:
+        grades_by_id = {g.id: g for g in grades}
+        versions_by_id = {
+            v.id: v for v in session.query(RecipeVersion).all()
+        }
+        machines_by_id = {m.id: m for m in session.query(Machine).all()}
+        good_rows, bad_rows = [], []
+        for _, row in run_df.iterrows():
+            try:
+                grade_row = grades_by_id.get(row.get("foam_grade_id"))
+                version_row = versions_by_id.get(row.get("recipe_version_id"))
+                machine_val = row.get("machine_id")
+                machine_ok = pd.isna(machine_val) or int(machine_val) in machines_by_id
+                ok = bool(grade_row and version_row and version_row.foam_grade_id == grade_row.id and machine_ok)
+            except (TypeError, ValueError):
+                ok = False
+            if ok:
+                good_rows.append(row)
             else:
-                run = ProductionRun(
-                    plant_id=grade.product_family.plant_id,
-                    foam_grade_id=grade.id,
-                    recipe_version_id=recipe_version.id,
-                    run_date=run_date,
-                    batch_reference=batch_reference,
-                    block_reference=block_reference,
-                    machine_id=machine.id if machine else None,
-                    operator_or_team_reference=operator,
-                    notes=notes,
+                bad_rows.append(row)
+
+        st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
+        if bad_rows:
+            st.warning(
+                "Flagged rows reference an unknown foam_grade_id/recipe_version_id, a recipe version "
+                "that doesn't belong to that foam grade, or an unknown machine_id."
+            )
+            st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+
+        if good_rows and st.button("Confirm import", key="confirm_run_import"):
+            for row in good_rows:
+                grade_row = grades_by_id[row["foam_grade_id"]]
+                machine_val = row.get("machine_id")
+                run_date_val = pd.to_datetime(row.get("run_date"), errors="coerce")
+                session.add(
+                    ProductionRun(
+                        plant_id=grade_row.product_family.plant_id,
+                        foam_grade_id=grade_row.id,
+                        recipe_version_id=int(row["recipe_version_id"]),
+                        run_date=run_date_val.date() if not pd.isna(run_date_val) else dt.date.today(),
+                        batch_reference=str(row.get("batch_reference", "") or ""),
+                        block_reference=str(row.get("block_reference", "") or ""),
+                        machine_id=int(machine_val) if not pd.isna(machine_val) else None,
+                        operator_or_team_reference=str(row.get("operator_or_team_reference", "") or ""),
+                        notes=str(row.get("notes", "") or ""),
+                    )
                 )
-                session.add(run)
-                session.commit()
-                st.success("Production run created.")
-                st.rerun()
+            session.commit()
+            st.success(f"Imported {len(good_rows)} production run(s) from {run_filename}.")
+            st.rerun()
 
 runs = session.query(ProductionRun).order_by(ProductionRun.created_at.desc()).all()
 if runs:

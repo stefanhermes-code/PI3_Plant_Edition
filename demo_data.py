@@ -26,6 +26,7 @@ from db import (
     ProductFamily,
     ProductionRun,
     QualityObservation,
+    RawMaterial,
     RecipeComponent,
     RecipeVersion,
     RuntimeDataRecord,
@@ -75,6 +76,20 @@ def seed_demo_data(session) -> str:
     session.add(machine)
     session.flush()
 
+    raw_materials = {
+        m.name: m
+        for m in [
+            RawMaterial(name="Polyol A", category="Polyol", default_supplier="Supplier 1"),
+            RawMaterial(name="Polyol B", category="Polyol", default_supplier="Supplier 4"),
+            RawMaterial(name="TDI 80/20", category="Isocyanate", default_supplier="Supplier 2"),
+            RawMaterial(name="Water", category="Blowing agent", default_supplier="Internal"),
+            RawMaterial(name="Catalyst Blend 1", category="Catalyst", default_supplier="Supplier 3"),
+            RawMaterial(name="Surfactant S1", category="Surfactant", default_supplier="Supplier 3"),
+        ]
+    }
+    session.add_all(raw_materials.values())
+    session.flush()
+
     grade_28mh = FoamGrade(
         product_family_id=family.id,
         grade_name="28 kg/m3 Medium Hardness",
@@ -106,11 +121,11 @@ def seed_demo_data(session) -> str:
     session.flush()
     session.add_all(
         [
-            RecipeComponent(recipe_version_id=v04.id, raw_material_name="Polyol A", supplier="Supplier 1", php=100, role_in_formulation="Base polyol"),
-            RecipeComponent(recipe_version_id=v04.id, raw_material_name="TDI 80/20", supplier="Supplier 2", php=45, role_in_formulation="Isocyanate"),
-            RecipeComponent(recipe_version_id=v04.id, raw_material_name="Water", supplier="Internal", php=3.2, role_in_formulation="Blowing agent"),
-            RecipeComponent(recipe_version_id=v04.id, raw_material_name="Catalyst Blend 1", supplier="Supplier 3", php=0.3, role_in_formulation="Catalyst"),
-            RecipeComponent(recipe_version_id=v04.id, raw_material_name="Surfactant S1", supplier="Supplier 3", php=1.0, role_in_formulation="Surfactant"),
+            RecipeComponent(recipe_version_id=v04.id, raw_material_id=raw_materials["Polyol A"].id, raw_material_name="Polyol A", supplier="Supplier 1", php=100, role_in_formulation="Base polyol"),
+            RecipeComponent(recipe_version_id=v04.id, raw_material_id=raw_materials["TDI 80/20"].id, raw_material_name="TDI 80/20", supplier="Supplier 2", php=45, role_in_formulation="Isocyanate"),
+            RecipeComponent(recipe_version_id=v04.id, raw_material_id=raw_materials["Water"].id, raw_material_name="Water", supplier="Internal", php=3.2, role_in_formulation="Blowing agent"),
+            RecipeComponent(recipe_version_id=v04.id, raw_material_id=raw_materials["Catalyst Blend 1"].id, raw_material_name="Catalyst Blend 1", supplier="Supplier 3", php=0.3, role_in_formulation="Catalyst"),
+            RecipeComponent(recipe_version_id=v04.id, raw_material_id=raw_materials["Surfactant S1"].id, raw_material_name="Surfactant S1", supplier="Supplier 3", php=1.0, role_in_formulation="Surfactant"),
         ]
     )
 
@@ -126,11 +141,11 @@ def seed_demo_data(session) -> str:
     session.flush()
     session.add_all(
         [
-            RecipeComponent(recipe_version_id=v05.id, raw_material_name="Polyol B", supplier="Supplier 4", php=100, role_in_formulation="Base polyol (substituted)"),
-            RecipeComponent(recipe_version_id=v05.id, raw_material_name="TDI 80/20", supplier="Supplier 2", php=45, role_in_formulation="Isocyanate"),
-            RecipeComponent(recipe_version_id=v05.id, raw_material_name="Water", supplier="Internal", php=3.2, role_in_formulation="Blowing agent"),
-            RecipeComponent(recipe_version_id=v05.id, raw_material_name="Catalyst Blend 1", supplier="Supplier 3", php=0.3, role_in_formulation="Catalyst"),
-            RecipeComponent(recipe_version_id=v05.id, raw_material_name="Surfactant S1", supplier="Supplier 3", php=1.0, role_in_formulation="Surfactant"),
+            RecipeComponent(recipe_version_id=v05.id, raw_material_id=raw_materials["Polyol B"].id, raw_material_name="Polyol B", supplier="Supplier 4", php=100, role_in_formulation="Base polyol (substituted)"),
+            RecipeComponent(recipe_version_id=v05.id, raw_material_id=raw_materials["TDI 80/20"].id, raw_material_name="TDI 80/20", supplier="Supplier 2", php=45, role_in_formulation="Isocyanate"),
+            RecipeComponent(recipe_version_id=v05.id, raw_material_id=raw_materials["Water"].id, raw_material_name="Water", supplier="Internal", php=3.2, role_in_formulation="Blowing agent"),
+            RecipeComponent(recipe_version_id=v05.id, raw_material_id=raw_materials["Catalyst Blend 1"].id, raw_material_name="Catalyst Blend 1", supplier="Supplier 3", php=0.3, role_in_formulation="Catalyst"),
+            RecipeComponent(recipe_version_id=v05.id, raw_material_id=raw_materials["Surfactant S1"].id, raw_material_name="Surfactant S1", supplier="Supplier 3", php=1.0, role_in_formulation="Surfactant"),
         ]
     )
 
