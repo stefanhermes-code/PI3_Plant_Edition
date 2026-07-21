@@ -24,6 +24,7 @@ from db import (
     PhysicalPropertyResult,
     Plant,
     ProductFamily,
+    ProductionPhase,
     ProductionRun,
     QualityObservation,
     RawMaterial,
@@ -290,6 +291,29 @@ def seed_demo_data(session) -> str:
             )
         )
 
+        # Finalized-phase machine settings. ratio_index climbs steadily
+        # across T1->T5 alongside the hardness recovery (121 -> 141 N),
+        # illustrating exactly the process-vs-quality correlation the
+        # Industrial Intelligence pages are built to surface.
+        phase_start = dt.datetime.combine(run.run_date, dt.time(8, 0))
+        session.add(
+            ProductionPhase(
+                production_run_id=run.id,
+                phase_name="Finalized",
+                phase_start=phase_start,
+                phase_end=phase_start + dt.timedelta(hours=8),
+                mixer_rpm=58 + i * 0.5,
+                conveyor_speed=3.1 + i * 0.025,
+                air_injection_rate=12.0 + i * 0.1,
+                air_pressure_bar=2.1 + i * 0.03,
+                ratio_index=0.92 + (i - 1) * 0.0325,
+                foam_height_mm=195 + i * 2.5,
+                sidewall_width_mm=1180,
+                notes="Demo data - not a real production run.",
+                source_file_reference="demo seed",
+            )
+        )
+
         trial = TrialRecord(
             production_run_id=run.id,
             trial_or_change_objective=d["objective"],
@@ -401,6 +425,24 @@ def seed_demo_data(session) -> str:
                 ambient_humidity=60.0,
                 rise_time=95.0,
                 curing_notes="Standard curing, routine batch.",
+                source_file_reference="demo seed",
+            )
+        )
+        routine_phase_start = dt.datetime.combine(routine_run.run_date, dt.time(8, 0))
+        session.add(
+            ProductionPhase(
+                production_run_id=routine_run.id,
+                phase_name="Finalized",
+                phase_start=routine_phase_start,
+                phase_end=routine_phase_start + dt.timedelta(hours=8),
+                mixer_rpm=60.5,
+                conveyor_speed=3.22,
+                air_injection_rate=12.6,
+                air_pressure_bar=2.28,
+                ratio_index=1.05,
+                foam_height_mm=207.5,
+                sidewall_width_mm=1180,
+                notes="Demo data - routine batch, not a trial.",
                 source_file_reference="demo seed",
             )
         )

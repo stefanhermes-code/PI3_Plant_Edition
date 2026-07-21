@@ -165,7 +165,7 @@ def render_overview():
     a1.page_link("pages/4_Production_Run_Trial_Record.py", label="Add a production run", icon="➕")
     a2.page_link("pages/5_Physical_Property_Result.py", label="Record a property result", icon="📏")
     a3.page_link("pages/6_Quality_Observation.py", label="Add a quality observation", icon="📋")
-    a4.page_link("pages/9_Similar_Case_Retrieval.py", label="Ask PI3 / find similar cases", icon="🔎")
+    a4.page_link("pages/9_Similar_Case_Retrieval.py", label="Find similar historical cases", icon="🔎")
 
     show_advisory_footer()
 
@@ -189,23 +189,32 @@ experiment_pages = [
     st.Page("pages/13_Trial_Experiment.py", title="Trial / Experiment", icon="🧫"),
     st.Page("pages/7_Adjustment_Conclusion.py", title="Adjustment & Conclusion", icon="🛠️"),
     st.Page("pages/8_Approval_Review.py", title="Approval & Review", icon="✅"),
-    st.Page("pages/9_Similar_Case_Retrieval.py", title="Similar Case Retrieval", icon="🧭"),
 ]
 
-intelligence_pages = [
-    st.Page("pages/10_PI3_AI_Connectivity.py", title="PI3 / AI Connectivity", icon="🤖"),
+# The value of PI3 Plant Edition is the join that already exists in the
+# schema: recipe, machine settings, and physical property / quality
+# results all keyed to the same production run. These pages are that join
+# put to work - named after what they actually do, not branded as "AI".
+industrial_intelligence_pages = [
+    st.Page("pages/15_Recipe_Optimization.py", title="Recipe Optimization", icon="🧪"),
+    st.Page("pages/16_Trend_Analysis.py", title="Trend Analysis", icon="📈"),
+    st.Page("pages/17_Process_Property_Correlation.py", title="Process-Property Correlation", icon="🔗"),
+    st.Page("pages/18_Root_Cause_Assistant.py", title="Root-Cause Assistant", icon="🩺"),
+    st.Page("pages/19_Machine_Settings_Optimization.py", title="Machine Settings Optimization", icon="⚙️"),
+    st.Page("pages/9_Similar_Case_Retrieval.py", title="Similar Case Retrieval", icon="🧭"),
 ]
 
 admin_pages = [
     st.Page("pages/11_Maintenance_License_Admin.py", title="Maintenance & License Admin", icon="💳"),
     st.Page("pages/12_Demo_Data_Admin.py", title="Demo Data Admin", icon="🗂️"),
+    st.Page("pages/10_PI3_AI_Connectivity.py", title="PI3 / AI Connectivity", icon="🤖"),
 ]
 
 nav_sections = {
     "Setup": setup_pages,
     "Production": production_pages,
     "Experiments (optional)": experiment_pages,
-    "Intelligence": intelligence_pages,
+    "Industrial Intelligence": industrial_intelligence_pages,
     "Admin": admin_pages,
 }
 
