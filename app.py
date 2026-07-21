@@ -33,18 +33,6 @@ LOGO_PATH = "assets/htc_global_logo_blue_steel.png"
 
 st.set_page_config(page_title="PI3 - Flexible PU Foam Intelligence", page_icon="🧪", layout="wide")
 
-# Sidebar branding: a larger HTC Global logo with the app version right next
-# to it, above the navigation menu (bump version.py on every commit/push).
-# Built with columns rather than st.logo() so the version text can sit
-# beside the logo instead of being confined to st.logo()'s fixed header slot.
-with st.sidebar:
-    logo_col, version_col = st.columns([1, 1.4], vertical_alignment="center")
-    logo_col.image(LOGO_PATH, width=140)
-    with version_col:
-        st.markdown("**PI3 Plant Edition**")
-        st.caption(f"v{APP_VERSION}")
-    st.divider()
-
 # Light styling on top of the .streamlit/config.toml color theme.
 st.markdown(
     """
@@ -212,14 +200,36 @@ admin_pages = [
     st.Page("pages/12_Demo_Data_Admin.py", title="Demo Data Admin", icon="🗂️"),
 ]
 
+nav_sections = {
+    "Setup": setup_pages,
+    "Production": production_pages,
+    "Experiments (optional)": experiment_pages,
+    "Intelligence": intelligence_pages,
+    "Admin": admin_pages,
+}
+
+# position="hidden" turns off Streamlit's built-in nav widget so we can draw
+# our own sidebar from scratch below. This is the only reliable way to get
+# custom content (logo + version) to appear ABOVE the page links: Streamlit
+# always renders its automatic nav menu first, before any other sidebar
+# content, regardless of where in the script that content is written.
 pg = st.navigation(
-    {
-        "PI3 Plant Edition": [overview_page],
-        "Setup": setup_pages,
-        "Production": production_pages,
-        "Experiments (optional)": experiment_pages,
-        "Intelligence": intelligence_pages,
-        "Admin": admin_pages,
-    }
+    {"PI3 Plant Edition": [overview_page], **nav_sections},
+    position="hidden",
 )
+
+with st.sidebar:
+    logo_col, version_col = st.columns([1, 1.4], vertical_alignment="center")
+    logo_col.image(LOGO_PATH, width=140)
+    with version_col:
+        st.markdown("**PI3 Plant Edition**")
+        st.caption(f"v{APP_VERSION}")
+    st.divider()
+
+    st.page_link(overview_page)
+    for section_name, pages in nav_sections.items():
+        st.caption(section_name)
+        for page in pages:
+            st.page_link(page)
+
 pg.run()
