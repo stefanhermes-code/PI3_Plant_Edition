@@ -20,7 +20,7 @@ session = get_session()
 
 plants = session.query(Plant).all()
 if not plants:
-    st.warning("Add a plant first (Plant / Installation Overview) before creating product families.")
+    st.warning("Add a plant first (Plant & Foam Equipment Overview) before creating product families.")
     st.stop()
 
 tab_family, tab_grade = st.tabs(["Product families", "Foam grades"])

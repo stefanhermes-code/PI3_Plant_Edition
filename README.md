@@ -22,7 +22,7 @@ autonomous formulation optimization.
 ## Screens
 
 1. Dashboard (`app.py`)
-2. Plant / Installation Overview
+2. Plant & Foam Equipment Overview
 3. Product Family & Foam Grade Profile
 4. Recipe Version Record
 5. Production Run / Trial Record (also handles runtime data entry + CSV import)

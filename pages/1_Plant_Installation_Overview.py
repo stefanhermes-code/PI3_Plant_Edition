@@ -1,4 +1,4 @@
-"""Screen 2: Plant / Installation Overview"""
+"""Screen 2: Plant & Foam Equipment Overview"""
 
 import streamlit as st
 
@@ -6,16 +6,16 @@ from auth import current_user, logout_button, require_login
 from db import MACHINE_OEMS, Machine, Plant, get_session, init_db
 from helpers import page_setup
 
-page_setup("Plant / Installation Overview")
+page_setup("Plant & Foam Equipment Overview")
 init_db()
 require_login()
 logout_button()
 
-st.title("Plant / Installation Overview")
+st.title("Plant & Foam Equipment Overview")
 session = get_session()
 user = current_user()
 
-with st.expander("Add plant / installation", expanded=False):
+with st.expander("Add plant", expanded=False):
     with st.form("add_plant"):
         name = st.text_input("Plant name *")
         plant_code = st.text_input("Plant code")
@@ -32,7 +32,7 @@ with st.expander("Add plant / installation", expanded=False):
                 st.rerun()
 
 st.divider()
-st.subheader("Plants / installations")
+st.subheader("Plants")
 
 plants = session.query(Plant).all()
 if not plants:
