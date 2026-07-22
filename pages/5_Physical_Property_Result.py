@@ -26,6 +26,7 @@ from db import (
     PhysicalPropertyMethod,
     PhysicalPropertyResult,
     PhysicalPropertyUOM,
+    ProductionPhase,
     ProductionRun,
     Sample,
     TrialRecord,
@@ -72,30 +73,37 @@ with st.expander("Add sample", expanded=False):
             key="sample_run_select",
         )
         zone_label = st.selectbox("Zone *", ZONE_LABELS)
-        c1, c2, c3 = st.columns(3)
-        x_mm = c1.number_input("X position (mm)", step=1.0)
-        y_mm = c2.number_input("Y position (mm)", step=1.0)
-        z_mm = c3.number_input("Z position (mm)", step=1.0)
         sample_ts = combine_date_time("Sample extraction time", "sample_ts")
         cure_age_hours = st.number_input("Cure age at sampling (hours)", min_value=0.0, step=0.5)
         notes = st.text_area("Notes")
         submitted = st.form_submit_button("Save sample")
         if submitted:
-            session.add(
-                Sample(
-                    production_run_id=run_for_sample.id,
-                    sample_ts=sample_ts,
-                    zone_label=zone_label,
-                    x_mm=x_mm or None,
-                    y_mm=y_mm or None,
-                    z_mm=z_mm or None,
-                    cure_age_hours=cure_age_hours or None,
-                    notes=notes,
-                )
+            phases_for_run = (
+                session.query(ProductionPhase)
+                .filter(ProductionPhase.production_run_id == run_for_sample.id)
+                .all()
             )
-            session.commit()
-            st.success("Sample saved.")
-            st.rerun()
+            earliest_start = min(
+                (p.phase_start for p in phases_for_run if p.phase_start), default=None
+            )
+            if earliest_start and sample_ts < earliest_start:
+                st.error(
+                    f"Sample extraction time ({sample_ts:%Y-%m-%d %H:%M}) is before this run started "
+                    f"({earliest_start:%Y-%m-%d %H:%M}). Check the date/time."
+                )
+            else:
+                session.add(
+                    Sample(
+                        production_run_id=run_for_sample.id,
+                        sample_ts=sample_ts,
+                        zone_label=zone_label,
+                        cure_age_hours=cure_age_hours or None,
+                        notes=notes,
+                    )
+                )
+                session.commit()
+                st.success("Sample saved.")
+                st.rerun()
 
 samples = session.query(Sample).order_by(Sample.id.desc()).all()
 if samples:
@@ -106,7 +114,6 @@ if samples:
                     "Sample ID": s.id,
                     "Run": s.production_run_id,
                     "Zone": s.zone_label,
-                    "X/Y/Z (mm)": f"{s.x_mm or '—'}/{s.y_mm or '—'}/{s.z_mm or '—'}",
                     "Cure age (h)": s.cure_age_hours,
                     "Sampled": s.sample_ts,
                 }

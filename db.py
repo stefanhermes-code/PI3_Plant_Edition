@@ -142,14 +142,7 @@ RAW_MATERIAL_CATEGORIES = [
     "Other",
 ]
 
-ZONE_LABELS = [
-    "Head-Left-Top", "Head-Center-Top", "Head-Right-Top",
-    "Middle-Left-Top", "Middle-Center-Top", "Middle-Right-Top",
-    "Tail-Left-Top", "Tail-Center-Top", "Tail-Right-Top",
-    "Head-Center-Middle", "Middle-Center-Middle", "Tail-Center-Middle",
-    "Head-Center-Bottom", "Middle-Center-Bottom", "Tail-Center-Bottom",
-    "Other",
-]
+ZONE_LABELS = ["Top", "Middle", "Bottom"]
 
 
 # ---------------------------------------------------------------------------
@@ -471,10 +464,7 @@ class Sample(Base):
     id = Column(Integer, primary_key=True)
     production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
     sample_ts = Column(DateTime)
-    zone_label = Column(String(50))
-    x_mm = Column(Float)
-    y_mm = Column(Float)
-    z_mm = Column(Float)
+    zone_label = Column(String(50))  # Top / Middle / Bottom - deliberately just the vertical layer
     cure_age_hours = Column(Float)
     notes = Column(Text)
 
