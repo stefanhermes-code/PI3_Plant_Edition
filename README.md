@@ -1,8 +1,8 @@
 # PI3 Plant Edition — v0.1 internal prototype
 
 Flexible slabstock foam expert system for HTC Global Co. Ltd. Captures and
-connects recipe versions, production runs, runtime data, physical property
-results, quality observations, adjustment/conclusion history, and
+connects recipe versions, production runs, runtime data, quality test
+results, quality issues, adjustment/conclusion history, and
 approvals — with a controlled advisory boundary and optional PI3/AI
 connectivity add-on. Built per `CharlieC_Build_Prompt_Pack_PI3_Plant_Edition`.
 
@@ -26,8 +26,8 @@ autonomous formulation optimization.
 3. Product Family & Foam Grade Profile
 4. Recipe Version Record
 5. Production Run / Trial Record (also handles runtime data entry + CSV import)
-6. Physical Property Result
-7. Quality Observation
+6. Quality Test Result
+7. Quality Issue
 8. Adjustment & Conclusion
 9. Approval & Review — the only screen that can close a trial
 10. Similar Case Retrieval ("Ask PI3")

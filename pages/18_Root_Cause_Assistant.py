@@ -12,7 +12,7 @@ import streamlit as st
 from analytics import PHASE_SETTING_LABELS, run_settings_dataframe
 from auth import logout_button, require_login
 from db import QualityObservation, get_session, init_db
-from helpers import page_setup, show_advisory_footer
+from helpers import page_setup
 
 page_setup("Root-Cause Assistant")
 init_db()
@@ -29,11 +29,11 @@ session = get_session()
 
 observations = session.query(QualityObservation).order_by(QualityObservation.observed_at.desc()).all()
 if not observations:
-    st.info("No quality observations recorded yet.")
+    st.info("No quality issues recorded yet.")
     st.stop()
 
 obs = st.selectbox(
-    "Quality observation",
+    "Quality issue",
     observations,
     format_func=lambda o: (
         f"{o.observation_type} — {o.production_run.foam_grade.grade_name} "
@@ -96,4 +96,3 @@ else:
         "lot variation, ambient conditions, downstream handling)."
     )
 
-show_advisory_footer()

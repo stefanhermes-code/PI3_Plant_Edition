@@ -12,7 +12,7 @@ import streamlit as st
 from analytics import PHASE_SETTING_FIELDS, PHASE_SETTING_LABELS, merged_run_property_dataframe, property_results_dataframe
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, show_advisory_footer
+from helpers import page_setup
 
 page_setup("Machine Settings Optimization")
 init_db()
@@ -43,7 +43,7 @@ available_properties = (
     sorted(grade_results_df["property_name"].dropna().unique()) if not grade_results_df.empty else []
 )
 if not available_properties:
-    st.info("No physical property results recorded yet for this foam grade.")
+    st.info("No quality test results recorded yet for this foam grade.")
     st.stop()
 
 property_name = c3.selectbox("Property", available_properties)
@@ -112,4 +112,3 @@ else:
         y="actual_value",
     )
 
-show_advisory_footer()

@@ -11,7 +11,7 @@ import streamlit as st
 
 from auth import logout_button, require_login
 from db import RAW_MATERIAL_CATEGORIES, RawMaterial, get_session, init_db
-from helpers import csv_excel_uploader, page_setup, parse_bool, show_advisory_footer
+from helpers import csv_excel_uploader, page_setup, parse_bool
 
 RAW_MATERIAL_REQUIRED_COLUMNS = ["name"]
 RAW_MATERIAL_OPTIONAL_COLUMNS = ["category", "default_supplier", "notes", "active"]
@@ -115,4 +115,3 @@ else:
         use_container_width=True,
     )
 
-show_advisory_footer()

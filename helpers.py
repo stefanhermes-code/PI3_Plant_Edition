@@ -7,14 +7,6 @@ import streamlit as st
 
 from db import get_session
 
-ADVISORY_DISCLAIMER = (
-    "PI3 Plant Edition supports technical review. It surfaces historical "
-    "records and conclusions for the team to evaluate - it does not issue "
-    "formulation instructions and does not replace qualified technical "
-    "judgment. Review applicability against current raw materials, process "
-    "conditions, and target properties before acting."
-)
-
 
 def page_setup(title: str):
     """Kept for compatibility with existing pages, which all call this as
@@ -52,11 +44,6 @@ def selectbox_from_query(label, session, model, name_field="name", allow_none=Tr
         format_func=lambda r: "—" if r is None else getattr(r, name_field, str(r)),
         key=key,
     )
-
-
-def show_advisory_footer():
-    st.divider()
-    st.caption(f"Advisory boundary: {ADVISORY_DISCLAIMER}")
 
 
 def combine_date_time(label, key_prefix, default_date=None, default_time=None):

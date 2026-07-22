@@ -11,7 +11,7 @@ import streamlit as st
 
 from db import CONFIDENCE_LEVELS, AdjustmentConclusion, TrialRecord, get_session, init_db
 from auth import logout_button, require_login
-from helpers import confidence_badge, page_setup, show_advisory_footer
+from helpers import confidence_badge, page_setup
 
 page_setup("Adjustment & Conclusion")
 init_db()
@@ -111,4 +111,3 @@ with st.form(f"closeout_{trial.id}"):
             st.success("Closeout narrative saved. Trial is now ready for review and approval.")
             st.rerun()
 
-show_advisory_footer()

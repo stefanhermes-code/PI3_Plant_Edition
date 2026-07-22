@@ -500,7 +500,7 @@ def seed_demo_data(session) -> str:
     session.commit()
     return (
         "Demo data created: 1 plant, 1 product family, 2 foam grades, 3 recipe versions, "
-        "5 closed trials (with full closeout, quality observations, adjustments, approvals, and "
+        "5 closed trials (with full closeout, quality issues, adjustments, approvals, and "
         "1 similar-case link), plus 2 routine production runs with quality results and no trial at all."
     )
 

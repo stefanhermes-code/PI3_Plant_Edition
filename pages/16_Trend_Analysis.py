@@ -10,7 +10,7 @@ import streamlit as st
 from analytics import property_results_dataframe
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, show_advisory_footer
+from helpers import page_setup
 
 page_setup("Trend Analysis")
 init_db()
@@ -20,7 +20,7 @@ logout_button()
 st.title("Trend Analysis")
 st.caption(
     "Plots a property's actual results over time against its target, so drift is visible "
-    "before it turns into a recurring quality observation."
+    "before it turns into a recurring quality issue."
 )
 session = get_session()
 
@@ -33,7 +33,7 @@ grade = st.selectbox("Foam grade", grades, format_func=lambda g: g.grade_name)
 results_df = property_results_dataframe(session, foam_grade_id=grade.id)
 
 if results_df.empty:
-    st.info("No physical property results recorded yet for this foam grade.")
+    st.info("No quality test results recorded yet for this foam grade.")
     st.stop()
 
 properties = sorted(results_df["property_name"].dropna().unique())
@@ -75,4 +75,3 @@ else:
         use_container_width=True,
     )
 
-show_advisory_footer()

@@ -13,7 +13,7 @@ import streamlit as st
 from analytics import pass_rate, property_results_dataframe
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, show_advisory_footer
+from helpers import page_setup
 
 page_setup("Recipe Optimization")
 init_db()
@@ -22,7 +22,7 @@ logout_button()
 
 st.title("Recipe Optimization")
 st.caption(
-    "Compares physical property results across every recipe version of a foam grade, so a "
+    "Compares quality test results across every recipe version of a foam grade, so a "
     "formulation change's actual effect on quality is visible - not just the change itself."
 )
 session = get_session()
@@ -42,7 +42,7 @@ if not versions:
 results_df = property_results_dataframe(session, foam_grade_id=grade.id)
 
 if results_df.empty:
-    st.info("No physical property results recorded yet for this foam grade's production runs.")
+    st.info("No quality test results recorded yet for this foam grade's production runs.")
 else:
     properties = sorted(results_df["property_name"].dropna().unique())
     st.subheader("Property outcomes by recipe version")
@@ -92,4 +92,3 @@ for v in versions:
         else:
             st.caption("No components recorded for this version yet.")
 
-show_advisory_footer()

@@ -1,4 +1,4 @@
-"""Screen 6: Physical Property Result
+"""Screen 6: Quality Test Result
 
 Extended with sample and conditioning capture per the Mandatory-tier
 recommendation in "Expanding PI3 Plant Edition Production-Trial Data
@@ -32,7 +32,7 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import combine_date_time, csv_excel_uploader, page_setup, show_advisory_footer
+from helpers import combine_date_time, csv_excel_uploader, page_setup
 
 RESULT_REQUIRED_COLUMNS = ["production_run_id", "property_name", "test_method", "unit", "actual_value"]
 RESULT_OPTIONAL_COLUMNS = [
@@ -40,12 +40,12 @@ RESULT_OPTIONAL_COLUMNS = [
     "replicate_no", "tested_at", "notes",
 ]
 
-page_setup("Physical Property Result")
+page_setup("Quality Test Result")
 init_db()
 require_login()
 logout_button()
 
-st.title("Physical Property Result")
+st.title("Quality Test Result")
 session = get_session()
 
 runs = session.query(ProductionRun).order_by(ProductionRun.created_at.desc()).all()
@@ -203,7 +203,7 @@ else:
 # Physical property results
 # ---------------------------------------------------------------------------
 st.divider()
-st.subheader("📏 Physical property results")
+st.subheader("📏 Quality test results")
 
 property_defs = (
     session.query(PhysicalPropertyDefinition)
@@ -216,7 +216,7 @@ if not property_defs:
         "physical_property_definitions/methods/uoms before recording results."
     )
 
-tab_result_manual, tab_result_import = st.tabs(["Add physical property result", "CSV / Excel import"])
+tab_result_manual, tab_result_import = st.tabs(["Add quality test result", "CSV / Excel import"])
 
 with tab_result_manual:
     run = st.selectbox(
@@ -325,7 +325,7 @@ with tab_result_manual:
                     )
                 )
                 session.commit()
-                st.success("Physical property result saved.")
+                st.success("Quality test result saved.")
                 st.rerun()
 
 with tab_result_import:
@@ -416,7 +416,7 @@ with tab_result_import:
                     )
                 )
             session.commit()
-            st.success(f"Imported {len(good_rows)} physical property result(s) from {result_filename}.")
+            st.success(f"Imported {len(good_rows)} quality test result(s) from {result_filename}.")
             st.rerun()
 
 st.divider()
@@ -454,4 +454,3 @@ for r_run in runs:
             use_container_width=True,
         )
 
-show_advisory_footer()

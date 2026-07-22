@@ -26,7 +26,7 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import page_setup, show_advisory_footer
+from helpers import page_setup
 from version import APP_VERSION
 
 LOGO_PATH = "assets/htc_global_logo_blue_steel.png"
@@ -124,14 +124,14 @@ def render_overview():
 
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     kpi1.metric("Production runs", len(all_runs))
-    kpi2.metric("Recurring quality observations", len(recurring_observations))
-    kpi3.metric("Physical property pass rate", pass_rate)
+    kpi2.metric("Recurring quality issues", len(recurring_observations))
+    kpi3.metric("Quality test pass rate", pass_rate)
     kpi4.metric("Active trials / experiments", active_trials)
 
     st.divider()
 
-    # --- Main table: recent quality observations by product family/grade ----
-    st.subheader("Recent quality observations")
+    # --- Main table: recent quality issues by product family/grade ----
+    st.subheader("Recent quality issues")
 
     obs_rows = []
     for obs in session.query(QualityObservation).order_by(QualityObservation.observed_at.desc()).limit(25):
@@ -144,7 +144,7 @@ def render_overview():
                 "Product family": family.name if family else "—",
                 "Foam grade": grade.grade_name if grade else "—",
                 "Run": f"#{run.id}" if run else "—",
-                "Observation type": obs.observation_type,
+                "Issue type": obs.observation_type,
                 "Severity": obs.severity,
                 "Frequency": obs.frequency,
                 "Confidence": obs.confidence_level,
@@ -155,7 +155,7 @@ def render_overview():
     if obs_rows:
         st.dataframe(obs_rows, use_container_width=True, hide_index=True)
     else:
-        st.info("No quality observations recorded yet. Load demo data (see README) or start entering records.")
+        st.info("No quality issues recorded yet. Load demo data (see README) or start entering records.")
 
     st.divider()
 
@@ -163,12 +163,9 @@ def render_overview():
     st.subheader("Quick actions")
     a1, a2, a3, a4 = st.columns(4)
     a1.page_link("pages/4_Production_Run_Trial_Record.py", label="Add a production run", icon="➕")
-    a2.page_link("pages/5_Physical_Property_Result.py", label="Record a property result", icon="📏")
-    a3.page_link("pages/6_Quality_Observation.py", label="Add a quality observation", icon="📋")
+    a2.page_link("pages/5_Physical_Property_Result.py", label="Record a quality test result", icon="📏")
+    a3.page_link("pages/6_Quality_Observation.py", label="Add a quality issue", icon="📋")
     a4.page_link("pages/9_Similar_Case_Retrieval.py", label="Find similar historical cases", icon="🔎")
-
-    show_advisory_footer()
-
 
 overview_page = st.Page(render_overview, title="Overview", icon="🏠", default=True)
 
@@ -181,8 +178,8 @@ setup_pages = [
 
 production_pages = [
     st.Page("pages/4_Production_Run_Trial_Record.py", title="Production Run", icon="⚙️"),
-    st.Page("pages/5_Physical_Property_Result.py", title="Physical Property Result", icon="📏"),
-    st.Page("pages/6_Quality_Observation.py", title="Quality Observation", icon="🔍"),
+    st.Page("pages/5_Physical_Property_Result.py", title="Quality Test Result", icon="📏"),
+    st.Page("pages/6_Quality_Observation.py", title="Quality Issue", icon="🔍"),
 ]
 
 experiment_pages = [

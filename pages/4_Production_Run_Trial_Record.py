@@ -43,7 +43,7 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import combine_date_time, csv_excel_uploader, page_setup, parse_dt, show_advisory_footer
+from helpers import combine_date_time, csv_excel_uploader, page_setup, parse_dt
 
 RUN_REQUIRED_COLUMNS = ["foam_grade_id", "recipe_version_id"]
 RUN_OPTIONAL_COLUMNS = [
@@ -1061,4 +1061,3 @@ if runs:
 else:
     st.info("Create a production run above before adding runtime data.")
 
-show_advisory_footer()

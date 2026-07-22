@@ -12,7 +12,7 @@ import streamlit as st
 
 from db import INSTALLATION_TYPES, MaintenanceLicenseRecord, Plant, get_session, init_db
 from auth import logout_button, require_login, require_role
-from helpers import page_setup, show_advisory_footer
+from helpers import page_setup
 
 page_setup("Maintenance & License Admin")
 init_db()
@@ -93,4 +93,3 @@ st.caption(
     "configured on the PI3/AI Connectivity screen."
 )
 
-show_advisory_footer()

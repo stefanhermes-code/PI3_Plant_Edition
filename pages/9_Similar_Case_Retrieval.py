@@ -22,7 +22,7 @@ from db import (
     init_db,
 )
 from auth import logout_button, require_login
-from helpers import confidence_badge, page_setup, show_advisory_footer
+from helpers import confidence_badge, page_setup
 
 page_setup("Similar Case Retrieval")
 init_db()
@@ -48,7 +48,7 @@ with col2:
     grade = st.selectbox("Foam grade", [None] + grades_q.all(), format_func=lambda g: "Any" if g is None else g.grade_name)
 
 with col3:
-    keyword = st.text_input("Observation / keyword (e.g. shrinkage, hardness drift)")
+    keyword = st.text_input("Issue / keyword (e.g. shrinkage, hardness drift)")
 
 confidence_filter = st.multiselect(
     "Confidence level", ["Confirmed", "Likely", "Unconfirmed", "Rejected"], default=["Confirmed", "Likely"]
@@ -102,7 +102,7 @@ if result_ids:
             for obs in t.quality_observations:
                 if confidence_filter and obs.confidence_level not in confidence_filter:
                     continue
-                st.write(f"- Observation: {obs.observation_type} ({confidence_badge(obs.confidence_level)})")
+                st.write(f"- Issue: {obs.observation_type} ({confidence_badge(obs.confidence_level)})")
             st.write(f"**Conclusion:** {t.conclusion}")
             st.write(f"**Reuse recommendation:** {t.reuse_recommendation}")
             if t.adjustment_conclusions:
@@ -130,7 +130,7 @@ if len(closed_trials) >= 2:
         target = c2.selectbox(
             "Trial B", closed_trials, format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name}"
         )
-        similarity_basis = st.text_input("Similarity basis (e.g. foam grade, observation type, recipe version)")
+        similarity_basis = st.text_input("Similarity basis (e.g. foam grade, issue type, recipe version)")
         notes = st.text_area("Notes")
         submitted = st.form_submit_button("Save link")
         if submitted:
@@ -151,4 +151,3 @@ if len(closed_trials) >= 2:
 else:
     st.info("Close at least two trials before linking them as similar cases.")
 
-show_advisory_footer()

@@ -1,9 +1,11 @@
-"""Screen 7: Quality Observation
+"""Screen 7: Quality Issue
 
-Approved terminology: "Quality Observation", not "Defect Module".
+Approved terminology: "Quality Issue", not "Defect Module". The
+underlying QualityObservation model/table name is unchanged — this is a
+display-text rename only.
 
 Keyed primarily to the production run — routine batches get quality
-observations too, not just formal trials. Linking to a trial is optional.
+issues too, not just formal trials. Linking to a trial is optional.
 """
 
 import datetime as dt
@@ -13,7 +15,7 @@ import streamlit as st
 
 from db import CONFIDENCE_LEVELS, ProductionRun, QualityObservation, TrialRecord, get_session, init_db
 from auth import logout_button, require_login
-from helpers import confidence_badge, csv_excel_uploader, page_setup, show_advisory_footer
+from helpers import confidence_badge, csv_excel_uploader, page_setup
 
 OBSERVATION_REQUIRED_COLUMNS = ["production_run_id", "observation_type"]
 OBSERVATION_OPTIONAL_COLUMNS = [
@@ -21,12 +23,12 @@ OBSERVATION_OPTIONAL_COLUMNS = [
     "confidence_level", "product_impact", "customer_impact", "notes", "observed_at",
 ]
 
-page_setup("Quality Observation")
+page_setup("Quality Issue")
 init_db()
 require_login()
 logout_button()
 
-st.title("Quality Observation")
+st.title("Quality Issue")
 st.caption(
     "Captures what was observed on a production run — not a defect-tracking or "
     "customer-complaint tool. Used to build a factual, confidence-rated history."
@@ -38,10 +40,10 @@ if not runs:
     st.warning("Create a production run first (Production Run page).")
     st.stop()
 
-tab_obs_manual, tab_obs_import = st.tabs(["Add quality observation", "CSV / Excel import"])
+tab_obs_manual, tab_obs_import = st.tabs(["Add quality issue", "CSV / Excel import"])
 
 with tab_obs_manual:
-    with st.expander("Add quality observation", expanded=False):
+    with st.expander("Add quality issue", expanded=False):
         with st.form("add_observation"):
             run = st.selectbox(
                 "Production run *",
@@ -57,7 +59,7 @@ with tab_obs_manual:
                 format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
             )
             observation_type = st.text_input(
-                "Observation type * (e.g. hardness drift, shrinkage, collapse, splitting)"
+                "Issue type * (e.g. hardness drift, shrinkage, collapse, splitting)"
             )
             c1, c2 = st.columns(2)
             severity = c1.selectbox("Severity", ["Low", "Medium", "High"])
@@ -69,10 +71,10 @@ with tab_obs_manual:
             customer_impact = st.text_area("Customer impact")
             notes = st.text_area("Notes")
             observed_at = st.date_input("Observed on", value=dt.date.today())
-            submitted = st.form_submit_button("Save observation")
+            submitted = st.form_submit_button("Save issue")
             if submitted:
                 if not observation_type:
-                    st.error("Observation type is required.")
+                    st.error("Issue type is required.")
                 else:
                     session.add(
                         QualityObservation(
@@ -91,7 +93,7 @@ with tab_obs_manual:
                         )
                     )
                     session.commit()
-                    st.success("Quality observation saved.")
+                    st.success("Quality issue saved.")
                     st.rerun()
 
 with tab_obs_import:
@@ -147,11 +149,11 @@ with tab_obs_import:
                     )
                 )
             session.commit()
-            st.success(f"Imported {len(good_rows)} quality observation(s) from {obs_filename}.")
+            st.success(f"Imported {len(good_rows)} quality issue(s) from {obs_filename}.")
             st.rerun()
 
 st.divider()
-st.subheader("Observations")
+st.subheader("Quality issues")
 
 severity_filter = st.multiselect("Severity filter", ["Low", "Medium", "High"], default=["Low", "Medium", "High"])
 observations = (
@@ -173,4 +175,3 @@ for obs in observations:
         if obs.suspected_cause:
             st.write(f"Suspected cause: {obs.suspected_cause}")
 
-show_advisory_footer()

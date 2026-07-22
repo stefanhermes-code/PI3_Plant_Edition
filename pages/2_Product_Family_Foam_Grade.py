@@ -5,7 +5,7 @@ import streamlit as st
 
 from auth import logout_button, require_login
 from db import FoamGrade, Plant, ProductFamily, get_session, init_db
-from helpers import csv_excel_uploader, page_setup, show_advisory_footer
+from helpers import csv_excel_uploader, page_setup
 
 GRADE_REQUIRED_COLUMNS = ["product_family_id", "grade_name"]
 GRADE_OPTIONAL_COLUMNS = ["target_density", "target_hardness", "quality_specification", "notes"]
@@ -142,4 +142,3 @@ with tab_grade:
                 )
                 st.caption(grade.quality_specification or "")
 
-show_advisory_footer()

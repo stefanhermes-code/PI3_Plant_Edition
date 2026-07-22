@@ -17,7 +17,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, show_advisory_footer
+from helpers import page_setup
 
 page_setup("Process-Property Correlation")
 init_db()
@@ -50,7 +50,7 @@ available_properties = (
 )
 
 if not available_properties:
-    st.info("No physical property results recorded yet for this foam grade.")
+    st.info("No quality test results recorded yet for this foam grade.")
     st.stop()
 
 property_name = c3.selectbox("Property", available_properties)
@@ -87,4 +87,3 @@ else:
         use_container_width=True,
     )
 
-show_advisory_footer()

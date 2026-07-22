@@ -16,7 +16,7 @@ import streamlit as st
 
 from auth import logout_button, require_login
 from db import ProductionRun, TrialRecord, get_session, init_db
-from helpers import page_setup, show_advisory_footer
+from helpers import page_setup
 
 page_setup("Trial / Experiment")
 init_db()
@@ -96,4 +96,3 @@ for t in trials:
         else:
             st.caption(f"Closed {t.date_closed} — reviewed by {t.reviewed_by}, approved by {t.approved_by}")
 
-show_advisory_footer()

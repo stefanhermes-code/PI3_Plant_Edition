@@ -15,7 +15,7 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import csv_excel_uploader, page_setup, show_advisory_footer
+from helpers import csv_excel_uploader, page_setup
 
 RECIPE_VERSION_REQUIRED_COLUMNS = ["foam_grade_id", "version_label"]
 RECIPE_VERSION_OPTIONAL_COLUMNS = ["effective_date", "change_note", "approval_status", "created_by"]
@@ -255,4 +255,3 @@ if comp_df is not None:
         st.success(f"Imported {len(good_rows)} recipe component(s) from {comp_filename}.")
         st.rerun()
 
-show_advisory_footer()

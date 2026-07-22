@@ -19,7 +19,7 @@ import streamlit as st
 
 from db import Plant, PI3AIConnectionSetting, get_session, init_db
 from auth import current_user, logout_button, require_login, require_role
-from helpers import page_setup, show_advisory_footer
+from helpers import page_setup
 
 page_setup("PI3/AI Connectivity")
 init_db()
@@ -85,4 +85,3 @@ st.caption(
     "and approval on the Approval & Review screen. No autonomous formulation commands."
 )
 
-show_advisory_footer()

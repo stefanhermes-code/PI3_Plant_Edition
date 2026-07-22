@@ -8,7 +8,7 @@ import streamlit as st
 from db import get_session, init_db
 from demo_data import already_seeded, seed_demo_data
 from auth import logout_button, require_login, require_role
-from helpers import page_setup, show_advisory_footer
+from helpers import page_setup
 
 page_setup("Demo Data Admin")
 init_db()
@@ -33,4 +33,3 @@ else:
         st.success(message)
         st.rerun()
 
-show_advisory_footer()

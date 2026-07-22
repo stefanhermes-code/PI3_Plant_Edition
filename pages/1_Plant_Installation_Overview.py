@@ -4,7 +4,7 @@ import streamlit as st
 
 from auth import current_user, logout_button, require_login
 from db import MACHINE_OEMS, Machine, Plant, get_session, init_db
-from helpers import page_setup, show_advisory_footer
+from helpers import page_setup
 
 page_setup("Plant / Installation Overview")
 init_db()
@@ -107,4 +107,3 @@ else:
             use_container_width=True,
         )
 
-show_advisory_footer()

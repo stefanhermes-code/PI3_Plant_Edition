@@ -12,7 +12,7 @@ import streamlit as st
 
 from db import APPROVAL_STATUSES, ApprovalRecord, TrialRecord, get_session, init_db
 from auth import current_user, logout_button, require_login
-from helpers import page_setup, show_advisory_footer
+from helpers import page_setup
 
 page_setup("Approval & Review")
 init_db()
@@ -118,4 +118,3 @@ if trial.approval_records:
         use_container_width=True,
     )
 
-show_advisory_footer()
