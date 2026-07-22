@@ -100,18 +100,43 @@ materials = session.query(RawMaterial).order_by(RawMaterial.name).all()
 if not materials:
     st.info("No raw materials recorded yet.")
 else:
-    st.dataframe(
+    df = pd.DataFrame(
         [
             {
                 "Name": m.name,
-                "Category": m.category,
-                "Default supplier": m.default_supplier,
+                "Category": m.category or "—",
+                "Default supplier": m.default_supplier or "",
                 "Active": m.active,
-                "Notes": m.notes,
+                "Notes": m.notes or "",
             }
             for m in materials
-        ],
-        hide_index=True,
-        use_container_width=True,
+        ]
     )
+
+    st.caption("Filter by column:")
+    c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+    name_filter = c1.text_input("Name contains", key="rawmat_filter_name")
+    category_filter = c2.multiselect(
+        "Category", sorted(df["Category"].unique()), key="rawmat_filter_category"
+    )
+    supplier_filter = c3.text_input("Supplier contains", key="rawmat_filter_supplier")
+    active_filter = c4.selectbox("Active", ["All", "Yes", "No"], key="rawmat_filter_active")
+    notes_filter = st.text_input("Notes contains", key="rawmat_filter_notes")
+
+    filtered = df
+    if name_filter:
+        filtered = filtered[filtered["Name"].str.contains(name_filter, case=False, na=False)]
+    if category_filter:
+        filtered = filtered[filtered["Category"].isin(category_filter)]
+    if supplier_filter:
+        filtered = filtered[filtered["Default supplier"].str.contains(supplier_filter, case=False, na=False)]
+    if active_filter == "Yes":
+        filtered = filtered[filtered["Active"]]
+    elif active_filter == "No":
+        filtered = filtered[~filtered["Active"]]
+    if notes_filter:
+        filtered = filtered[filtered["Notes"].str.contains(notes_filter, case=False, na=False)]
+
+    st.caption(f"Showing {len(filtered)} of {len(df)} raw material(s).")
+    st.dataframe(filtered, hide_index=True, use_container_width=True)
 
