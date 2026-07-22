@@ -391,6 +391,9 @@ class ComponentStreamReading(Base):
     stream_name = Column(String(200), nullable=False)  # e.g. Polyol A, TDI 80/20, Water blend, Catalyst
     flow_unit = Column(String(20), default="kg/min")
     flow = Column(Float)
+    pump_speed = Column(Float)  # metering pump setting for this stream (RPM/Hz/% depending on OEM) - the
+    # control input, distinct from flow (the resulting/measured output). Every chemical line has its own
+    # pump, so this lives per stream reading, not as a single Runtime Data field.
     flow_total_qty = Column(Float)  # total delivered this phase - same base unit as flow_unit (kg or L, not per-minute)
     pressure_bar = Column(Float)
     temperature_c = Column(Float)

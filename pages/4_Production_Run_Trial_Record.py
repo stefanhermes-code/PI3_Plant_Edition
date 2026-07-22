@@ -65,7 +65,6 @@ RUN_OPTIONAL_COLUMNS = [
 RUNTIME_REQUIRED_COLUMNS = ["production_run_id"]
 RUNTIME_OPTIONAL_COLUMNS = [
     "line_speed",
-    "pump_speed_or_flow_data",
     "temperature_data",
     "pressure_data",
     "ambient_temperature",
@@ -89,7 +88,7 @@ PHASE_OPTIONAL_COLUMNS = [
 # phase for the run is resolved automatically.
 STREAM_REQUIRED_COLUMNS = ["production_run_id", "stream_name"]
 STREAM_OPTIONAL_COLUMNS = [
-    "flow_unit", "flow", "flow_total_qty", "pressure_bar", "temperature_c",
+    "flow_unit", "flow", "pump_speed", "flow_total_qty", "pressure_bar", "temperature_c",
     "calibration_status", "calibration_note", "notes",
 ]
 
@@ -1020,6 +1019,7 @@ with tab_streams:
                         {
                             "Phase": r.phase.phase_name if r.phase else "—",
                             "Stream": r.stream_name,
+                            "Pump speed": r.pump_speed,
                             "Flow": r.flow,
                             "Unit": r.flow_unit,
                             "Total delivered": r.flow_total_qty,
@@ -1053,16 +1053,22 @@ with tab_streams:
                                 "Flow unit", flow_unit_options, index=flow_unit_idx,
                                 key=f"edit_stream_flow_unit_{sel_stream.id}",
                             )
-                            c1, c2, c3 = st.columns(3)
+                            c1, c2, c3, c4 = st.columns(4)
                             flow = c1.number_input(
                                 "Flow", min_value=0.0, step=0.1, value=float(sel_stream.flow or 0.0),
                                 key=f"edit_stream_flow_{sel_stream.id}",
                             )
-                            pressure_bar = c2.number_input(
+                            pump_speed = c2.number_input(
+                                "Pump speed", min_value=0.0, step=0.1, value=float(sel_stream.pump_speed or 0.0),
+                                key=f"edit_stream_pump_{sel_stream.id}",
+                                help="Metering pump setting for this stream (RPM/Hz/% depending on OEM) — the "
+                                "control input, distinct from the measured Flow.",
+                            )
+                            pressure_bar = c3.number_input(
                                 "Pressure (bar)", min_value=0.0, step=0.1, value=float(sel_stream.pressure_bar or 0.0),
                                 key=f"edit_stream_pressure_{sel_stream.id}",
                             )
-                            temperature_c = c3.number_input(
+                            temperature_c = c4.number_input(
                                 "Temperature (°C)", step=0.1, value=float(sel_stream.temperature_c or 0.0),
                                 key=f"edit_stream_temp_{sel_stream.id}",
                             )
@@ -1071,17 +1077,17 @@ with tab_streams:
                                 min_value=0.0, step=0.1, value=float(sel_stream.flow_total_qty or 0.0),
                                 key=f"edit_stream_total_{sel_stream.id}",
                             )
-                            c4, c5 = st.columns(2)
+                            c5, c6 = st.columns(2)
                             calibration_options = ["", "Valid", "Expired", "Failed", "Not Verified"]
                             calibration_idx = (
                                 calibration_options.index(sel_stream.calibration_status)
                                 if sel_stream.calibration_status in calibration_options else 0
                             )
-                            calibration_status = c4.selectbox(
+                            calibration_status = c5.selectbox(
                                 "Instrument calibration status", calibration_options, index=calibration_idx,
                                 key=f"edit_stream_calib_status_{sel_stream.id}",
                             )
-                            calibration_note = c5.text_input(
+                            calibration_note = c6.text_input(
                                 "Calibration note (e.g. cal. due date, certificate ref.)",
                                 value=sel_stream.calibration_note or "", key=f"edit_stream_calib_note_{sel_stream.id}",
                             )
@@ -1098,6 +1104,7 @@ with tab_streams:
                                     sel_stream.stream_name = stream_name.strip()
                                     sel_stream.flow_unit = flow_unit
                                     sel_stream.flow = flow or None
+                                    sel_stream.pump_speed = pump_speed or None
                                     sel_stream.flow_total_qty = flow_total_qty or None
                                     sel_stream.pressure_bar = pressure_bar or None
                                     sel_stream.temperature_c = temperature_c or None
@@ -1139,18 +1146,23 @@ with tab_streams:
                         "Or type a stream not in the recipe (e.g. blended stream, process air, water addition)"
                     )
                     flow_unit = st.selectbox("Flow unit", ["kg/min", "L/min"])
-                    c1, c2, c3 = st.columns(3)
+                    c1, c2, c3, c4 = st.columns(4)
                     flow = c1.number_input("Flow", min_value=0.0, step=0.1)
-                    pressure_bar = c2.number_input("Pressure (bar)", min_value=0.0, step=0.1)
-                    temperature_c = c3.number_input("Temperature (°C)", step=0.1)
+                    pump_speed = c2.number_input(
+                        "Pump speed", min_value=0.0, step=0.1,
+                        help="Metering pump setting for this stream (RPM/Hz/% depending on OEM) — the "
+                        "control input, distinct from the measured Flow.",
+                    )
+                    pressure_bar = c3.number_input("Pressure (bar)", min_value=0.0, step=0.1)
+                    temperature_c = c4.number_input("Temperature (°C)", step=0.1)
                     flow_total_qty = st.number_input(
                         "Total delivered this phase (same base unit as flow unit, kg or L)", min_value=0.0, step=0.1
                     )
-                    c4, c5 = st.columns(2)
-                    calibration_status = c4.selectbox(
+                    c5, c6 = st.columns(2)
+                    calibration_status = c5.selectbox(
                         "Instrument calibration status", ["", "Valid", "Expired", "Failed", "Not Verified"]
                     )
-                    calibration_note = c5.text_input("Calibration note (e.g. cal. due date, certificate ref.)")
+                    calibration_note = c6.text_input("Calibration note (e.g. cal. due date, certificate ref.)")
                     notes = st.text_area("Notes")
 
                     submitted = st.form_submit_button("Save stream reading")
@@ -1167,6 +1179,7 @@ with tab_streams:
                                     stream_name=final_stream_name,
                                     flow_unit=flow_unit,
                                     flow=flow or None,
+                                    pump_speed=pump_speed or None,
                                     flow_total_qty=flow_total_qty or None,
                                     pressure_bar=pressure_bar or None,
                                     temperature_c=temperature_c or None,
@@ -1229,6 +1242,7 @@ with tab_streams:
                                             stream_name=str(row["stream_name"]),
                                             flow_unit=str(row.get("flow_unit", "") or "kg/min"),
                                             flow=row.get("flow"),
+                                            pump_speed=row.get("pump_speed"),
                                             flow_total_qty=row.get("flow_total_qty"),
                                             pressure_bar=row.get("pressure_bar"),
                                             temperature_c=row.get("temperature_c"),
@@ -1474,7 +1488,6 @@ with tab_runtime:
                 runtime_rows = [
                     {
                         "Line speed": rt.line_speed,
-                        "Pump/flow": rt.pump_speed_or_flow_data,
                         "Temperature data": rt.temperature_data,
                         "Pressure data": rt.pressure_data,
                         "Ambient temp (°C)": rt.ambient_temperature,
@@ -1507,10 +1520,6 @@ with tab_runtime:
                             value=float(sel_runtime.ambient_humidity or 0.0),
                             key=f"edit_runtime_ambient_hum_{sel_runtime.id}",
                         )
-                        pump_speed = st.text_input(
-                            "Pump speed / flow data", value=sel_runtime.pump_speed_or_flow_data or "",
-                            key=f"edit_runtime_pump_{sel_runtime.id}",
-                        )
                         temperature_data = st.text_input(
                             "Temperature data", value=sel_runtime.temperature_data or "",
                             key=f"edit_runtime_tempdata_{sel_runtime.id}",
@@ -1530,7 +1539,6 @@ with tab_runtime:
                         save = st.form_submit_button("Save changes")
                         if save:
                             sel_runtime.line_speed = line_speed or None
-                            sel_runtime.pump_speed_or_flow_data = pump_speed
                             sel_runtime.temperature_data = temperature_data
                             sel_runtime.pressure_data = pressure_data
                             sel_runtime.ambient_temperature = ambient_temp or None
@@ -1558,7 +1566,6 @@ with tab_runtime:
                 line_speed = c1.number_input("Line speed", min_value=0.0, step=0.1)
                 ambient_temp = c2.number_input("Ambient temperature (°C)", step=0.1)
                 ambient_humidity = c3.number_input("Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5)
-                pump_speed = st.text_input("Pump speed / flow data")
                 temperature_data = st.text_input("Temperature data")
                 pressure_data = st.text_input("Pressure data (where available)")
                 rise_time = st.number_input("Rise time (s)", min_value=0.0, step=1.0)
@@ -1569,7 +1576,6 @@ with tab_runtime:
                         RuntimeDataRecord(
                             production_run_id=run.id,
                             line_speed=line_speed or None,
-                            pump_speed_or_flow_data=pump_speed,
                             temperature_data=temperature_data,
                             pressure_data=pressure_data,
                             ambient_temperature=ambient_temp or None,
@@ -1622,7 +1628,6 @@ with tab_runtime:
                                     RuntimeDataRecord(
                                         production_run_id=int(row["production_run_id"]),
                                         line_speed=row.get("line_speed"),
-                                        pump_speed_or_flow_data=str(row.get("pump_speed_or_flow_data", "") or ""),
                                         temperature_data=str(row.get("temperature_data", "") or ""),
                                         pressure_data=str(row.get("pressure_data", "") or ""),
                                         ambient_temperature=row.get("ambient_temperature"),
