@@ -82,7 +82,12 @@ PHASE_OPTIONAL_COLUMNS = [
     "sidewall_width_mm", "foam_height_mm", "notes",
 ]
 
-STREAM_REQUIRED_COLUMNS = ["production_run_id", "phase_name", "stream_name"]
+# Component stream readings are actual measurements taken once production is
+# running, so they only ever attach to a run's Finalized phase — never to
+# Setup (which is the planned/configured snapshot before the run starts).
+# phase_name is therefore not part of the import contract; the Finalized
+# phase for the run is resolved automatically.
+STREAM_REQUIRED_COLUMNS = ["production_run_id", "stream_name"]
 STREAM_OPTIONAL_COLUMNS = [
     "flow_unit", "flow", "flow_total_qty", "pressure_bar", "temperature_c",
     "calibration_status", "calibration_note", "notes",
@@ -980,10 +985,18 @@ with tab_streams:
         phases_for_run = (
             session.query(ProductionPhase).filter(ProductionPhase.production_run_id == run.id).all()
         )
-        if not phases_for_run:
-            st.info(f"Add a process phase for {_run_label(run)} first (Process Phases tab).")
+        finalized_phase = next((p for p in phases_for_run if p.phase_name == "Finalized"), None)
+        if not finalized_phase:
+            st.info(
+                f"Add the Finalized phase for {_run_label(run)} first (Process Phases tab). Component "
+                "stream readings are actual measurements, so they only ever attach to the Finalized "
+                "phase, never to Setup."
+            )
         else:
-            st.caption(f"Showing stream readings for **{_run_label(run)}**")
+            st.caption(
+                f"Showing stream readings for **{_run_label(run)}** — Finalized phase "
+                f"({finalized_phase.phase_start})"
+            )
             sub_overview, sub_create, sub_import = st.tabs(["Overview & Edit", "Create", "CSV / Excel import"])
 
             streams_for_run = (
@@ -1025,15 +1038,8 @@ with tab_streams:
                     )
                     if sel_stream:
                         st.markdown(f"##### Edit stream reading — {sel_stream.stream_name}")
+                        st.caption("Phase: Finalized (component stream readings always attach here).")
                         with st.form(f"edit_stream_form_{sel_stream.id}"):
-                            phase_idx = next(
-                                (i for i, p in enumerate(phases_for_run) if p.id == sel_stream.production_phase_id), 0
-                            )
-                            phase = st.selectbox(
-                                "Phase *", phases_for_run, index=phase_idx,
-                                format_func=lambda p: f"{p.phase_name} ({p.phase_start})",
-                                key=f"edit_stream_phase_{sel_stream.id}",
-                            )
                             stream_name = st.text_input(
                                 "Stream / raw material name *", value=sel_stream.stream_name,
                                 key=f"edit_stream_name_{sel_stream.id}",
@@ -1088,7 +1094,7 @@ with tab_streams:
                                 if not stream_name.strip():
                                     st.error("Stream / raw material name is required.")
                                 else:
-                                    sel_stream.production_phase_id = phase.id
+                                    sel_stream.production_phase_id = finalized_phase.id
                                     sel_stream.stream_name = stream_name.strip()
                                     sel_stream.flow_unit = flow_unit
                                     sel_stream.flow = flow or None
@@ -1115,11 +1121,8 @@ with tab_streams:
                         st.caption("Click a row above to edit (and optionally delete) that stream reading.")
 
             with sub_create:
-                phase = st.selectbox(
-                    "Phase *", phases_for_run,
-                    format_func=lambda p: f"{p.phase_name} ({p.phase_start})",
-                    key=f"stream_phase_select_{run.id}",
-                )
+                st.caption("Phase: Finalized (component stream readings always attach here).")
+                phase = finalized_phase
                 if not recipe_components:
                     st.warning(
                         "This run's recipe version has no components listed yet — add them on the Recipe "
@@ -1179,8 +1182,9 @@ with tab_streams:
 
             with sub_import:
                 st.caption(
-                    "Required columns: " + ", ".join(STREAM_REQUIRED_COLUMNS) + " (phase_name must match an "
-                    "existing phase on that run). Optional columns: " + ", ".join(STREAM_OPTIONAL_COLUMNS)
+                    "Required columns: " + ", ".join(STREAM_REQUIRED_COLUMNS) + ". Optional columns: "
+                    + ", ".join(STREAM_OPTIONAL_COLUMNS) + ". Each row's production_run_id must already have "
+                    "a Finalized phase — readings always attach there, never to Setup."
                 )
                 uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="stream_upload")
                 if uploaded:
@@ -1195,17 +1199,14 @@ with tab_streams:
                         if missing_cols:
                             st.error(f"File is missing required column(s): {', '.join(missing_cols)}. Import rejected.")
                         else:
-                            all_phases_lookup = session.query(ProductionPhase).all()
+                            finalized_by_run = {
+                                p.production_run_id: p
+                                for p in session.query(ProductionPhase)
+                                .filter(ProductionPhase.phase_name == "Finalized").all()
+                            }
                             good_rows, bad_rows, resolved_phase_ids = [], [], []
                             for _, row in df.iterrows():
-                                match = next(
-                                    (
-                                        p for p in all_phases_lookup
-                                        if p.production_run_id == row.get("production_run_id")
-                                        and p.phase_name == row.get("phase_name")
-                                    ),
-                                    None,
-                                )
+                                match = finalized_by_run.get(row.get("production_run_id"))
                                 if match and row.get("stream_name"):
                                     good_rows.append(row)
                                     resolved_phase_ids.append(match.id)
@@ -1215,8 +1216,8 @@ with tab_streams:
                             st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
                             if bad_rows:
                                 st.warning(
-                                    "Flagged rows reference a production_run_id/phase_name combination with no "
-                                    "matching phase, or are missing stream_name."
+                                    "Flagged rows reference a production_run_id with no Finalized phase yet, "
+                                    "or are missing stream_name."
                                 )
                                 st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
 
