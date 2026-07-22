@@ -106,6 +106,21 @@ Without a `DATABASE_URL` secret or environment variable, the app falls back
 to a local SQLite file (`pi3_local.db`) for convenience — do not rely on
 this for the deployed app.
 
+## Troubleshooting: sidebar reverts to a plain page list
+
+Symptom: the sidebar shows a flat, alphabetical/numeric list of page names
+straight from the filenames (e.g. "Plant Installation Overview", "Production
+Run Trial Record") with no logo, no version number, no section headers, and
+no icons — as if `app.py`'s custom navigation code doesn't exist.
+
+This is not a code regression (check `app.py` still has `st.navigation(...,
+position="hidden")` and the custom `with st.sidebar:` block first if in
+doubt) — it's Streamlit Community Cloud serving a stale cached build. Fix:
+open the app on share.streamlit.io, click the **⋮** menu (top right) →
+**Clear cache**. A plain reboot does not always clear this; Clear cache did
+(confirmed 2026-07-22, v1.6.1). Repository/branch/main-file settings are not
+usually the cause if this has worked before.
+
 ## What v0.1 deliberately does not do
 
 No ERP integration, no live machine connection, no autonomous formulation
