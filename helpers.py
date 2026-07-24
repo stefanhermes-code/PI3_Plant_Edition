@@ -71,6 +71,62 @@ def parse_bool(value):
     return str(value).strip().lower() in ("true", "1", "yes", "y")
 
 
+def selection_rows(event):
+    """Best-effort extraction of selected row indices from a
+    st.dataframe(..., on_select="rerun") return value, tolerant of the
+    exact attribute/dict shape Streamlit uses."""
+    if event is None:
+        return []
+    sel = getattr(event, "selection", None)
+    if sel is None:
+        try:
+            sel = event["selection"]
+        except Exception:
+            return []
+    rows = getattr(sel, "rows", None)
+    if rows is None:
+        try:
+            rows = sel["rows"]
+        except Exception:
+            return []
+    return list(rows or [])
+
+
+def clickable_table(rows, key):
+    """Render rows (list of dicts) as a single-row-selectable table. Returns
+    the selected row's index, or None if nothing is selected. Used across
+    every "list + edit + delete" page so row-selection works identically
+    everywhere."""
+    if not rows:
+        return None
+    event = st.dataframe(
+        rows,
+        hide_index=True,
+        use_container_width=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=key,
+    )
+    sel = selection_rows(event)
+    return sel[0] if sel else None
+
+
+def delete_with_confirm(label, on_confirm, key_prefix, extra_warning=""):
+    """Render a checkbox + delete button gate, calling on_confirm() and
+    rerunning only once the operator has explicitly ticked the confirm box.
+    Shared by every page with a delete action so the confirmation UX (and
+    the requirement to tick a box before the button becomes clickable) is
+    consistent app-wide."""
+    st.markdown(f"**Delete {label}**")
+    if extra_warning:
+        st.warning(extra_warning)
+    confirm = st.checkbox(f"I understand — permanently delete {label}.", key=f"{key_prefix}_confirm")
+    if st.button(f"Delete {label}", key=f"{key_prefix}_btn", type="primary", disabled=not confirm):
+        on_confirm()
+        st.success(f"{label} deleted.")
+        st.rerun()
+
+
 def csv_excel_uploader(required_cols, optional_cols=None, key=None):
     """Render a file uploader for bulk CSV/Excel import, parse it, and check
     that the required columns are present. Used by every "CSV / Excel

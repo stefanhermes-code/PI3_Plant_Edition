@@ -10,8 +10,8 @@ import pandas as pd
 import streamlit as st
 
 from auth import logout_button, require_login
-from db import RAW_MATERIAL_CATEGORIES, RawMaterial, get_session, init_db
-from helpers import csv_excel_uploader, page_setup, parse_bool
+from db import RAW_MATERIAL_CATEGORIES, RawMaterial, RecipeComponent, get_session, init_db
+from helpers import clickable_table, csv_excel_uploader, delete_with_confirm, page_setup, parse_bool
 
 RAW_MATERIAL_REQUIRED_COLUMNS = ["name"]
 RAW_MATERIAL_OPTIONAL_COLUMNS = ["category", "default_supplier", "notes", "active"]
@@ -123,20 +123,89 @@ else:
     active_filter = c4.selectbox("Active", ["All", "Yes", "No"], key="rawmat_filter_active")
     notes_filter = st.text_input("Notes contains", key="rawmat_filter_notes")
 
-    filtered = df
+    mask = pd.Series(True, index=df.index)
     if name_filter:
-        filtered = filtered[filtered["Name"].str.contains(name_filter, case=False, na=False)]
+        mask &= df["Name"].str.contains(name_filter, case=False, na=False)
     if category_filter:
-        filtered = filtered[filtered["Category"].isin(category_filter)]
+        mask &= df["Category"].isin(category_filter)
     if supplier_filter:
-        filtered = filtered[filtered["Default supplier"].str.contains(supplier_filter, case=False, na=False)]
+        mask &= df["Default supplier"].str.contains(supplier_filter, case=False, na=False)
     if active_filter == "Yes":
-        filtered = filtered[filtered["Active"]]
+        mask &= df["Active"]
     elif active_filter == "No":
-        filtered = filtered[~filtered["Active"]]
+        mask &= ~df["Active"]
     if notes_filter:
-        filtered = filtered[filtered["Notes"].str.contains(notes_filter, case=False, na=False)]
+        mask &= df["Notes"].str.contains(notes_filter, case=False, na=False)
 
-    st.caption(f"Showing {len(filtered)} of {len(df)} raw material(s).")
-    st.dataframe(filtered, hide_index=True, use_container_width=True)
+    filtered_materials = [m for m, keep in zip(materials, mask) if keep]
+    filtered_df = df[mask]
+
+    st.caption(
+        f"Showing {len(filtered_df)} of {len(df)} raw material(s). "
+        "Click a row to edit (and optionally delete) that material."
+    )
+    idx = clickable_table(filtered_df.to_dict("records"), key="rawmat_table")
+    if idx is not None:
+        st.session_state["rawmat_selected_id"] = filtered_materials[idx].id
+
+    selected_id = st.session_state.get("rawmat_selected_id")
+    selected = next((m for m in materials if m.id == selected_id), None)
+
+    if selected:
+        st.divider()
+        st.subheader(f"Edit: {selected.name}")
+        with st.form(f"edit_rawmat_{selected.id}"):
+            e_name = st.text_input("Raw material name *", value=selected.name, key=f"edit_rawmat_name_{selected.id}")
+            ec1, ec2 = st.columns(2)
+            e_category = ec1.selectbox(
+                "Category",
+                RAW_MATERIAL_CATEGORIES,
+                index=RAW_MATERIAL_CATEGORIES.index(selected.category) if selected.category in RAW_MATERIAL_CATEGORIES else 0,
+                key=f"edit_rawmat_category_{selected.id}",
+            )
+            e_supplier = ec2.text_input(
+                "Default supplier", value=selected.default_supplier or "", key=f"edit_rawmat_supplier_{selected.id}"
+            )
+            e_notes = st.text_area("Notes", value=selected.notes or "", key=f"edit_rawmat_notes_{selected.id}")
+            e_active = st.checkbox("Active", value=selected.active, key=f"edit_rawmat_active_{selected.id}")
+            if st.form_submit_button("Save changes"):
+                if not e_name.strip():
+                    st.error("Raw material name is required.")
+                else:
+                    selected.name = e_name.strip()
+                    selected.category = e_category
+                    selected.default_supplier = e_supplier
+                    selected.notes = e_notes
+                    selected.active = e_active
+                    session.commit()
+                    st.success("Raw material updated.")
+                    st.rerun()
+
+        linked_components = (
+            session.query(RecipeComponent).filter(RecipeComponent.raw_material_id == selected.id).count()
+        )
+        if linked_components:
+            warning = (
+                f"{linked_components} recipe component(s) reference this raw material. Deleting it will unlink "
+                "them (their component name/role stays, but the raw-material link is cleared) rather than "
+                "deleting those recipe components."
+            )
+        else:
+            warning = "No recipe components reference this raw material — deleting it is safe."
+
+        def _do_delete_rawmat(_session=session, _id=selected.id):
+            _session.query(RecipeComponent).filter(RecipeComponent.raw_material_id == _id).update(
+                {"raw_material_id": None}, synchronize_session="fetch"
+            )
+            _session.query(RawMaterial).filter(RawMaterial.id == _id).delete(synchronize_session=False)
+            _session.commit()
+            st.session_state.pop("rawmat_selected_id", None)
+
+        delete_with_confirm(
+            selected.name, _do_delete_rawmat, key_prefix=f"rawmat_{selected.id}", extra_warning=warning
+        )
+
+        if st.button("Clear selection", key="clear_rawmat_selection"):
+            st.session_state.pop("rawmat_selected_id", None)
+            st.rerun()
 

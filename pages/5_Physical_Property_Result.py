@@ -33,7 +33,7 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import combine_date_time, csv_excel_uploader, page_setup
+from helpers import clickable_table, combine_date_time, csv_excel_uploader, delete_with_confirm, page_setup
 
 RESULT_REQUIRED_COLUMNS = ["production_run_id", "property_name", "test_method", "unit", "actual_value"]
 RESULT_OPTIONAL_COLUMNS = [
@@ -107,21 +107,98 @@ with st.expander("Add sample", expanded=False):
 
 samples = session.query(Sample).order_by(Sample.id.desc()).all()
 if samples:
-    with st.expander(f"Existing samples ({len(samples)})"):
-        st.dataframe(
-            [
-                {
-                    "Sample ID": s.id,
-                    "Run": s.production_run_id,
-                    "Zone": s.zone_label,
-                    "Cure age (h)": s.cure_age_hours,
-                    "Sampled": s.sample_ts,
-                }
-                for s in samples
-            ],
-            hide_index=True,
-            use_container_width=True,
-        )
+    with st.expander(f"Existing samples ({len(samples)})", expanded=False):
+        sample_rows = [
+            {
+                "Sample ID": s.id,
+                "Run": s.production_run_id,
+                "Zone": s.zone_label,
+                "Cure age (h)": s.cure_age_hours,
+                "Sampled": s.sample_ts,
+            }
+            for s in samples
+        ]
+        st.caption("Click a row to edit (and optionally delete) that sample.")
+        idx = clickable_table(sample_rows, key="samples_table")
+        if idx is not None:
+            st.session_state["sample_selected_id"] = samples[idx].id
+
+        selected_sample_id = st.session_state.get("sample_selected_id")
+        selected_sample = next((s for s in samples if s.id == selected_sample_id), None)
+
+        if selected_sample:
+            st.markdown(f"**Edit sample #{selected_sample.id}**")
+            with st.form(f"edit_sample_{selected_sample.id}"):
+                e_zone = st.selectbox(
+                    "Zone *", ZONE_LABELS,
+                    index=ZONE_LABELS.index(selected_sample.zone_label) if selected_sample.zone_label in ZONE_LABELS else 0,
+                    key=f"edit_sample_zone_{selected_sample.id}",
+                )
+                e_sample_ts = combine_date_time(
+                    "Sample extraction time", f"edit_sample_ts_{selected_sample.id}",
+                    default_date=selected_sample.sample_ts.date() if selected_sample.sample_ts else None,
+                    default_time=selected_sample.sample_ts.time() if selected_sample.sample_ts else None,
+                )
+                e_cure_age = st.number_input(
+                    "Cure age at sampling (hours)", min_value=0.0, step=0.5,
+                    value=float(selected_sample.cure_age_hours or 0.0), key=f"edit_sample_cure_{selected_sample.id}",
+                )
+                e_notes = st.text_area("Notes", value=selected_sample.notes or "", key=f"edit_sample_notes_{selected_sample.id}")
+                if st.form_submit_button("Save changes"):
+                    phases_for_edit_run = (
+                        session.query(ProductionPhase)
+                        .filter(ProductionPhase.production_run_id == selected_sample.production_run_id)
+                        .all()
+                    )
+                    earliest_start = min(
+                        (p.phase_start for p in phases_for_edit_run if p.phase_start), default=None
+                    )
+                    if earliest_start and e_sample_ts < earliest_start:
+                        st.error(
+                            f"Sample extraction time ({e_sample_ts:%Y-%m-%d %H:%M}) is before this run started "
+                            f"({earliest_start:%Y-%m-%d %H:%M}). Check the date/time."
+                        )
+                    else:
+                        selected_sample.zone_label = e_zone
+                        selected_sample.sample_ts = e_sample_ts
+                        selected_sample.cure_age_hours = e_cure_age or None
+                        selected_sample.notes = e_notes
+                        session.commit()
+                        st.success("Sample updated.")
+                        st.rerun()
+
+            cond_count = (
+                session.query(ConditioningSegment)
+                .filter(ConditioningSegment.sample_id == selected_sample.id).count()
+            )
+            result_count = (
+                session.query(PhysicalPropertyResult)
+                .filter(PhysicalPropertyResult.sample_id == selected_sample.id).count()
+            )
+            warning_bits = []
+            if cond_count:
+                warning_bits.append(f"{cond_count} conditioning segment(s) will be permanently deleted")
+            if result_count:
+                warning_bits.append(f"{result_count} quality test result(s) will be unlinked from this sample (kept, sample reference cleared)")
+            warning = (". ".join(warning_bits) + "." ) if warning_bits else "No related records — deleting it is safe."
+
+            def _do_delete_sample(_session=session, _id=selected_sample.id):
+                _session.query(ConditioningSegment).filter(ConditioningSegment.sample_id == _id).delete(synchronize_session=False)
+                _session.query(PhysicalPropertyResult).filter(PhysicalPropertyResult.sample_id == _id).update(
+                    {"sample_id": None}, synchronize_session="fetch"
+                )
+                _session.query(Sample).filter(Sample.id == _id).delete(synchronize_session=False)
+                _session.commit()
+                st.session_state.pop("sample_selected_id", None)
+
+            delete_with_confirm(
+                f"sample #{selected_sample.id}", _do_delete_sample, key_prefix=f"sample_{selected_sample.id}",
+                extra_warning=warning,
+            )
+
+            if st.button("Clear selection", key="clear_sample_selection"):
+                st.session_state.pop("sample_selected_id", None)
+                st.rerun()
 
 st.divider()
 st.subheader("🌡️ Conditioning")
@@ -190,21 +267,83 @@ else:
     )
     if recent_conditioning:
         with st.expander(f"Recent conditioning segments ({len(recent_conditioning)} shown, max 30)"):
-            st.dataframe(
-                [
-                    {
-                        "Sample": c.sample_id,
-                        "Condition": c.condition_type,
-                        "Temp (°C)": c.temperature_c,
-                        "RH (%)": c.relative_humidity_pct,
-                        "Start": c.segment_start,
-                        "End": c.segment_end,
-                    }
-                    for c in recent_conditioning
-                ],
-                hide_index=True,
-                use_container_width=True,
+            cond_rows = [
+                {
+                    "Sample": c.sample_id,
+                    "Condition": c.condition_type,
+                    "Temp (°C)": c.temperature_c,
+                    "RH (%)": c.relative_humidity_pct,
+                    "Start": c.segment_start,
+                    "End": c.segment_end,
+                }
+                for c in recent_conditioning
+            ]
+            st.caption("Click a row to edit (and optionally delete) that conditioning segment.")
+            idx = clickable_table(cond_rows, key="conditioning_table")
+            if idx is not None:
+                st.session_state["cond_selected_id"] = recent_conditioning[idx].id
+
+            selected_cond_id = st.session_state.get("cond_selected_id")
+            selected_cond = next((c for c in recent_conditioning if c.id == selected_cond_id), None) or (
+                session.query(ConditioningSegment).filter(ConditioningSegment.id == selected_cond_id).first()
+                if selected_cond_id else None
             )
+
+            if selected_cond:
+                st.markdown(f"**Edit conditioning segment #{selected_cond.id}**")
+                with st.form(f"edit_cond_{selected_cond.id}"):
+                    ec1, ec2 = st.columns(2)
+                    e_temp = ec1.number_input(
+                        "Temperature (°C)", step=0.1, value=float(selected_cond.temperature_c or 0.0),
+                        key=f"edit_cond_temp_{selected_cond.id}",
+                    )
+                    e_rh = ec2.number_input(
+                        "Relative humidity (%)", min_value=0.0, max_value=100.0, step=1.0,
+                        value=float(selected_cond.relative_humidity_pct or 0.0), key=f"edit_cond_rh_{selected_cond.id}",
+                    )
+                    e_condition_type = st.text_input(
+                        "Condition type", value=selected_cond.condition_type or "", key=f"edit_cond_type_{selected_cond.id}"
+                    )
+                    e_start = combine_date_time(
+                        "Segment start", f"edit_cond_start_{selected_cond.id}",
+                        default_date=selected_cond.segment_start.date() if selected_cond.segment_start else None,
+                        default_time=selected_cond.segment_start.time() if selected_cond.segment_start else None,
+                    )
+                    e_end = combine_date_time(
+                        "Segment end", f"edit_cond_end_{selected_cond.id}",
+                        default_date=selected_cond.segment_end.date() if selected_cond.segment_end else None,
+                        default_time=selected_cond.segment_end.time() if selected_cond.segment_end else None,
+                    )
+                    e_notes = st.text_area("Notes", value=selected_cond.notes or "", key=f"edit_cond_notes_{selected_cond.id}")
+                    if st.form_submit_button("Save changes"):
+                        if not e_condition_type.strip():
+                            st.error("Specify a condition type.")
+                        elif e_end < e_start:
+                            st.error("Segment end must not be before segment start.")
+                        else:
+                            selected_cond.condition_type = e_condition_type.strip()
+                            selected_cond.temperature_c = e_temp or None
+                            selected_cond.relative_humidity_pct = e_rh or None
+                            selected_cond.segment_start = e_start
+                            selected_cond.segment_end = e_end
+                            selected_cond.notes = e_notes
+                            session.commit()
+                            st.success("Conditioning segment updated.")
+                            st.rerun()
+
+                def _do_delete_cond(_session=session, _id=selected_cond.id):
+                    _session.query(ConditioningSegment).filter(ConditioningSegment.id == _id).delete(synchronize_session=False)
+                    _session.commit()
+                    st.session_state.pop("cond_selected_id", None)
+
+                delete_with_confirm(
+                    f"conditioning segment #{selected_cond.id}", _do_delete_cond, key_prefix=f"cond_{selected_cond.id}",
+                    extra_warning="This is a leaf record — deleting it has no other effects.",
+                )
+
+                if st.button("Clear selection", key="clear_cond_selection"):
+                    st.session_state.pop("cond_selected_id", None)
+                    st.rerun()
 
 # ---------------------------------------------------------------------------
 # Physical property results
@@ -439,25 +578,113 @@ for r_run in runs:
         continue
     with st.container(border=True):
         st.markdown(f"**Run #{r_run.id}** — {r_run.foam_grade.grade_name} · {r_run.run_date}")
-        st.dataframe(
-            [
-                {
-                    "Property": r.property_name,
-                    "Target": r.target_value,
-                    "Actual": r.actual_value,
-                    "Unit": r.unit,
-                    "Pass/Fail": r.pass_fail,
-                    "Sample": f"#{r.sample_id} ({r.sample.zone_label})" if r.sample else "—",
-                    "Trial": f"#{r.trial_record_id}" if r.trial_record_id else "—",
-                    "Method": r.test_method,
-                    "Rev.": r.method_revision,
-                    "Replicate": r.replicate_no,
-                    "Tested": r.tested_at,
-                    "Notes": r.notes,
-                }
-                for r in results
-            ],
-            hide_index=True,
-            use_container_width=True,
+        result_rows = [
+            {
+                "Property": r.property_name,
+                "Target": r.target_value,
+                "Actual": r.actual_value,
+                "Unit": r.unit,
+                "Pass/Fail": r.pass_fail,
+                "Sample": f"#{r.sample_id} ({r.sample.zone_label})" if r.sample else "—",
+                "Trial": f"#{r.trial_record_id}" if r.trial_record_id else "—",
+                "Method": r.test_method,
+                "Rev.": r.method_revision,
+                "Replicate": r.replicate_no,
+                "Tested": r.tested_at,
+                "Notes": r.notes,
+            }
+            for r in results
+        ]
+        st.caption("Click a row to edit (and optionally delete) that result.")
+        idx = clickable_table(result_rows, key=f"results_table_{r_run.id}")
+        if idx is not None:
+            st.session_state["result_selected_id"] = results[idx].id
+
+selected_result_id = st.session_state.get("result_selected_id")
+selected_result = (
+    session.query(PhysicalPropertyResult).filter(PhysicalPropertyResult.id == selected_result_id).first()
+    if selected_result_id else None
+)
+
+if selected_result:
+    st.divider()
+    st.subheader(f"Edit quality test result #{selected_result.id}")
+    with st.form(f"edit_result_{selected_result.id}"):
+        samples_for_edit = (
+            session.query(Sample).filter(Sample.production_run_id == selected_result.production_run_id).all()
         )
+        sample_options = [None] + samples_for_edit
+        sample_default = next((i for i, s in enumerate(sample_options) if s and s.id == selected_result.sample_id), 0)
+        e_sample = st.selectbox(
+            "Sample (optional)", sample_options, index=sample_default,
+            format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
+            key=f"edit_result_sample_{selected_result.id}",
+        )
+        trials_for_edit_result = (
+            session.query(TrialRecord).filter(TrialRecord.production_run_id == selected_result.production_run_id).all()
+        )
+        trial_options_result = [None] + trials_for_edit_result
+        trial_default_result = next(
+            (i for i, t in enumerate(trial_options_result) if t and t.id == selected_result.trial_record_id), 0
+        )
+        e_trial = st.selectbox(
+            "Link to trial (optional)", trial_options_result, index=trial_default_result,
+            format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
+            key=f"edit_result_trial_{selected_result.id}",
+        )
+        ec1, ec2, ec3 = st.columns(3)
+        e_target = ec1.number_input(
+            "Target value", step=0.1, value=float(selected_result.target_value or 0.0), key=f"edit_result_target_{selected_result.id}"
+        )
+        e_actual = ec2.number_input(
+            "Actual value", step=0.1, value=float(selected_result.actual_value or 0.0), key=f"edit_result_actual_{selected_result.id}"
+        )
+        e_unit = ec3.text_input("Unit", value=selected_result.unit or "", key=f"edit_result_unit_{selected_result.id}")
+        e_method = st.text_input("Measuring method *", value=selected_result.test_method or "", key=f"edit_result_method_{selected_result.id}")
+        e_revision = st.text_input(
+            "Method edition / revision", value=selected_result.method_revision or "", key=f"edit_result_rev_{selected_result.id}"
+        )
+        e_replicate = st.number_input(
+            "Replicate no.", min_value=1, step=1, value=selected_result.replicate_no or 1, key=f"edit_result_replicate_{selected_result.id}"
+        )
+        e_tested_at = st.date_input(
+            "Tested on", value=selected_result.tested_at or dt.date.today(), key=f"edit_result_tested_{selected_result.id}"
+        )
+        e_notes = st.text_area("Notes", value=selected_result.notes or "", key=f"edit_result_notes_{selected_result.id}")
+        if st.form_submit_button("Save changes"):
+            if not e_method.strip():
+                st.error("A measuring method is required.")
+            else:
+                pass_fail = None
+                if e_target and e_actual:
+                    lower, upper = e_target * 0.9, e_target * 1.1
+                    pass_fail = "Pass" if lower <= e_actual <= upper else "Fail"
+                selected_result.sample_id = e_sample.id if e_sample else None
+                selected_result.trial_record_id = e_trial.id if e_trial else None
+                selected_result.target_value = e_target or None
+                selected_result.actual_value = e_actual or None
+                selected_result.unit = e_unit
+                selected_result.pass_fail = pass_fail
+                selected_result.test_method = e_method.strip()
+                selected_result.method_revision = e_revision
+                selected_result.replicate_no = int(e_replicate)
+                selected_result.tested_at = e_tested_at
+                selected_result.notes = e_notes
+                session.commit()
+                st.success("Quality test result updated.")
+                st.rerun()
+
+    def _do_delete_result(_session=session, _id=selected_result.id):
+        _session.query(PhysicalPropertyResult).filter(PhysicalPropertyResult.id == _id).delete(synchronize_session=False)
+        _session.commit()
+        st.session_state.pop("result_selected_id", None)
+
+    delete_with_confirm(
+        f"result #{selected_result.id}", _do_delete_result, key_prefix=f"result_{selected_result.id}",
+        extra_warning="This is a leaf record — deleting it has no other effects.",
+    )
+
+    if st.button("Clear selection", key="clear_result_selection"):
+        st.session_state.pop("result_selected_id", None)
+        st.rerun()
 

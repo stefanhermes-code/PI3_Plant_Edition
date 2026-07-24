@@ -11,7 +11,7 @@ import streamlit as st
 
 from db import CONFIDENCE_LEVELS, AdjustmentConclusion, TrialRecord, get_session, init_db
 from auth import logout_button, require_login
-from helpers import confidence_badge, page_setup
+from helpers import clickable_table, confidence_badge, delete_with_confirm, page_setup
 
 page_setup("Adjustment & Conclusion")
 init_db()
@@ -65,22 +65,80 @@ with st.form(f"add_adjustment_{trial.id}"):
         st.rerun()
 
 if trial.adjustment_conclusions:
-    st.dataframe(
-        [
-            {
-                "Parameter changed": a.parameter_changed,
-                "Formulation changed": a.formulation_changed,
-                "Material changed": a.material_changed,
-                "Result": a.result,
-                "Confidence": a.confidence_level,
-                "Follow-up required": a.follow_up_required,
-                "Logged by": a.created_by,
-            }
-            for a in trial.adjustment_conclusions
-        ],
-        hide_index=True,
-        use_container_width=True,
-    )
+    adj_rows = [
+        {
+            "Parameter changed": a.parameter_changed,
+            "Formulation changed": a.formulation_changed,
+            "Material changed": a.material_changed,
+            "Result": a.result,
+            "Confidence": a.confidence_level,
+            "Follow-up required": a.follow_up_required,
+            "Logged by": a.created_by,
+        }
+        for a in trial.adjustment_conclusions
+    ]
+    st.caption("Click a row to edit (and optionally delete) that adjustment.")
+    idx = clickable_table(adj_rows, key=f"adj_table_{trial.id}")
+    if idx is not None:
+        st.session_state["adj_selected_id"] = trial.adjustment_conclusions[idx].id
+
+    selected_adj_id = st.session_state.get("adj_selected_id")
+    selected_adj = session.query(AdjustmentConclusion).filter(AdjustmentConclusion.id == selected_adj_id).first()
+
+    if selected_adj:
+        st.markdown("**Edit adjustment**")
+        with st.form(f"edit_adj_{selected_adj.id}"):
+            e_parameter = st.text_input(
+                "Parameter changed (process)", value=selected_adj.parameter_changed or "",
+                key=f"edit_adj_param_{selected_adj.id}",
+            )
+            e_formulation_changed = st.checkbox(
+                "Formulation changed?", value=selected_adj.formulation_changed, key=f"edit_adj_formchg_{selected_adj.id}"
+            )
+            e_material_changed = st.text_input(
+                "Material changed (if any)", value=selected_adj.material_changed or "",
+                key=f"edit_adj_material_{selected_adj.id}",
+            )
+            e_result = st.text_area("Result of this specific adjustment", value=selected_adj.result or "", key=f"edit_adj_result_{selected_adj.id}")
+            e_reuse = st.text_area(
+                "Reuse recommendation for this adjustment", value=selected_adj.reuse_recommendation or "",
+                key=f"edit_adj_reuse_{selected_adj.id}",
+            )
+            e_confidence = st.selectbox(
+                "Confidence level", CONFIDENCE_LEVELS,
+                index=CONFIDENCE_LEVELS.index(selected_adj.confidence_level) if selected_adj.confidence_level in CONFIDENCE_LEVELS else 2,
+                key=f"edit_adj_confidence_{selected_adj.id}",
+            )
+            e_followup = st.checkbox(
+                "Follow-up required?", value=selected_adj.follow_up_required, key=f"edit_adj_followup_{selected_adj.id}"
+            )
+            e_created_by = st.text_input("Logged by", value=selected_adj.created_by or "", key=f"edit_adj_by_{selected_adj.id}")
+            if st.form_submit_button("Save changes"):
+                selected_adj.parameter_changed = e_parameter
+                selected_adj.formulation_changed = e_formulation_changed
+                selected_adj.material_changed = e_material_changed
+                selected_adj.result = e_result
+                selected_adj.reuse_recommendation = e_reuse
+                selected_adj.confidence_level = e_confidence
+                selected_adj.follow_up_required = e_followup
+                selected_adj.created_by = e_created_by
+                session.commit()
+                st.success("Adjustment updated.")
+                st.rerun()
+
+        def _do_delete_adj(_session=session, _id=selected_adj.id):
+            _session.query(AdjustmentConclusion).filter(AdjustmentConclusion.id == _id).delete(synchronize_session=False)
+            _session.commit()
+            st.session_state.pop("adj_selected_id", None)
+
+        delete_with_confirm(
+            "this adjustment", _do_delete_adj, key_prefix=f"adj_{selected_adj.id}",
+            extra_warning="This is a leaf record — deleting it has no other effects.",
+        )
+
+        if st.button("Clear selection", key="clear_adj_selection"):
+            st.session_state.pop("adj_selected_id", None)
+            st.rerun()
 
 st.divider()
 st.subheader("Trial closeout narrative")

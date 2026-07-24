@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from auth import logout_button, require_login
+from cascades import delete_recipe_version_cascade, recipe_version_dependency_counts
 from db import (
     APPROVAL_STATUSES,
     FoamGrade,
@@ -15,7 +16,7 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import csv_excel_uploader, page_setup
+from helpers import clickable_table, csv_excel_uploader, delete_with_confirm, page_setup
 
 RECIPE_VERSION_REQUIRED_COLUMNS = ["foam_grade_id", "version_label"]
 RECIPE_VERSION_OPTIONAL_COLUMNS = ["effective_date", "change_note", "approval_status", "created_by"]
@@ -141,22 +142,123 @@ for v in versions:
         st.caption(f"Effective {v.effective_date or '—'} | Created by {v.created_by or '—'}")
         st.write(v.change_note)
 
+        with st.expander("Edit / delete this recipe version"):
+            with st.form(f"edit_version_{v.id}"):
+                e_grade = st.selectbox(
+                    "Foam grade *", grades,
+                    index=next((i for i, g in enumerate(grades) if g.id == v.foam_grade_id), 0),
+                    format_func=lambda g: g.grade_name, key=f"edit_version_grade_{v.id}",
+                )
+                e_label = st.text_input("Version label *", value=v.version_label, key=f"edit_version_label_{v.id}")
+                e_effective = st.date_input(
+                    "Effective date", value=v.effective_date or dt.date.today(), key=f"edit_version_eff_{v.id}"
+                )
+                e_change_note = st.text_area("Change note *", value=v.change_note or "", key=f"edit_version_note_{v.id}")
+                e_status = st.selectbox(
+                    "Approval status", APPROVAL_STATUSES,
+                    index=APPROVAL_STATUSES.index(v.approval_status) if v.approval_status in APPROVAL_STATUSES else 0,
+                    key=f"edit_version_status_{v.id}",
+                )
+                e_created_by = st.text_input("Created by", value=v.created_by or "", key=f"edit_version_by_{v.id}")
+                if st.form_submit_button("Save changes"):
+                    if not e_label.strip() or not e_change_note.strip():
+                        st.error("Version label and change note are required.")
+                    else:
+                        v.foam_grade_id = e_grade.id
+                        v.version_label = e_label.strip()
+                        v.effective_date = e_effective
+                        v.change_note = e_change_note
+                        v.approval_status = e_status
+                        v.created_by = e_created_by
+                        session.commit()
+                        st.success("Recipe version updated.")
+                        st.rerun()
+
+            counts = recipe_version_dependency_counts(session, v.id)
+            total_related = sum(counts.values())
+            if total_related:
+                detail = ", ".join(f"{n} {k}" for k, n in counts.items() if n)
+                warning = f"Deleting this recipe version will also permanently delete {total_related} related record(s): {detail}."
+            else:
+                warning = "This recipe version has no related records — deleting it is safe."
+
+            def _do_delete_version(_session=session, _id=v.id):
+                delete_recipe_version_cascade(_session, _id)
+                _session.commit()
+                st.session_state.pop("rv_selected_id", None)
+
+            delete_with_confirm(
+                f"Recipe version '{v.version_label}'", _do_delete_version, key_prefix=f"version_{v.id}",
+                extra_warning=warning,
+            )
+
         with st.expander(f"Recipe components ({len(v.components)})"):
             if v.components:
-                st.dataframe(
-                    [
-                        {
-                            "Raw material": c.raw_material_name,
-                            "Supplier": c.supplier,
-                            "php": c.php,
-                            "Role": c.role_in_formulation,
-                            "Notes": c.notes,
-                        }
-                        for c in v.components
-                    ],
-                    hide_index=True,
-                    use_container_width=True,
-                )
+                comp_rows = [
+                    {
+                        "Raw material": c.raw_material_name,
+                        "Supplier": c.supplier,
+                        "php": c.php,
+                        "Role": c.role_in_formulation,
+                        "Notes": c.notes,
+                    }
+                    for c in v.components
+                ]
+                st.caption("Click a row to edit (and optionally delete) that component.")
+                idx = clickable_table(comp_rows, key=f"components_table_{v.id}")
+                if idx is not None:
+                    st.session_state["comp_selected_id"] = v.components[idx].id
+
+                selected_comp_id = st.session_state.get("comp_selected_id")
+                selected_comp = next((c for c in v.components if c.id == selected_comp_id), None)
+
+                if selected_comp:
+                    st.markdown(f"**Edit component: {selected_comp.raw_material_name}**")
+                    with st.form(f"edit_component_{selected_comp.id}"):
+                        ec1, ec2, ec3 = st.columns(3)
+                        e_name = ec1.text_input(
+                            "Raw material name", value=selected_comp.raw_material_name, key=f"edit_comp_name_{selected_comp.id}"
+                        )
+                        e_supplier = ec2.text_input(
+                            "Supplier", value=selected_comp.supplier or "", key=f"edit_comp_sup_{selected_comp.id}"
+                        )
+                        e_php = ec3.number_input(
+                            "php", min_value=0.0, step=0.1, value=float(selected_comp.php or 0.0), key=f"edit_comp_php_{selected_comp.id}"
+                        )
+                        e_role = st.text_input(
+                            "Role in formulation", value=selected_comp.role_in_formulation or "", key=f"edit_comp_role_{selected_comp.id}"
+                        )
+                        e_notes = st.text_input("Notes", value=selected_comp.notes or "", key=f"edit_comp_notes_{selected_comp.id}")
+                        if st.form_submit_button("Save changes"):
+                            if not e_name.strip():
+                                st.error("Raw material name is required.")
+                            else:
+                                if e_name.strip() != selected_comp.raw_material_name:
+                                    rm = _match_or_create_raw_material(e_name, e_supplier)
+                                    selected_comp.raw_material_id = rm.id if rm else None
+                                selected_comp.raw_material_name = e_name.strip()
+                                selected_comp.supplier = e_supplier
+                                selected_comp.php = e_php or None
+                                selected_comp.role_in_formulation = e_role
+                                selected_comp.notes = e_notes
+                                session.commit()
+                                st.success("Component updated.")
+                                st.rerun()
+
+                    def _do_delete_comp(_session=session, _id=selected_comp.id):
+                        _session.query(RecipeComponent).filter(RecipeComponent.id == _id).delete(synchronize_session=False)
+                        _session.commit()
+                        st.session_state.pop("comp_selected_id", None)
+
+                    delete_with_confirm(
+                        f"component '{selected_comp.raw_material_name}'", _do_delete_comp,
+                        key_prefix=f"comp_{selected_comp.id}",
+                        extra_warning="This is a leaf record — deleting it has no other effects.",
+                    )
+
+                    if st.button("Clear selection", key=f"clear_comp_selection_{v.id}"):
+                        st.session_state.pop("comp_selected_id", None)
+                        st.rerun()
 
             active_raw_materials = (
                 session.query(RawMaterial)

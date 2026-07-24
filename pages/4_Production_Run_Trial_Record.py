@@ -30,6 +30,7 @@ import pandas as pd
 import streamlit as st
 
 from auth import logout_button, require_login
+from cascades import delete_production_run_cascade, production_run_dependency_counts
 from db import (
     EVENT_TYPES,
     PHASE_NAMES,
@@ -54,7 +55,14 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import combine_date_time, csv_excel_uploader, page_setup, parse_dt
+from helpers import (
+    clickable_table,
+    combine_date_time,
+    csv_excel_uploader,
+    delete_with_confirm,
+    page_setup,
+    parse_dt,
+)
 
 RUN_REQUIRED_COLUMNS = ["foam_grade_id", "recipe_version_id"]
 RUN_OPTIONAL_COLUMNS = [
@@ -107,44 +115,6 @@ def _run_label(r):
     return f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}"
 
 
-def _selection_rows(event):
-    """Best-effort extraction of selected row indices from a
-    st.dataframe(..., on_select="rerun") return value, tolerant of the
-    exact attribute/dict shape Streamlit uses."""
-    if event is None:
-        return []
-    sel = getattr(event, "selection", None)
-    if sel is None:
-        try:
-            sel = event["selection"]
-        except Exception:
-            return []
-    rows = getattr(sel, "rows", None)
-    if rows is None:
-        try:
-            rows = sel["rows"]
-        except Exception:
-            return []
-    return list(rows or [])
-
-
-def _clickable_table(rows, key):
-    """Render rows (list of dicts) as a single-row-selectable table. Returns
-    the selected row's index, or None if nothing is selected."""
-    if not rows:
-        return None
-    event = st.dataframe(
-        rows,
-        hide_index=True,
-        use_container_width=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key=key,
-    )
-    sel = _selection_rows(event)
-    return sel[0] if sel else None
-
-
 def _run_selector(runs, key):
     """Selectbox defaulting to the run selected elsewhere on the page
     (st.session_state['pr_selected_run_id']), keeping every tab in sync."""
@@ -166,116 +136,9 @@ def _run_selector(runs, key):
     return run
 
 
-def _delete_with_confirm(label, on_confirm, key_prefix, extra_warning=""):
-    st.markdown(f"**Delete {label}**")
-    if extra_warning:
-        st.warning(extra_warning)
-    confirm = st.checkbox(f"I understand — permanently delete {label}.", key=f"{key_prefix}_confirm")
-    if st.button(f"Delete {label}", key=f"{key_prefix}_btn", type="primary", disabled=not confirm):
-        on_confirm()
-        st.success(f"{label} deleted.")
-        st.rerun()
-
-
 # --- Production run cascade delete (a run can have a lot hanging off it) ---
-
-def _production_run_dependency_counts(session, run_id):
-    phase_ids = [
-        p.id for p in session.query(ProductionPhase.id)
-        .filter(ProductionPhase.production_run_id == run_id).all()
-    ]
-    sample_ids = [
-        s.id for s in session.query(Sample.id)
-        .filter(Sample.production_run_id == run_id).all()
-    ]
-    return {
-        "process phase(s)": len(phase_ids),
-        "component stream reading(s)": (
-            session.query(ComponentStreamReading)
-            .filter(ComponentStreamReading.production_phase_id.in_(phase_ids)).count()
-            if phase_ids else 0
-        ),
-        "fall-plate section position(s)": (
-            session.query(FallplateSectionPosition)
-            .filter(FallplateSectionPosition.production_phase_id.in_(phase_ids)).count()
-            if phase_ids else 0
-        ),
-        "production event(s)": session.query(ProductionEvent)
-        .filter(ProductionEvent.production_run_id == run_id).count(),
-        "raw material lot use(s)": session.query(RawMaterialLotUse)
-        .filter(RawMaterialLotUse.production_run_id == run_id).count(),
-        "runtime data record(s)": session.query(RuntimeDataRecord)
-        .filter(RuntimeDataRecord.production_run_id == run_id).count(),
-        "quality test result(s)": session.query(PhysicalPropertyResult)
-        .filter(PhysicalPropertyResult.production_run_id == run_id).count(),
-        "quality issue(s)": session.query(QualityObservation)
-        .filter(QualityObservation.production_run_id == run_id).count(),
-        "adjustment & conclusion record(s)": session.query(AdjustmentConclusion)
-        .filter(AdjustmentConclusion.production_run_id == run_id).count(),
-        "approval record(s)": session.query(ApprovalRecord)
-        .filter(ApprovalRecord.production_run_id == run_id).count(),
-        "sample(s)": len(sample_ids),
-        "conditioning segment(s)": (
-            session.query(ConditioningSegment)
-            .filter(ConditioningSegment.sample_id.in_(sample_ids)).count()
-            if sample_ids else 0
-        ),
-    }
-
-
-def _delete_production_run_cascade(session, run):
-    run_id = run.id
-    phase_ids = [
-        p.id for p in session.query(ProductionPhase.id)
-        .filter(ProductionPhase.production_run_id == run_id).all()
-    ]
-    sample_ids = [
-        s.id for s in session.query(Sample.id)
-        .filter(Sample.production_run_id == run_id).all()
-    ]
-
-    if phase_ids:
-        session.query(ComponentStreamReading).filter(
-            ComponentStreamReading.production_phase_id.in_(phase_ids)
-        ).delete(synchronize_session=False)
-        session.query(FallplateSectionPosition).filter(
-            FallplateSectionPosition.production_phase_id.in_(phase_ids)
-        ).delete(synchronize_session=False)
-    if sample_ids:
-        session.query(ConditioningSegment).filter(
-            ConditioningSegment.sample_id.in_(sample_ids)
-        ).delete(synchronize_session=False)
-
-    session.query(ProductionEvent).filter(
-        ProductionEvent.production_run_id == run_id
-    ).delete(synchronize_session=False)
-    session.query(ProductionPhase).filter(
-        ProductionPhase.production_run_id == run_id
-    ).delete(synchronize_session=False)
-    session.query(RawMaterialLotUse).filter(
-        RawMaterialLotUse.production_run_id == run_id
-    ).delete(synchronize_session=False)
-    session.query(RuntimeDataRecord).filter(
-        RuntimeDataRecord.production_run_id == run_id
-    ).delete(synchronize_session=False)
-    session.query(PhysicalPropertyResult).filter(
-        PhysicalPropertyResult.production_run_id == run_id
-    ).delete(synchronize_session=False)
-    session.query(QualityObservation).filter(
-        QualityObservation.production_run_id == run_id
-    ).delete(synchronize_session=False)
-    session.query(AdjustmentConclusion).filter(
-        AdjustmentConclusion.production_run_id == run_id
-    ).delete(synchronize_session=False)
-    session.query(ApprovalRecord).filter(
-        ApprovalRecord.production_run_id == run_id
-    ).delete(synchronize_session=False)
-    session.query(Sample).filter(
-        Sample.production_run_id == run_id
-    ).delete(synchronize_session=False)
-    session.query(ProductionRun).filter(ProductionRun.id == run_id).delete(synchronize_session=False)
-    session.commit()
-
+# Shared with pages 1/2/3, which have to delete every run under a plant/
+# product family/foam grade/recipe version being deleted - see cascades.py.
 
 def _delete_phase_cascade(session, phase):
     phase_id = phase.id
@@ -346,7 +209,7 @@ with tab_runs:
                 for r in runs
             ]
             st.caption(f"{len(runs)} production run(s). Click a row to edit (and optionally delete) that run.")
-            idx = _clickable_table(run_rows, key="runs_overview_table")
+            idx = clickable_table(run_rows, key="runs_overview_table")
             if idx is not None:
                 st.session_state["pr_selected_run_id"] = runs[idx].id
 
@@ -429,7 +292,7 @@ with tab_runs:
                             st.success("Production run updated.")
                             st.rerun()
 
-                counts = _production_run_dependency_counts(session, selected_run.id)
+                counts = production_run_dependency_counts(session, selected_run.id)
                 total_related = sum(counts.values())
                 if total_related:
                     detail = ", ".join(f"{v} {k}" for k, v in counts.items() if v)
@@ -437,11 +300,12 @@ with tab_runs:
                 else:
                     warning = "This run has no related records — deleting it is safe."
 
-                def _do_delete_run(_session=session, _run=selected_run):
-                    _delete_production_run_cascade(_session, _run)
+                def _do_delete_run(_session=session, _run_id=selected_run.id):
+                    delete_production_run_cascade(_session, _run_id)
+                    _session.commit()
                     st.session_state.pop("pr_selected_run_id", None)
 
-                _delete_with_confirm(
+                delete_with_confirm(
                     f"Run #{selected_run.id}", _do_delete_run, key_prefix=f"run_{selected_run.id}",
                     extra_warning=warning,
                 )
@@ -603,7 +467,7 @@ with tab_phases:
                     }
                     for p in phases_for_run
                 ]
-                idx = _clickable_table(phase_rows, key=f"phases_table_{run.id}")
+                idx = clickable_table(phase_rows, key=f"phases_table_{run.id}")
                 if idx is not None:
                     st.session_state["pr_selected_phase_id"] = phases_for_run[idx].id
 
@@ -701,7 +565,7 @@ with tab_phases:
                         _delete_phase_cascade(_session, _phase)
                         st.session_state.pop("pr_selected_phase_id", None)
 
-                    _delete_with_confirm(
+                    delete_with_confirm(
                         f"{sel_phase.phase_name} phase (Run #{run.id})", _do_delete_phase,
                         key_prefix=f"phase_{sel_phase.id}",
                         extra_warning=(
@@ -1029,7 +893,7 @@ with tab_streams:
                         }
                         for r in streams_for_run
                     ]
-                    idx = _clickable_table(stream_rows, key=f"streams_table_{run.id}")
+                    idx = clickable_table(stream_rows, key=f"streams_table_{run.id}")
                     if idx is not None:
                         st.session_state["pr_selected_stream_id"] = streams_for_run[idx].id
 
@@ -1120,7 +984,7 @@ with tab_streams:
                             _session.commit()
                             st.session_state.pop("pr_selected_stream_id", None)
 
-                        _delete_with_confirm(
+                        delete_with_confirm(
                             f"stream reading — {sel_stream.stream_name}", _do_delete_stream,
                             key_prefix=f"stream_{sel_stream.id}",
                         )
@@ -1299,7 +1163,7 @@ with tab_events:
                     }
                     for e in events_for_run
                 ]
-                idx = _clickable_table(event_rows, key=f"events_table_{run.id}")
+                idx = clickable_table(event_rows, key=f"events_table_{run.id}")
                 if idx is not None:
                     st.session_state["pr_selected_event_id"] = events_for_run[idx].id
 
@@ -1357,7 +1221,7 @@ with tab_events:
                         _session.commit()
                         st.session_state.pop("pr_selected_event_id", None)
 
-                    _delete_with_confirm(
+                    delete_with_confirm(
                         f"event — {sel_event.event_type}", _do_delete_event, key_prefix=f"event_{sel_event.id}"
                     )
                 else:
@@ -1496,7 +1360,7 @@ with tab_runtime:
                     }
                     for rt in runtime_for_run
                 ]
-                idx = _clickable_table(runtime_rows, key=f"runtime_table_{run.id}")
+                idx = clickable_table(runtime_rows, key=f"runtime_table_{run.id}")
                 if idx is not None:
                     st.session_state["pr_selected_runtime_id"] = runtime_for_run[idx].id
 
@@ -1554,7 +1418,7 @@ with tab_runtime:
                         _session.commit()
                         st.session_state.pop("pr_selected_runtime_id", None)
 
-                    _delete_with_confirm(
+                    delete_with_confirm(
                         "this runtime data record", _do_delete_runtime, key_prefix=f"runtime_{sel_runtime.id}"
                     )
                 else:

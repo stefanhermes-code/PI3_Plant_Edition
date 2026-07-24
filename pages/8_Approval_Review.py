@@ -12,7 +12,7 @@ import streamlit as st
 
 from db import APPROVAL_STATUSES, ApprovalRecord, TrialRecord, get_session, init_db
 from auth import current_user, logout_button, require_login
-from helpers import page_setup
+from helpers import clickable_table, delete_with_confirm, page_setup
 
 page_setup("Approval & Review")
 init_db()
@@ -102,19 +102,76 @@ else:
 if trial.approval_records:
     st.divider()
     st.subheader("Review history")
-    st.dataframe(
-        [
-            {
-                "Reviewed by": a.reviewed_by,
-                "Approved by": a.approved_by,
-                "Status": a.approval_status,
-                "Notes": a.review_notes,
-                "Date reviewed": a.date_reviewed,
-                "Date approved": a.date_approved,
-            }
-            for a in trial.approval_records
-        ],
-        hide_index=True,
-        use_container_width=True,
+    approval_rows = [
+        {
+            "Reviewed by": a.reviewed_by,
+            "Approved by": a.approved_by,
+            "Status": a.approval_status,
+            "Notes": a.review_notes,
+            "Date reviewed": a.date_reviewed,
+            "Date approved": a.date_approved,
+        }
+        for a in trial.approval_records
+    ]
+    st.caption("Click a row to edit (and optionally delete) that review record.")
+    idx = clickable_table(approval_rows, key=f"approval_table_{trial.id}")
+    if idx is not None:
+        st.session_state["approval_selected_id"] = trial.approval_records[idx].id
+
+    selected_approval_id = st.session_state.get("approval_selected_id")
+    selected_approval = (
+        session.query(ApprovalRecord).filter(ApprovalRecord.id == selected_approval_id).first()
     )
+
+    if selected_approval:
+        st.markdown("**Edit review record**")
+        with st.form(f"edit_approval_{selected_approval.id}"):
+            e_reviewed_by = st.text_input(
+                "Reviewed by *", value=selected_approval.reviewed_by or "", key=f"edit_appr_reviewer_{selected_approval.id}"
+            )
+            e_approved_by = st.text_input(
+                "Approved by *", value=selected_approval.approved_by or "", key=f"edit_appr_approver_{selected_approval.id}"
+            )
+            e_status = st.selectbox(
+                "Approval status", APPROVAL_STATUSES,
+                index=APPROVAL_STATUSES.index(selected_approval.approval_status) if selected_approval.approval_status in APPROVAL_STATUSES else 1,
+                key=f"edit_appr_status_{selected_approval.id}",
+            )
+            e_notes = st.text_area("Review notes", value=selected_approval.review_notes or "", key=f"edit_appr_notes_{selected_approval.id}")
+            e_date_reviewed = st.date_input(
+                "Date reviewed", value=selected_approval.date_reviewed or dt.date.today(), key=f"edit_appr_dr_{selected_approval.id}"
+            )
+            e_date_approved = st.date_input(
+                "Date approved", value=selected_approval.date_approved or dt.date.today(), key=f"edit_appr_da_{selected_approval.id}"
+            )
+            if st.form_submit_button("Save changes"):
+                if not e_reviewed_by or not e_approved_by:
+                    st.error("Reviewed by and approved by are both required.")
+                else:
+                    selected_approval.reviewed_by = e_reviewed_by
+                    selected_approval.approved_by = e_approved_by
+                    selected_approval.approval_status = e_status
+                    selected_approval.review_notes = e_notes
+                    selected_approval.date_reviewed = e_date_reviewed
+                    selected_approval.date_approved = e_date_approved
+                    session.commit()
+                    st.success("Review record updated.")
+                    st.rerun()
+
+        def _do_delete_approval(_session=session, _id=selected_approval.id):
+            _session.query(ApprovalRecord).filter(ApprovalRecord.id == _id).delete(synchronize_session=False)
+            _session.commit()
+            st.session_state.pop("approval_selected_id", None)
+
+        delete_with_confirm(
+            "this review record", _do_delete_approval, key_prefix=f"approval_{selected_approval.id}",
+            extra_warning=(
+                "This is a leaf record — deleting it has no other effects (it does not revert the "
+                "trial's reviewed_by/approved_by fields or its closed status)."
+            ),
+        )
+
+        if st.button("Clear selection", key="clear_approval_selection"):
+            st.session_state.pop("approval_selected_id", None)
+            st.rerun()
 
