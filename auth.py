@@ -7,7 +7,7 @@ deliberately simple: named users with a role, defined in st.secrets. This
 is NOT a full identity/SSO system - that remains out of scope for now.
 
 Roles: admin, technical, viewer
-- admin:     full access, including Maintenance/License Admin and PI3/AI toggle
+- admin:     full access, including Maintenance/License Admin and PI3 connectivity toggle
 - technical: can create/edit records, cannot approve their own trial closures
              or change commercial/admin settings
 - viewer:    read-only access to all screens

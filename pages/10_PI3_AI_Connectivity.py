@@ -1,18 +1,17 @@
-"""Screen 11: PI3/AI Connectivity
+"""Screen 11: PI3 Connectivity
 
 Standard version (always included): Search, Compare, Retrieve, Structure,
 Report, Review and Approval.
 
-Optional PI3/AI connectivity (this screen): Assisted interpretation,
+Optional PI3 connectivity (this screen): Assisted interpretation,
 question answering, advisory comparison, company-specific knowledge
 interface. Separate annual fee. Disabled unless explicitly enabled in
 admin settings. Even when enabled, final decisions require human review
 and approval — no autonomous formulation commands, ever.
 
 This screen owns the per-plant enable/disable toggle and commercial fee.
-The actual PI3/AI reasoning layer (an OpenAI Assistant with a vector store
-over historical trial narratives and expert notes) is being wired in - see
-ai_assistant.py once that lands.
+The actual PI3 reasoning layer (an OpenAI Assistant with a vector store
+over historical trial narratives and expert notes) lives in ai_assistant.py.
 """
 
 import datetime as dt
@@ -23,15 +22,15 @@ from db import Plant, PI3AIConnectionSetting, get_session, init_db
 from auth import current_user, logout_button, require_login, require_role
 from helpers import page_setup
 
-page_setup("PI3/AI Connectivity")
+page_setup("PI3 Connectivity")
 init_db()
 require_login()
 logout_button()
 
-st.title("PI3/AI Connectivity")
+st.title("PI3 Connectivity")
 st.info(
     "Standard PI3 Plant Edition (search, compare, retrieve, structure, report, review "
-    "and approval) is fully available without this add-on. PI3/AI connectivity is "
+    "and approval) is fully available without this add-on. PI3 connectivity is "
     "optional, separately billed, and disabled by default per plant."
 )
 
@@ -58,12 +57,12 @@ else:
 
 st.divider()
 require_role("admin")
-st.subheader("Admin: configure PI3/AI connectivity")
+st.subheader("Admin: configure PI3 connectivity")
 
 with st.form("pi3_ai_settings"):
-    enabled = st.toggle("Enable PI3/AI connectivity for this plant", value=setting.pi3_ai_connectivity_enabled if setting else False)
+    enabled = st.toggle("Enable PI3 connectivity for this plant", value=setting.pi3_ai_connectivity_enabled if setting else False)
     annual_fee = st.number_input(
-        "PI3/AI annual fee (EUR)", min_value=0.0, step=500.0,
+        "PI3 annual fee (EUR)", min_value=0.0, step=500.0,
         value=float(setting.pi3_ai_annual_fee) if setting and setting.pi3_ai_annual_fee else 0.0,
     )
     submitted = st.form_submit_button("Save")
@@ -79,11 +78,11 @@ with st.form("pi3_ai_settings"):
             setting.enabled_by = user["display_name"]
             setting.enabled_at = dt.datetime.utcnow()
         session.commit()
-        st.success("PI3/AI connectivity settings saved.")
+        st.success("PI3 connectivity settings saved.")
         st.rerun()
 
 st.caption(
-    "Even with PI3/AI connectivity enabled, all final decisions require human review "
+    "Even with PI3 connectivity enabled, all final decisions require human review "
     "and approval on the Approval & Review screen. No autonomous formulation commands."
 )
 

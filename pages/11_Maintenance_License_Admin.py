@@ -158,7 +158,7 @@ else:
 
 st.caption(
     "Tiering is by plant/installation count and deployment scope only — never by "
-    "reduced functionality. PI3/AI connectivity is a separate, optional line item "
-    "configured on the PI3/AI Connectivity screen."
+    "reduced functionality. PI3 connectivity is a separate, optional line item "
+    "configured on the PI3 Connectivity screen."
 )
 

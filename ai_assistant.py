@@ -151,7 +151,7 @@ def push_document_to_vector_store(title, text, metadata=None):
         )
         return uploaded.id
     except Exception as exc:
-        st.error(f"Could not push this to the PI3/AI vector store: {exc}")
+        st.error(f"Could not push this to PI3: {exc}")
         return None
 
 
@@ -169,7 +169,7 @@ def delete_document_from_vector_store(file_id):
         client = _client()
         client.files.delete(file_id)
     except Exception as exc:
-        st.warning(f"Saved, but couldn't remove the old copy from the PI3/AI vector store: {exc}")
+        st.warning(f"Saved, but couldn't remove the old copy from PI3: {exc}")
 
 
 def ask_assistant(prompt):
@@ -198,14 +198,14 @@ def ask_assistant(prompt):
         waited = 0.0
         while run.status in ("queued", "in_progress", "cancelling"):
             if waited >= MAX_WAIT_SECONDS:
-                st.error("PI3/AI Assistant took too long to respond - try again.")
+                st.error("PI3 took too long to respond - try again.")
                 return None
             time.sleep(POLL_INTERVAL_SECONDS)
             waited += POLL_INTERVAL_SECONDS
             run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
 
         if run.status != "completed":
-            st.error(f"PI3/AI Assistant did not complete (status: {run.status}).")
+            st.error(f"PI3 did not complete (status: {run.status}).")
             return None
 
         messages = client.beta.threads.messages.list(thread_id=thread.id, order="desc", limit=1)
@@ -218,5 +218,5 @@ def ask_assistant(prompt):
         ]
         return "\n".join(text_parts) if text_parts else None
     except Exception as exc:
-        st.error(f"Could not reach the PI3/AI Assistant: {exc}")
+        st.error(f"Could not reach PI3: {exc}")
         return None

@@ -205,7 +205,7 @@ industrial_intelligence_pages = [
 admin_pages = [
     st.Page("pages/11_Maintenance_License_Admin.py", title="Maintenance & License Admin", icon="💳"),
     st.Page("pages/12_Demo_Data_Admin.py", title="Demo Data Admin", icon="🗂️"),
-    st.Page("pages/10_PI3_AI_Connectivity.py", title="PI3 / AI Connectivity", icon="🤖"),
+    st.Page("pages/10_PI3_AI_Connectivity.py", title="PI3 Connectivity", icon="🤖"),
 ]
 
 nav_sections = {

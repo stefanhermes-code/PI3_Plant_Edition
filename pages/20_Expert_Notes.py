@@ -2,10 +2,10 @@
 
 Captures qualitative expert knowledge - the kind of thing that lives in a
 technical person's head or a stray email, not a structured measurement -
-linked to a trial or foam grade. This is the raw material PI3/AI needs:
-when PI3/AI connectivity is enabled for the relevant plant, saving a note
-here also pushes it into the PI3/AI vector store so future "Ask PI3"
-searches and Root-Cause Assistant reasoning can retrieve it.
+linked to a trial or foam grade. This is the raw material PI3 needs: when
+PI3 connectivity is enabled for the relevant plant, saving a note here
+also feeds it into PI3 so future Similar Case Retrieval searches and
+Root-Cause Assistant reasoning can retrieve it.
 """
 
 import streamlit as st
@@ -24,9 +24,9 @@ st.title("Expert Notes")
 st.caption(
     "Qualitative knowledge that doesn't fit a structured field - a hunch about why a "
     "batch behaved oddly, a supplier quirk, a process tip. Linked to a trial or foam "
-    "grade. When PI3/AI connectivity is enabled for the relevant plant, saving a note "
-    "here also feeds the PI3/AI vector store so \"Ask PI3\" and the Root-Cause "
-    "Assistant can find it later."
+    "grade. When PI3 connectivity is enabled for the relevant plant, saving a note "
+    "here also feeds PI3 so Similar Case Retrieval and the Root-Cause Assistant can "
+    "find it later."
 )
 session = get_session()
 user = current_user()
@@ -99,7 +99,7 @@ with st.form("add_expert_note"):
                 note.vector_store_file_id = ai_assistant.push_document_to_vector_store(link_label, doc_text)
             session.add(note)
             session.commit()
-            st.success("Expert note saved." + (" Pushed to PI3/AI." if note.vector_store_file_id else ""))
+            st.success("Expert note saved." + (" Fed into PI3." if note.vector_store_file_id else ""))
             st.rerun()
 
 st.divider()
@@ -116,7 +116,7 @@ else:
             "Confidence": n.confidence_level,
             "Author": n.author or "",
             "Created": n.created_at,
-            "In PI3/AI": "Yes" if n.vector_store_file_id else "No",
+            "In PI3": "Yes" if n.vector_store_file_id else "No",
         }
         for n in notes
     ]
@@ -173,8 +173,8 @@ else:
         delete_with_confirm(
             "this expert note", _do_delete_note, key_prefix=f"note_{selected.id}",
             extra_warning=(
-                "This is a leaf record — deleting it has no other effects (its PI3/AI "
-                "vector store copy, if any, is removed too)."
+                "This is a leaf record — deleting it has no other effects (its copy in "
+                "PI3, if any, is removed too)."
             ),
         )
 
