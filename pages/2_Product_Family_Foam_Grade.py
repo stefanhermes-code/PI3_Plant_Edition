@@ -76,6 +76,8 @@ with tab_family:
         idx = clickable_table(family_rows, key="families_table")
         if idx is not None:
             st.session_state["family_selected_id"] = families[idx].id
+        else:
+            st.session_state.pop("family_selected_id", None)
 
         selected_family_id = st.session_state.get("family_selected_id")
         selected_family = next((f for f in families if f.id == selected_family_id), None)
@@ -219,6 +221,8 @@ with tab_grade:
             idx = clickable_table(grade_rows, key="grades_table")
             if idx is not None:
                 st.session_state["grade_selected_id"] = grades[idx].id
+            else:
+                st.session_state.pop("grade_selected_id", None)
 
             selected_grade_id = st.session_state.get("grade_selected_id")
             selected_grade = next((g for g in grades if g.id == selected_grade_id), None)

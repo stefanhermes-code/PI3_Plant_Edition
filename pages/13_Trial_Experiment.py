@@ -102,6 +102,8 @@ else:
     idx = clickable_table(trial_rows, key="trials_table")
     if idx is not None:
         st.session_state["trial_selected_id"] = trials[idx].id
+    else:
+        st.session_state.pop("trial_selected_id", None)
 
     selected_trial_id = st.session_state.get("trial_selected_id")
     selected_trial = next((t for t in trials if t.id == selected_trial_id), None) or (

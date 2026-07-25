@@ -183,6 +183,8 @@ else:
     idx = clickable_table(obs_rows, key="obs_table")
     if idx is not None:
         st.session_state["obs_selected_id"] = observations[idx].id
+    else:
+        st.session_state.pop("obs_selected_id", None)
 
     selected_id = st.session_state.get("obs_selected_id")
     selected = next((o for o in observations if o.id == selected_id), None) or (

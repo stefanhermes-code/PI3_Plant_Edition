@@ -121,6 +121,32 @@ open the app on share.streamlit.io, click the **⋮** menu (top right) →
 (confirmed 2026-07-22, v1.6.1). Repository/branch/main-file settings are not
 usually the cause if this has worked before.
 
+## Troubleshooting: ImportError "cannot import name 'X' from 'helpers'" (or any module) after a push
+
+Symptom: right after pushing a commit that adds a new function/name to a
+shared module (`helpers.py`, `db.py`, `cascades.py`, ...), the deployed app
+throws `ImportError: cannot import name 'X' from 'Y'` even though the file
+on GitHub's `main` branch clearly contains that name.
+
+This is a different failure mode from the sidebar issue above: it's not a
+stale build, it's a stale **Python process**. Streamlit Community Cloud's
+"pull code changes from GitHub" step (visible in the deploy log) doesn't
+always restart the underlying Python process — it can just re-run the
+script against modules already sitting in `sys.modules` from before the
+push. **Clear cache does not fix this** (it only clears
+`@st.cache_data`/`@st.cache_resource`, not Python's module cache). The fix
+is a full **Reboot app** (a separate action from Clear cache, restarts the
+container/process so every module is freshly imported) — confirmed
+2026-07-24, v1.10.0/v1.10.1. If no distinct "Reboot app" option is visible,
+delete and redeploy the app from the same repo/branch as a fallback.
+
+Check the deploy log (Manage app → logs) for the real traceback first —
+Streamlit's on-screen error message is redacted, but the log shows the
+exact `ImportError` and whether a "Pulling code changes from Github" line
+appears right before the failure without a following full dependency
+install / "Uvicorn server started" sequence, which is the tell for this
+stale-process scenario versus an actual code bug.
+
 ## What v0.1 deliberately does not do
 
 No ERP integration, no live machine connection, no autonomous formulation

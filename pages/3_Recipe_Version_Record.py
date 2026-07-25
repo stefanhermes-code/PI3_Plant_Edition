@@ -208,6 +208,13 @@ for v in versions:
                 idx = clickable_table(comp_rows, key=f"components_table_{v.id}")
                 if idx is not None:
                     st.session_state["comp_selected_id"] = v.components[idx].id
+                elif st.session_state.get("comp_selected_id") in {c.id for c in v.components}:
+                    # a component belonging to THIS version was selected before, but the
+                    # table no longer reports a selection - clear the stale reference
+                    # rather than leaving a phantom edit form. Scoped to this version's
+                    # own component ids so it doesn't clobber a different version's
+                    # live selection elsewhere in this same loop.
+                    st.session_state.pop("comp_selected_id", None)
 
                 selected_comp_id = st.session_state.get("comp_selected_id")
                 selected_comp = next((c for c in v.components if c.id == selected_comp_id), None)

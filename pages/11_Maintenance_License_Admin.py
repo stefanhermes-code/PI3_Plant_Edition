@@ -86,6 +86,8 @@ else:
     idx = clickable_table(record_rows, key="maintenance_table")
     if idx is not None:
         st.session_state["maintenance_selected_id"] = records[idx].id
+    else:
+        st.session_state.pop("maintenance_selected_id", None)
 
     selected_record_id = st.session_state.get("maintenance_selected_id")
     selected_record = next((r for r in records if r.id == selected_record_id), None)

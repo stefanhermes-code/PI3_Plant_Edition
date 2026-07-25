@@ -212,6 +212,8 @@ with tab_runs:
             idx = clickable_table(run_rows, key="runs_overview_table")
             if idx is not None:
                 st.session_state["pr_selected_run_id"] = runs[idx].id
+            else:
+                st.session_state.pop("pr_selected_run_id", None)
 
             selected_run_id = st.session_state.get("pr_selected_run_id")
             selected_run = next((r for r in runs if r.id == selected_run_id), None)
@@ -470,6 +472,8 @@ with tab_phases:
                 idx = clickable_table(phase_rows, key=f"phases_table_{run.id}")
                 if idx is not None:
                     st.session_state["pr_selected_phase_id"] = phases_for_run[idx].id
+                else:
+                    st.session_state.pop("pr_selected_phase_id", None)
 
                 sel_phase = next(
                     (p for p in phases_for_run if p.id == st.session_state.get("pr_selected_phase_id")), None
@@ -896,6 +900,8 @@ with tab_streams:
                     idx = clickable_table(stream_rows, key=f"streams_table_{run.id}")
                     if idx is not None:
                         st.session_state["pr_selected_stream_id"] = streams_for_run[idx].id
+                    else:
+                        st.session_state.pop("pr_selected_stream_id", None)
 
                     sel_stream = next(
                         (r for r in streams_for_run if r.id == st.session_state.get("pr_selected_stream_id")), None
@@ -1166,6 +1172,8 @@ with tab_events:
                 idx = clickable_table(event_rows, key=f"events_table_{run.id}")
                 if idx is not None:
                     st.session_state["pr_selected_event_id"] = events_for_run[idx].id
+                else:
+                    st.session_state.pop("pr_selected_event_id", None)
 
                 sel_event = next(
                     (e for e in events_for_run if e.id == st.session_state.get("pr_selected_event_id")), None
@@ -1363,6 +1371,8 @@ with tab_runtime:
                 idx = clickable_table(runtime_rows, key=f"runtime_table_{run.id}")
                 if idx is not None:
                     st.session_state["pr_selected_runtime_id"] = runtime_for_run[idx].id
+                else:
+                    st.session_state.pop("pr_selected_runtime_id", None)
 
                 sel_runtime = next(
                     (rt for rt in runtime_for_run if rt.id == st.session_state.get("pr_selected_runtime_id")), None

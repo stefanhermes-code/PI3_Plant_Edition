@@ -117,6 +117,8 @@ if trial.approval_records:
     idx = clickable_table(approval_rows, key=f"approval_table_{trial.id}")
     if idx is not None:
         st.session_state["approval_selected_id"] = trial.approval_records[idx].id
+    else:
+        st.session_state.pop("approval_selected_id", None)
 
     selected_approval_id = st.session_state.get("approval_selected_id")
     selected_approval = (

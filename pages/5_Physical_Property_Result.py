@@ -122,6 +122,8 @@ if samples:
         idx = clickable_table(sample_rows, key="samples_table")
         if idx is not None:
             st.session_state["sample_selected_id"] = samples[idx].id
+        else:
+            st.session_state.pop("sample_selected_id", None)
 
         selected_sample_id = st.session_state.get("sample_selected_id")
         selected_sample = next((s for s in samples if s.id == selected_sample_id), None)
@@ -282,6 +284,8 @@ else:
             idx = clickable_table(cond_rows, key="conditioning_table")
             if idx is not None:
                 st.session_state["cond_selected_id"] = recent_conditioning[idx].id
+            else:
+                st.session_state.pop("cond_selected_id", None)
 
             selected_cond_id = st.session_state.get("cond_selected_id")
             selected_cond = next((c for c in recent_conditioning if c.id == selected_cond_id), None) or (
@@ -599,6 +603,12 @@ for r_run in runs:
         idx = clickable_table(result_rows, key=f"results_table_{r_run.id}")
         if idx is not None:
             st.session_state["result_selected_id"] = results[idx].id
+        elif st.session_state.get("result_selected_id") in {r.id for r in results}:
+            # a result belonging to THIS run was selected before, but the table no
+            # longer reports a selection - clear the stale reference, scoped to this
+            # run's own result ids so it doesn't clobber a different run's live
+            # selection elsewhere in this same loop.
+            st.session_state.pop("result_selected_id", None)
 
 selected_result_id = st.session_state.get("result_selected_id")
 selected_result = (

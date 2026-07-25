@@ -147,6 +147,8 @@ else:
     idx = clickable_table(filtered_df.to_dict("records"), key="rawmat_table")
     if idx is not None:
         st.session_state["rawmat_selected_id"] = filtered_materials[idx].id
+    else:
+        st.session_state.pop("rawmat_selected_id", None)
 
     selected_id = st.session_state.get("rawmat_selected_id")
     selected = next((m for m in materials if m.id == selected_id), None)

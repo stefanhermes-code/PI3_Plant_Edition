@@ -54,6 +54,8 @@ else:
     idx = clickable_table(plant_rows, key="plants_table")
     if idx is not None:
         st.session_state["plant_selected_id"] = plants[idx].id
+    else:
+        st.session_state.pop("plant_selected_id", None)
 
     selected_plant_id = st.session_state.get("plant_selected_id")
     selected_plant = next((p for p in plants if p.id == selected_plant_id), None)
@@ -158,6 +160,8 @@ else:
         idx = clickable_table(machine_rows, key="machines_table")
         if idx is not None:
             st.session_state["machine_selected_id"] = machines[idx].id
+        else:
+            st.session_state.pop("machine_selected_id", None)
 
         selected_machine_id = st.session_state.get("machine_selected_id")
         selected_machine = next((m for m in machines if m.id == selected_machine_id), None)

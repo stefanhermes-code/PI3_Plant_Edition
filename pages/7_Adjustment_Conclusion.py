@@ -81,6 +81,8 @@ if trial.adjustment_conclusions:
     idx = clickable_table(adj_rows, key=f"adj_table_{trial.id}")
     if idx is not None:
         st.session_state["adj_selected_id"] = trial.adjustment_conclusions[idx].id
+    else:
+        st.session_state.pop("adj_selected_id", None)
 
     selected_adj_id = st.session_state.get("adj_selected_id")
     selected_adj = session.query(AdjustmentConclusion).filter(AdjustmentConclusion.id == selected_adj_id).first()
