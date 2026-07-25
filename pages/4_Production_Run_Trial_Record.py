@@ -115,6 +115,35 @@ def _run_label(r):
     return f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}"
 
 
+def _max_batch_seq_for_prefix(session, prefix):
+    """Highest existing sequence number already used under a given
+    'B-DDMMYY' prefix. Uses the max, not a count, so a deleted or
+    out-of-order batch reference never causes a duplicate number to be
+    reissued."""
+    existing = (
+        session.query(ProductionRun.batch_reference)
+        .filter(ProductionRun.batch_reference.like(f"{prefix}-%"))
+        .all()
+    )
+    max_seq = 0
+    for (br,) in existing:
+        if not br:
+            continue
+        tail = br.rsplit("-", 1)[-1]
+        if tail.isdigit():
+            max_seq = max(max_seq, int(tail))
+    return max_seq
+
+
+def _generate_batch_reference(session, run_date):
+    """Auto-generate a batch reference as B-DDMMYY-NN (e.g. B-240726-01),
+    NN scoped per calendar day so it resets daily and stays short. Manual
+    batch numbers are error-prone (typos, accidental duplicates) so this
+    is computed rather than typed."""
+    prefix = f"B-{run_date:%d%m%y}"
+    return f"{prefix}-{_max_batch_seq_for_prefix(session, prefix) + 1:02d}"
+
+
 def _run_selector(runs, key):
     """Selectbox defaulting to the run selected elsewhere on the page
     (st.session_state['pr_selected_run_id']), keeping every tab in sync."""
@@ -264,6 +293,8 @@ with tab_runs:
                     batch_reference = st.text_input(
                         "Batch reference", value=selected_run.batch_reference or "",
                         key=f"edit_run_batch_{selected_run.id}",
+                        help="Auto-generated when the run was created (B-DDMMYY-NN). Only change this "
+                        "to correct a genuine mistake.",
                     )
                     block_reference = st.text_input(
                         "Block reference", value=selected_run.block_reference or "",
@@ -320,6 +351,15 @@ with tab_runs:
         sub_manual, sub_import = st.tabs(["Manual entry", "CSV / Excel import"])
 
         with sub_manual:
+            # run_date lives outside the form so the batch-reference preview
+            # below updates live as it's changed, before the operator commits
+            # to saving - forms otherwise only release widget values on submit.
+            run_date = st.date_input("Run date", value=dt.date.today(), key="create_run_date")
+            batch_reference = _generate_batch_reference(session, run_date)
+            st.caption(
+                f"Batch reference (auto-generated, prevents typos/duplicates): **{batch_reference}**"
+            )
+
             with st.form("add_run"):
                 grade = st.selectbox("Foam grade *", grades, format_func=lambda g: g.grade_name)
                 versions = (
@@ -342,8 +382,6 @@ with tab_runs:
                     [None] + machines_for_plant,
                     format_func=lambda m: "— not selected —" if m is None else f"{m.name} ({m.oem or 'OEM —'})",
                 )
-                run_date = st.date_input("Run date", value=dt.date.today())
-                batch_reference = st.text_input("Batch reference")
                 block_reference = st.text_input("Block reference")
                 operator = st.text_input("Operator / team reference")
                 notes = st.text_area("Notes")
@@ -358,7 +396,7 @@ with tab_runs:
                             foam_grade_id=grade.id,
                             recipe_version_id=recipe_version.id,
                             run_date=run_date,
-                            batch_reference=batch_reference,
+                            batch_reference=_generate_batch_reference(session, run_date),
                             block_reference=block_reference,
                             machine_id=machine.id if machine else None,
                             operator_or_team_reference=operator,
@@ -367,7 +405,7 @@ with tab_runs:
                         session.add(run)
                         session.commit()
                         st.session_state["pr_selected_run_id"] = run.id
-                        st.success("Production run created.")
+                        st.success(f"Production run created. Batch reference: {run.batch_reference}.")
                         st.rerun()
 
         with sub_import:
@@ -404,17 +442,30 @@ with tab_runs:
                     st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
 
                 if good_rows and st.button("Confirm import", key="confirm_run_import"):
+                    # Rows that already carry a batch_reference (e.g. migrating a
+                    # historical log) keep it as-is; blank ones get auto-generated,
+                    # tracking the running sequence per day in-memory so multiple
+                    # blank rows for the same date in one file don't collide.
+                    seq_by_prefix = {}
                     for row in good_rows:
                         grade_row = grades_by_id[row["foam_grade_id"]]
                         machine_val = row.get("machine_id")
                         run_date_val = pd.to_datetime(row.get("run_date"), errors="coerce")
+                        final_run_date = run_date_val.date() if not pd.isna(run_date_val) else dt.date.today()
+                        batch_val = str(row.get("batch_reference", "") or "").strip()
+                        if not batch_val:
+                            prefix = f"B-{final_run_date:%d%m%y}"
+                            if prefix not in seq_by_prefix:
+                                seq_by_prefix[prefix] = _max_batch_seq_for_prefix(session, prefix)
+                            seq_by_prefix[prefix] += 1
+                            batch_val = f"{prefix}-{seq_by_prefix[prefix]:02d}"
                         session.add(
                             ProductionRun(
                                 plant_id=grade_row.product_family.plant_id,
                                 foam_grade_id=grade_row.id,
                                 recipe_version_id=int(row["recipe_version_id"]),
-                                run_date=run_date_val.date() if not pd.isna(run_date_val) else dt.date.today(),
-                                batch_reference=str(row.get("batch_reference", "") or ""),
+                                run_date=final_run_date,
+                                batch_reference=batch_val,
                                 block_reference=str(row.get("block_reference", "") or ""),
                                 machine_id=int(machine_val) if not pd.isna(machine_val) else None,
                                 operator_or_team_reference=str(row.get("operator_or_team_reference", "") or ""),
