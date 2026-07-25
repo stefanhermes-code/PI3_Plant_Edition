@@ -1,10 +1,10 @@
 """
-PI3 Plant Edition - v0.1 internal prototype
+PI3 Plant Edition
 Simple role-gated login.
 
-v0.1 is an internal prototype for a small technical team, so authentication
-is deliberately simple: named users with a role, defined in st.secrets.
-This is NOT a full identity/SSO system - that is out of scope for v0.1.
+This is an internal tool for a small technical team, so authentication is
+deliberately simple: named users with a role, defined in st.secrets. This
+is NOT a full identity/SSO system - that remains out of scope for now.
 
 Roles: admin, technical, viewer
 - admin:     full access, including Maintenance/License Admin and PI3/AI toggle
@@ -47,7 +47,7 @@ def require_login():
     users = _users_from_secrets()
 
     st.title("PI3 Plant Edition")
-    st.caption("Internal v0.1 prototype - flexible slabstock foam expert system")
+    st.caption("Flexible slabstock foam expert system")
 
     if not users:
         st.warning(

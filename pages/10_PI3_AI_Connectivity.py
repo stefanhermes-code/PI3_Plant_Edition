@@ -1,4 +1,4 @@
-"""Screen 11: PI3/AI Connectivity (placeholder)
+"""Screen 11: PI3/AI Connectivity
 
 Standard version (always included): Search, Compare, Retrieve, Structure,
 Report, Review and Approval.
@@ -9,8 +9,10 @@ interface. Separate annual fee. Disabled unless explicitly enabled in
 admin settings. Even when enabled, final decisions require human review
 and approval — no autonomous formulation commands, ever.
 
-This is a placeholder in v0.1: the toggle and commercial fields exist, but
-no PI3/AI reasoning layer is implemented yet.
+This screen owns the per-plant enable/disable toggle and commercial fee.
+The actual PI3/AI reasoning layer (an OpenAI Assistant with a vector store
+over historical trial narratives and expert notes) is being wired in - see
+ai_assistant.py once that lands.
 """
 
 import datetime as dt
@@ -27,10 +29,10 @@ require_login()
 logout_button()
 
 st.title("PI3/AI Connectivity")
-st.warning(
-    "Placeholder screen. Standard PI3 Plant Edition (search, compare, retrieve, "
-    "structure, report, review and approval) is fully available without this add-on. "
-    "PI3/AI connectivity is optional, separately billed, and disabled by default."
+st.info(
+    "Standard PI3 Plant Edition (search, compare, retrieve, structure, report, review "
+    "and approval) is fully available without this add-on. PI3/AI connectivity is "
+    "optional, separately billed, and disabled by default per plant."
 )
 
 session = get_session()

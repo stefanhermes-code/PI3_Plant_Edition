@@ -1,5 +1,5 @@
 """
-PI3 Plant Edition - v0.1 internal prototype
+PI3 Plant Edition
 Main entry point / navigation router.
 
 HTC Global Co. Ltd - flexible slabstock foam expert system, commercialised
@@ -72,7 +72,7 @@ def render_overview():
         st.title("PI3 — Flexible PU Foam Intelligence")
         st.caption(
             "Product Dashboard | Flexible slabstock foam expert system | "
-            "HTC Global Co. Ltd | Internal v0.1 prototype"
+            "HTC Global Co. Ltd"
         )
 
     session = get_session()
@@ -199,6 +199,7 @@ industrial_intelligence_pages = [
     st.Page("pages/18_Root_Cause_Assistant.py", title="Root-Cause Assistant", icon="🩺"),
     st.Page("pages/19_Machine_Settings_Optimization.py", title="Machine Settings Optimization", icon="⚙️"),
     st.Page("pages/9_Similar_Case_Retrieval.py", title="Similar Case Retrieval", icon="🧭"),
+    st.Page("pages/20_Expert_Notes.py", title="Expert Notes", icon="🧠"),
 ]
 
 admin_pages = [

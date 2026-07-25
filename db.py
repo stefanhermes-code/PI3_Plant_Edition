@@ -740,6 +740,11 @@ class ExpertNote(Base):
     note_text = Column(Text, nullable=False)
     confidence_level = Column(String(50), default="Unconfirmed")
     author = Column(String(200))
+    # OpenAI file id for this note's copy in the PI3/AI vector store (see
+    # ai_assistant.py), so an edit/delete here can resync/remove that file
+    # instead of leaving a stale copy searchable. Null if PI3/AI wasn't
+    # enabled for the relevant plant when the note was saved.
+    vector_store_file_id = Column(String(200))
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
 
