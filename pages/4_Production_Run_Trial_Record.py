@@ -1140,6 +1140,7 @@ with tab_streams:
                             st.rerun()
 
             with sub_import:
+                show_pending_banner("stream_import_msg")
                 st.caption(
                     "Required columns: " + ", ".join(STREAM_REQUIRED_COLUMNS) + ". Optional columns: "
                     + ", ".join(STREAM_OPTIONAL_COLUMNS) + ". Each row's production_run_id must already have "
@@ -1181,7 +1182,26 @@ with tab_streams:
                                 st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
 
                             if good_rows and st.button("Confirm import", key="confirm_stream_import"):
-                                for row, phase_id in zip(good_rows, resolved_phase_ids):
+                                # Dedupe on (production_run_id, stream_name): a repeat click of
+                                # this button (e.g. because the previous success message wasn't
+                                # visibly persistent) must not double-insert the same material's
+                                # reading for the same run.
+                                existing_keys = {
+                                    (r.phase.production_run_id, r.stream_name.strip().lower())
+                                    for r in session.query(ComponentStreamReading).all()
+                                    if r.phase
+                                }
+                                paired = list(zip(good_rows, resolved_phase_ids))
+                                accept, dup = [], []
+                                for row, phase_id in paired:
+                                    key = (row["production_run_id"], str(row["stream_name"]).strip().lower())
+                                    if key in existing_keys:
+                                        dup.append(row)
+                                    else:
+                                        existing_keys.add(key)
+                                        accept.append((row, phase_id))
+
+                                for row, phase_id in accept:
                                     session.add(
                                         ComponentStreamReading(
                                             production_phase_id=phase_id,
@@ -1199,7 +1219,13 @@ with tab_streams:
                                         )
                                     )
                                 session.commit()
-                                st.success(f"Imported {len(good_rows)} stream reading(s) from {uploaded.name}.")
+                                msg = f"Imported {len(accept)} stream reading(s) from {uploaded.name}."
+                                if dup:
+                                    msg += (
+                                        f" Skipped {len(dup)} row(s) already recorded for that run/material "
+                                        "(likely a repeat click)."
+                                    )
+                                set_pending_banner("stream_import_msg", msg)
                                 st.rerun()
 
 # ---------------------------------------------------------------------------

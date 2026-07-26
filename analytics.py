@@ -19,7 +19,14 @@ instead.
 
 import pandas as pd
 
-from db import PhysicalPropertyResult, ProductionPhase, ProductionRun, RawMaterial, RecipeVersion
+from db import (
+    ComponentStreamReading,
+    PhysicalPropertyResult,
+    ProductionPhase,
+    ProductionRun,
+    RawMaterial,
+    RecipeVersion,
+)
 
 # Machine/process settings captured per phase (see ProductionPhase in
 # db.py). These are the fields every process-vs-quality analysis works
@@ -395,6 +402,131 @@ def rank_component_correlations(session, foam_grade_id, property_name, min_versi
         if pd.isna(corr):
             continue
         rows.append({"raw_material_name": material, "n_versions": len(php_map), "correlation": round(corr, 3)})
+
+    ranked = pd.DataFrame(rows)
+    if not ranked.empty:
+        ranked["_abs"] = ranked["correlation"].abs()
+        ranked = ranked.sort_values("_abs", ascending=False).drop(columns=["_abs"]).reset_index(drop=True)
+    return ranked
+
+
+# ---------------------------------------------------------------------------
+# Actual (metered) usage vs. outcome - the per-run counterpart to
+# rank_component_correlations above.
+# ---------------------------------------------------------------------------
+# A recipe version's php is a target, not a measurement: the same recipe
+# version, run a hundred times, does not meter out the exact same dosage of
+# every material every time - that is what the flow meters on
+# ComponentStreamReading exist to capture. rank_component_correlations only
+# asks "does changing the PLANNED formulation matter" and needs several
+# recipe versions to say anything at all. The functions below ask the
+# question a plant running one settled recipe actually needs answered:
+# "does this run's ACTUAL metered dosage of each material line up with this
+# run's actual outcome" - with n = number of production runs, not number of
+# recipe versions, so it works even for a grade with a single recipe version
+# that has simply been run (and metered, and tested) many times.
+
+
+def actual_usage_dataframe(session, foam_grade_id=None):
+    """One row per (production run, raw-material stream): that stream's
+    actual delivered quantity for the run's Finalized phase, re-expressed as
+    an actual-php-equivalent using the run's own Base-polyol stream reading
+    as the 100-parts basis - the same convention every planned recipe uses,
+    computed here from what the flow meters actually measured for that one
+    batch instead of from the recipe. Runs with no Finalized-phase stream
+    readings, or with no identifiable Base-polyol reading to normalize
+    against, are skipped rather than guessed at."""
+    q = session.query(ProductionRun)
+    if foam_grade_id:
+        q = q.filter(ProductionRun.foam_grade_id == foam_grade_id)
+    runs = q.all()
+
+    rows = []
+    for run in runs:
+        phase = (
+            session.query(ProductionPhase)
+            .filter(
+                ProductionPhase.production_run_id == run.id,
+                ProductionPhase.phase_name == "Finalized",
+            )
+            .first()
+        )
+        if phase is None:
+            continue
+        readings = (
+            session.query(ComponentStreamReading)
+            .filter(ComponentStreamReading.production_phase_id == phase.id)
+            .all()
+        )
+        if not readings:
+            continue
+
+        recipe_version = run.recipe_version
+        polyol_name = None
+        if recipe_version:
+            for c in recipe_version.components:
+                if c.role_in_formulation and "base polyol" in c.role_in_formulation.strip().lower():
+                    polyol_name = c.raw_material_name.strip().lower()
+                    break
+        if polyol_name is None:
+            continue
+
+        polyol_reading = next(
+            (r for r in readings if r.stream_name and r.stream_name.strip().lower() == polyol_name), None
+        )
+        if polyol_reading is None or not polyol_reading.flow_total_qty:
+            continue
+        polyol_qty = polyol_reading.flow_total_qty
+
+        for r in readings:
+            if r.flow_total_qty is None:
+                continue
+            rows.append(
+                {
+                    "run_id": run.id,
+                    "foam_grade_id": run.foam_grade_id,
+                    "recipe_version_id": run.recipe_version_id,
+                    "stream_name": r.stream_name,
+                    "flow_total_qty": r.flow_total_qty,
+                    "actual_php_equivalent": round((r.flow_total_qty / polyol_qty) * 100, 4),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def rank_component_actual_correlations(session, foam_grade_id, property_name, min_runs=3):
+    """For every raw-material stream with metered readings for this grade,
+    correlate its ACTUAL per-run dosage (see actual_usage_dataframe) against
+    that same run's actual outcome for the chosen property, ranked by
+    |correlation| descending.
+
+    Needs real per-run variation to say anything: a material must have
+    metered readings paired with a quality result for at least `min_runs`
+    production runs, or it's excluded rather than shown as a misleading
+    correlation. Returns an empty DataFrame if nothing qualifies -
+    callers should treat that as "not enough metered/tested runs yet", not
+    as "no relationship found"."""
+    usage_df = actual_usage_dataframe(session, foam_grade_id=foam_grade_id)
+    if usage_df.empty:
+        return pd.DataFrame()
+
+    results_df = property_results_dataframe(session, foam_grade_id=foam_grade_id, property_name=property_name)
+    if results_df.empty:
+        return pd.DataFrame()
+    per_run_result = results_df.groupby("run_id")["actual_value"].mean()
+
+    rows = []
+    for material, sub in usage_df.groupby("stream_name"):
+        php_series = sub.set_index("run_id")["actual_php_equivalent"]
+        outcome_series = per_run_result.reindex(php_series.index)
+        paired = pd.DataFrame({"php": php_series, "outcome": outcome_series}).dropna()
+        n = len(paired)
+        if n < min_runs:
+            continue
+        corr = paired["php"].corr(paired["outcome"])
+        if pd.isna(corr):
+            continue
+        rows.append({"raw_material_name": material, "n_runs": n, "correlation": round(corr, 3)})
 
     ranked = pd.DataFrame(rows)
     if not ranked.empty:

@@ -16,6 +16,7 @@ import ai_assistant
 from analytics import (
     pass_rate,
     property_results_dataframe,
+    rank_component_actual_correlations,
     rank_component_correlations,
     recipe_version_cost,
     recipe_version_diff,
@@ -173,43 +174,83 @@ else:
 # ---------------------------------------------------------------------------
 st.divider()
 st.subheader("Which ingredient drives each outcome")
+st.caption(
+    "Two different questions, both worth asking: does this run's ACTUAL metered dosage of a "
+    "material line up with this run's actual outcome (the batch-to-batch metering variance a "
+    "settled recipe will always have), and separately, does changing the PLANNED recipe from "
+    "one version to the next line up with a shift in outcome. The first uses flow-meter "
+    "readings per production run; the second uses the target php recorded on each recipe "
+    "version - they can and often will point to different answers."
+)
 if not available_properties:
     st.info("No quality test results recorded yet - nothing to correlate ingredient dosage against.")
-elif len(versions) < 3:
-    st.info(
-        f"This foam grade currently has {len(versions)} recipe version(s). Correlating an "
-        "ingredient's dosage against outcomes needs at least 3 versions with varying php and "
-        "recorded results - not enough version history yet to say which ingredient matters."
-    )
 else:
     corr_property = st.selectbox(
         "Property", available_properties, key=f"corr_property_{grade.id}"
     )
-    component_ranked = rank_component_correlations(session, grade.id, corr_property)
-    if component_ranked.empty:
+
+    st.markdown("**By actual metered dosage (per production run)**")
+    actual_ranked = rank_component_actual_correlations(session, grade.id, corr_property)
+    if actual_ranked.empty:
         st.info(
-            f"No raw material appears (with a recorded php) across enough versions with "
-            f"{corr_property} results to compute a correlation yet."
+            f"No raw-material stream has metered readings paired with {corr_property} results "
+            "across at least 3 production runs yet - import Component Stream Readings for the "
+            "Finalized phase of more runs to unlock this."
         )
     else:
         st.dataframe(
-            component_ranked.rename(
+            actual_ranked.rename(
                 columns={
                     "raw_material_name": "Raw material",
-                    "n_versions": "Versions compared",
+                    "n_runs": "Runs compared",
                     "correlation": "Correlation with outcome",
                 }
             ),
             hide_index=True,
             use_container_width=True,
         )
-        top_component = component_ranked.iloc[0]
+        top_actual = actual_ranked.iloc[0]
         st.caption(
-            f"Strongest association for {corr_property}: **{top_component['raw_material_name']}** "
-            f"(correlation {top_component['correlation']:+.3f} across "
-            f"{int(top_component['n_versions'])} versions). Review applicability against current "
-            "raw materials and process conditions before adjusting dosage."
+            f"Strongest association for {corr_property}: **{top_actual['raw_material_name']}** "
+            f"(correlation {top_actual['correlation']:+.3f} across "
+            f"{int(top_actual['n_runs'])} production runs' metered dosage). Review applicability "
+            "against current raw materials and process conditions before adjusting dosage."
         )
+
+    st.markdown("**By planned recipe version**")
+    if len(versions) < 3:
+        st.info(
+            f"This foam grade currently has {len(versions)} recipe version(s). Correlating the "
+            "PLANNED php against outcomes needs at least 3 versions with varying php and "
+            "recorded results - not enough version history yet to say whether changing the "
+            "target formulation matters."
+        )
+    else:
+        component_ranked = rank_component_correlations(session, grade.id, corr_property)
+        if component_ranked.empty:
+            st.info(
+                f"No raw material appears (with a recorded php) across enough versions with "
+                f"{corr_property} results to compute a correlation yet."
+            )
+        else:
+            st.dataframe(
+                component_ranked.rename(
+                    columns={
+                        "raw_material_name": "Raw material",
+                        "n_versions": "Versions compared",
+                        "correlation": "Correlation with outcome",
+                    }
+                ),
+                hide_index=True,
+                use_container_width=True,
+            )
+            top_component = component_ranked.iloc[0]
+            st.caption(
+                f"Strongest association for {corr_property}: **{top_component['raw_material_name']}** "
+                f"(correlation {top_component['correlation']:+.3f} across "
+                f"{int(top_component['n_versions'])} versions). Review applicability against current "
+                "raw materials and process conditions before adjusting dosage."
+            )
 
 # ---------------------------------------------------------------------------
 # Recipes (version controlled) - raw ingredient list per version
@@ -310,24 +351,44 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
                     + "\n".join(diff_lines)
                 )
 
-        correlation_lines = []
+        actual_correlation_lines = []
+        for prop in available_properties:
+            ranked = rank_component_actual_correlations(session, grade.id, prop)
+            if ranked.empty:
+                continue
+            top3 = ranked.head(3)
+            actual_correlation_lines.append(
+                f"{prop}: "
+                + "; ".join(
+                    f"{r['raw_material_name']} (r={r['correlation']:+.3f}, n={int(r['n_runs'])} runs)"
+                    for _, r in top3.iterrows()
+                )
+            )
+        actual_correlation_summary = (
+            "\n".join(actual_correlation_lines)
+            if actual_correlation_lines
+            else "Not enough metered stream-reading data paired with quality results yet to correlate "
+            "actual per-run dosage with outcomes."
+        )
+
+        planned_correlation_lines = []
         if len(versions) >= 3:
             for prop in available_properties:
                 ranked = rank_component_correlations(session, grade.id, prop)
                 if ranked.empty:
                     continue
                 top3 = ranked.head(3)
-                correlation_lines.append(
+                planned_correlation_lines.append(
                     f"{prop}: "
                     + "; ".join(
-                        f"{r['raw_material_name']} (r={r['correlation']:+.3f}, n={int(r['n_versions'])})"
+                        f"{r['raw_material_name']} (r={r['correlation']:+.3f}, n={int(r['n_versions'])} versions)"
                         for _, r in top3.iterrows()
                     )
                 )
-        correlation_summary = (
-            "\n".join(correlation_lines)
-            if correlation_lines
-            else "Not enough recipe version history yet to correlate individual ingredients with outcomes."
+        planned_correlation_summary = (
+            "\n".join(planned_correlation_lines)
+            if planned_correlation_lines
+            else "Not enough recipe version history yet to correlate the planned formulation with outcomes."
         )
 
         outcome_lines = []
@@ -346,11 +407,16 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "You are helping a technical reviewer at a flexible slabstock foam manufacturer "
             f"select a formulation direction for {grade.grade_name}. Below is this foam grade's "
             "recipe version history: formulation composition, formulation cost, the most recent "
-            "version-to-version change, which ingredient's dosage is statistically associated "
-            "with each quality outcome, and quality test outcomes by version. Use this "
-            "quantified data - not just the ingredient list - as the basis of your reasoning, "
-            "plus any relevant expert notes or historical cases in the connected knowledge "
-            "base, to propose a formulation that could meet the target properties given.\n\n"
+            "version-to-version change, which ingredient's ACTUAL metered per-run dosage is "
+            "statistically associated with each quality outcome, which ingredient's PLANNED "
+            "recipe-version php is separately associated with each outcome, and quality test "
+            "outcomes by version. The actual-dosage correlations reflect real batch-to-batch "
+            "metering variance under the current recipe and are the stronger signal for "
+            "day-to-day process guidance; the planned-version correlations only speak to what "
+            "happens when the target formulation itself changes. Use this quantified data - not "
+            "just the ingredient list - as the basis of your reasoning, plus any relevant expert "
+            "notes or historical cases in the connected knowledge base, to propose a formulation "
+            "that could meet the target properties given.\n\n"
             "Phrase this as a recommendation for the reviewer to evaluate and confirm through "
             "their own trial process, addressed directly to the target properties requested. "
             "Where you rely on a specific cost, diff, or correlation figure below, refer to it "
@@ -359,8 +425,10 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             f"Recipe versions and composition:\n{composition_summary}\n\n"
             f"Formulation cost by version:\n{cost_summary}\n\n"
             f"Most recent formulation change:\n{diff_summary}\n\n"
-            f"Ingredient-outcome correlations (top 3 per property, where enough version history "
-            f"exists):\n{correlation_summary}\n\n"
+            f"Actual metered dosage vs. outcome correlations (top 3 per property, per production "
+            f"run):\n{actual_correlation_summary}\n\n"
+            f"Planned recipe-version php vs. outcome correlations (top 3 per property, where "
+            f"enough version history exists):\n{planned_correlation_summary}\n\n"
             f"Quality test outcomes by version:\n{outcome_summary}\n\n"
             f"Target properties requested:\n{target_properties.strip()}\n"
         )
