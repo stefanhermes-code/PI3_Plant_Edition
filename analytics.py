@@ -144,3 +144,97 @@ def merged_run_property_dataframe(session, foam_grade_id, property_name):
     )
     merged = settings_df.merge(per_run_result, on="run_id", how="inner")
     return merged
+
+
+def rank_setting_correlations(session, foam_grade_id, property_name):
+    """For EVERY process setting at once, compute its correlation with the
+    chosen property's actual value across this grade's runs, ranked by
+    |correlation| descending. This is the difference between "intelligence"
+    and "a graph you have to already know where to point": instead of
+    picking one setting and hoping it's the relevant one, the reviewer sees
+    immediately which of the 7 settings actually moves this property, and
+    by how much, before drilling into any single scatter plot."""
+    merged = merged_run_property_dataframe(session, foam_grade_id, property_name)
+    rows = []
+    for field in PHASE_SETTING_FIELDS:
+        if merged.empty:
+            sub = merged
+        else:
+            sub = merged.dropna(subset=[field, "actual_value"])
+        n = len(sub)
+        corr = round(sub[field].corr(sub["actual_value"]), 3) if n >= 3 else None
+        rows.append({"field": field, "label": PHASE_SETTING_LABELS.get(field, field), "n": n, "correlation": corr})
+    ranked = pd.DataFrame(rows)
+    ranked["_abs"] = ranked["correlation"].abs()
+    ranked = ranked.sort_values("_abs", ascending=False, na_position="last").drop(columns=["_abs"]).reset_index(drop=True)
+    return ranked
+
+
+def rank_setting_optimization(session, foam_grade_id, property_name):
+    """For EVERY process setting, bucket its values into Low/Medium/High (or
+    Low/High) ranges and measure the gap between the best- and
+    worst-performing range's average absolute deviation from target. A
+    bigger gap means that setting more clearly separates good outcomes from
+    bad ones for this grade/property - ranked so the most actionable
+    setting surfaces first, instead of the reviewer checking each of the 7
+    settings one at a time to find out which one matters."""
+    merged = merged_run_property_dataframe(session, foam_grade_id, property_name)
+    rows = []
+    for field in PHASE_SETTING_FIELDS:
+        label = PHASE_SETTING_LABELS.get(field, field)
+        empty_row = {
+            "field": field, "label": label, "n": 0,
+            "best_range": None, "best_range_setting": None,
+            "best_range_avg_dev_pct": None, "spread_pct": None,
+        }
+        if merged.empty:
+            rows.append(empty_row)
+            continue
+        sub = merged.dropna(subset=[field, "actual_value"]).copy()
+        if len(sub) < 3:
+            empty_row["n"] = len(sub)
+            rows.append(empty_row)
+            continue
+
+        sub["deviation_pct"] = ((sub["actual_value"] - sub["target_value"]) / sub["target_value"]).abs()
+        sub.loc[sub["target_value"].isna() | (sub["target_value"] == 0), "deviation_pct"] = float("nan")
+
+        range_col = None
+        for q, labels in ((3, ["Low", "Medium", "High"]), (2, ["Low", "High"])):
+            try:
+                range_col = pd.qcut(sub[field], q=q, labels=labels, duplicates="drop")
+                break
+            except ValueError:
+                continue
+        if range_col is None or range_col.nunique(dropna=True) < 2:
+            empty_row["n"] = len(sub)
+            rows.append(empty_row)
+            continue
+
+        sub["range"] = range_col
+        summary = (
+            sub.groupby("range", observed=True)
+            .agg(avg_dev=("deviation_pct", "mean"), setting_range=(field, lambda s: f"{s.min():g}–{s.max():g}"))
+            .dropna(subset=["avg_dev"])
+        )
+        if summary.empty:
+            empty_row["n"] = len(sub)
+            rows.append(empty_row)
+            continue
+
+        summary = summary.sort_values("avg_dev")
+        best, worst = summary.iloc[0], summary.iloc[-1]
+        rows.append(
+            {
+                "field": field,
+                "label": label,
+                "n": len(sub),
+                "best_range": summary.index[0],
+                "best_range_setting": best["setting_range"],
+                "best_range_avg_dev_pct": round(best["avg_dev"] * 100, 1),
+                "spread_pct": round((worst["avg_dev"] - best["avg_dev"]) * 100, 1),
+            }
+        )
+    ranked = pd.DataFrame(rows)
+    ranked = ranked.sort_values("spread_pct", ascending=False, na_position="last").reset_index(drop=True)
+    return ranked
