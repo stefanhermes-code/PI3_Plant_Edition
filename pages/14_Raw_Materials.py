@@ -37,7 +37,7 @@ def _extract_pdf_text(uploaded_file):
         return ""
 
 RAW_MATERIAL_REQUIRED_COLUMNS = ["name"]
-RAW_MATERIAL_OPTIONAL_COLUMNS = ["category", "default_supplier", "notes", "active"]
+RAW_MATERIAL_OPTIONAL_COLUMNS = ["category", "default_supplier", "cost_per_kg", "notes", "active"]
 
 page_setup("Raw Materials")
 init_db()
@@ -57,9 +57,17 @@ tab_manual, tab_tds, tab_import = st.tabs(["Manual entry", "Add from TDS", "CSV 
 with tab_manual:
     with st.form("add_raw_material"):
         name = st.text_input("Raw material name *")
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         category = c1.selectbox("Category", RAW_MATERIAL_CATEGORIES)
         default_supplier = c2.text_input("Default supplier")
+        cost_per_kg = c3.number_input(
+            "Cost per kg",
+            min_value=0.0,
+            step=0.01,
+            value=0.0,
+            help="Leave at 0 if not known yet - recipe cost calculations skip materials with no cost recorded "
+            "rather than treating them as free.",
+        )
         notes = st.text_area("Notes")
         active = st.checkbox("Active", value=True)
         submitted = st.form_submit_button("Save raw material")
@@ -72,6 +80,7 @@ with tab_manual:
                         name=name.strip(),
                         category=category,
                         default_supplier=default_supplier,
+                        cost_per_kg=cost_per_kg or None,
                         notes=notes,
                         active=active,
                     )
@@ -128,6 +137,13 @@ with tab_tds:
             index=RAW_MATERIAL_CATEGORIES.index(tds_category) if tds_category in RAW_MATERIAL_CATEGORIES else 0,
         )
         t_supplier = tc2.text_input("Default supplier", value=tds_extracted.get("default_supplier", ""))
+        t_cost = st.number_input(
+            "Cost per kg",
+            min_value=0.0,
+            step=0.01,
+            value=0.0,
+            help="A TDS doesn't carry pricing - enter it here if you know it, or leave at 0 and add it later.",
+        )
         t_notes = st.text_area("Notes", value=tds_extracted.get("notes", ""), height=150)
         t_active = st.checkbox("Active", value=True, key="tds_active")
         if st.form_submit_button("Save raw material (from TDS)"):
@@ -139,6 +155,7 @@ with tab_tds:
                         name=t_name.strip(),
                         category=t_category,
                         default_supplier=t_supplier,
+                        cost_per_kg=t_cost or None,
                         notes=t_notes,
                         active=t_active,
                     )
@@ -172,11 +189,13 @@ with tab_import:
         if good_rows and st.button("Confirm import", key="confirm_rawmat_import"):
             for row in good_rows:
                 cat = str(row.get("category", "") or "").strip()
+                cost_val = row.get("cost_per_kg")
                 session.add(
                     RawMaterial(
                         name=str(row["name"]).strip(),
                         category=cat if cat in RAW_MATERIAL_CATEGORIES else (cat or "Other"),
                         default_supplier=str(row.get("default_supplier", "") or ""),
+                        cost_per_kg=float(cost_val) if not pd.isna(cost_val) else None,
                         notes=str(row.get("notes", "") or ""),
                         active=True if pd.isna(row.get("active")) else parse_bool(row.get("active")),
                     )
@@ -198,6 +217,7 @@ else:
                 "Name": m.name,
                 "Category": m.category or "—",
                 "Default supplier": m.default_supplier or "",
+                "Cost/kg": m.cost_per_kg,
                 "Active": m.active,
                 "Notes": m.notes or "",
             }
@@ -250,7 +270,7 @@ else:
         st.subheader(f"Edit: {selected.name}")
         with st.form(f"edit_rawmat_{selected.id}"):
             e_name = st.text_input("Raw material name *", value=selected.name, key=f"edit_rawmat_name_{selected.id}")
-            ec1, ec2 = st.columns(2)
+            ec1, ec2, ec3 = st.columns(3)
             e_category = ec1.selectbox(
                 "Category",
                 RAW_MATERIAL_CATEGORIES,
@@ -259,6 +279,10 @@ else:
             )
             e_supplier = ec2.text_input(
                 "Default supplier", value=selected.default_supplier or "", key=f"edit_rawmat_supplier_{selected.id}"
+            )
+            e_cost = ec3.number_input(
+                "Cost per kg", min_value=0.0, step=0.01, value=float(selected.cost_per_kg or 0.0),
+                key=f"edit_rawmat_cost_{selected.id}",
             )
             e_notes = st.text_area("Notes", value=selected.notes or "", key=f"edit_rawmat_notes_{selected.id}")
             e_active = st.checkbox("Active", value=selected.active, key=f"edit_rawmat_active_{selected.id}")
@@ -269,6 +293,7 @@ else:
                     selected.name = e_name.strip()
                     selected.category = e_category
                     selected.default_supplier = e_supplier
+                    selected.cost_per_kg = e_cost or None
                     selected.notes = e_notes
                     selected.active = e_active
                     session.commit()

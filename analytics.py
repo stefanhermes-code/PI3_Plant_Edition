@@ -19,7 +19,7 @@ instead.
 
 import pandas as pd
 
-from db import PhysicalPropertyResult, ProductionPhase, ProductionRun
+from db import PhysicalPropertyResult, ProductionPhase, ProductionRun, RawMaterial, RecipeVersion
 
 # Machine/process settings captured per phase (see ProductionPhase in
 # db.py). These are the fields every process-vs-quality analysis works
@@ -237,4 +237,167 @@ def rank_setting_optimization(session, foam_grade_id, property_name):
         )
     ranked = pd.DataFrame(rows)
     ranked = ranked.sort_values("spread_pct", ascending=False, na_position="last").reset_index(drop=True)
+    return ranked
+
+
+# ---------------------------------------------------------------------------
+# Recipe Optimization: cost, version diff, component-level correlation
+# ---------------------------------------------------------------------------
+# These three functions are what turn "a table of ingredients" and "a table
+# of quality outcomes" into an actual optimization view: what does this
+# formulation cost, what specifically changed between two versions, and
+# which raw material's dosage is actually associated with which property -
+# instead of leaving the reviewer to eyeball two ingredient lists and a
+# results table side by side.
+
+
+def _resolve_component_cost_per_kg(session, component, raw_material_cache):
+    """Cost/kg for a recipe component: prefer the linked RawMaterial (by
+    raw_material_id), fall back to a case-insensitive name match against
+    the Raw Materials master list (covers components entered as free text
+    before a matching master record existed). Returns None if no cost is
+    recorded anywhere for this material - callers must treat that as
+    "unknown", never as zero."""
+    if component.raw_material_id and component.raw_material_id in raw_material_cache:
+        rm = raw_material_cache[component.raw_material_id]
+        if rm and rm.cost_per_kg is not None:
+            return rm.cost_per_kg
+    name_key = (component.raw_material_name or "").strip().lower()
+    for rm in raw_material_cache.values():
+        if rm and rm.name.strip().lower() == name_key and rm.cost_per_kg is not None:
+            return rm.cost_per_kg
+    return None
+
+
+def recipe_version_cost(session, recipe_version):
+    """Formulation cost for one recipe version, in cost per 100 parts (the
+    standard php-based costing convention: sum of each component's php x
+    its cost/kg, since php already expresses each material as parts per
+    hundred of the base polyol). Returns a dict:
+    - total_cost: float, or None if NO component has cost data at all
+    - priced_php / total_php: how much of the formulation (by php) is
+      actually covered by known costs, so a partial total can be flagged
+    - missing: list of raw material names with no cost recorded
+    Never fabricates a cost for an unpriced material - a formulation with
+    missing prices gets an honest partial total, not a silently wrong one.
+    """
+    raw_material_cache = {rm.id: rm for rm in session.query(RawMaterial).all()}
+    total_cost = 0.0
+    priced_php = 0.0
+    total_php = 0.0
+    missing = []
+    any_priced = False
+
+    for c in recipe_version.components:
+        php = c.php or 0.0
+        total_php += php
+        cost_per_kg = _resolve_component_cost_per_kg(session, c, raw_material_cache)
+        if cost_per_kg is None:
+            missing.append(c.raw_material_name)
+            continue
+        any_priced = True
+        total_cost += php * cost_per_kg
+        priced_php += php
+
+    return {
+        "total_cost": round(total_cost, 4) if any_priced else None,
+        "priced_php": round(priced_php, 2),
+        "total_php": round(total_php, 2),
+        "missing": missing,
+        "complete": not missing,
+    }
+
+
+def recipe_version_diff(version_a, version_b):
+    """Component-by-component diff between two recipe versions of the same
+    foam grade: for every raw material appearing in either version, its php
+    in each, the change, and whether it's new/removed/unchanged. This is
+    the same "what actually changed" question Root-Cause Assistant answers
+    for process settings between two production runs - applied to
+    formulation instead, since today the only way to compare two versions
+    is to read both ingredient lists by eye."""
+    a_by_name = {c.raw_material_name.strip().lower(): c for c in version_a.components}
+    b_by_name = {c.raw_material_name.strip().lower(): c for c in version_b.components}
+    all_keys = sorted(set(a_by_name) | set(b_by_name))
+
+    rows = []
+    for key in all_keys:
+        ca, cb = a_by_name.get(key), b_by_name.get(key)
+        php_a = ca.php if ca else None
+        php_b = cb.php if cb else None
+        name = (ca or cb).raw_material_name
+        role = (cb or ca).role_in_formulation
+        if php_a is None:
+            status, delta, delta_pct = "Added", php_b, None
+        elif php_b is None:
+            status, delta, delta_pct = "Removed", -php_a, None
+        else:
+            delta = round(php_b - php_a, 3)
+            delta_pct = round((delta / php_a) * 100, 1) if php_a else None
+            status = "Unchanged" if abs(delta) < 1e-9 else "Changed"
+        rows.append(
+            {
+                "raw_material_name": name,
+                "role": role,
+                "php_a": php_a,
+                "php_b": php_b,
+                "delta": delta,
+                "delta_pct": delta_pct,
+                "status": status,
+            }
+        )
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        status_order = {"Added": 0, "Removed": 1, "Changed": 2, "Unchanged": 3}
+        df["_order"] = df["status"].map(status_order)
+        df = df.sort_values(["_order", "raw_material_name"]).drop(columns=["_order"]).reset_index(drop=True)
+    return df
+
+
+def rank_component_correlations(session, foam_grade_id, property_name, min_versions=3):
+    """For every raw material used anywhere in this grade's recipe
+    versions, correlate its php against that version's mean outcome for
+    the chosen property, across all of the grade's recipe versions. Ranked
+    by |correlation| descending.
+
+    Needs real variation to say anything: a raw material must appear (with
+    a recorded php) in at least `min_versions` versions, and those versions
+    must have quality results, or it's excluded rather than shown as a
+    misleading single-point "correlation". Returns an empty DataFrame if
+    nothing qualifies - callers should treat that as "not enough recipe
+    version history yet", not as "no relationship found"."""
+    versions = session.query(RecipeVersion).filter(RecipeVersion.foam_grade_id == foam_grade_id).all()
+    if len(versions) < min_versions:
+        return pd.DataFrame()
+
+    results_df = property_results_dataframe(session, foam_grade_id=foam_grade_id, property_name=property_name)
+    if results_df.empty:
+        return pd.DataFrame()
+    per_version_result = results_df.groupby("recipe_version_id")["actual_value"].mean()
+
+    php_by_material = {}  # name -> {version_id: php}
+    for v in versions:
+        outcome = per_version_result.get(v.id)
+        if outcome is None or pd.isna(outcome):
+            continue
+        for c in v.components:
+            if c.php is None:
+                continue
+            php_by_material.setdefault(c.raw_material_name, {})[v.id] = c.php
+
+    rows = []
+    for material, php_map in php_by_material.items():
+        if len(php_map) < min_versions:
+            continue
+        php_series = pd.Series(php_map)
+        outcome_series = per_version_result.reindex(php_series.index)
+        corr = php_series.corr(outcome_series)
+        if pd.isna(corr):
+            continue
+        rows.append({"raw_material_name": material, "n_versions": len(php_map), "correlation": round(corr, 3)})
+
+    ranked = pd.DataFrame(rows)
+    if not ranked.empty:
+        ranked["_abs"] = ranked["correlation"].abs()
+        ranked = ranked.sort_values("_abs", ascending=False).drop(columns=["_abs"]).reset_index(drop=True)
     return ranked

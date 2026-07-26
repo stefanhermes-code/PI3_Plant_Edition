@@ -271,6 +271,7 @@ class RawMaterial(Base):
     name = Column(String(200), nullable=False)
     category = Column(String(100))
     default_supplier = Column(String(200))
+    cost_per_kg = Column(Float)
     notes = Column(Text)
     active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow)

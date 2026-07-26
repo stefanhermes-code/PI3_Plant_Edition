@@ -1,18 +1,25 @@
 """Industrial Intelligence: Recipe Optimization
 
-Compares physical property outcomes across every recipe version of a foam
-grade against target specs, alongside each version's formulation, showing
-which version performs best and what is different about it. Also lets a
-user ask PI3 for a formulation recommendation against target properties,
-informed by this foam grade's recipe and quality-test history (see the
-advisory boundary at the bottom of this page).
+Recipe optimization means answering three questions a raw ingredient list
+and a results table can't answer by themselves: what does this formulation
+actually cost, what specifically changed between two versions, and which
+ingredient's dosage is actually associated with the property outcome -
+ranked and quantified, not eyeballed. PI3's recommendation is grounded in
+those three answers rather than a plain text dump of ingredients and
+averages (see the advisory boundary at the bottom of this page).
 """
 
 import pandas as pd
 import streamlit as st
 
 import ai_assistant
-from analytics import pass_rate, property_results_dataframe
+from analytics import (
+    pass_rate,
+    property_results_dataframe,
+    rank_component_correlations,
+    recipe_version_cost,
+    recipe_version_diff,
+)
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
 from helpers import page_setup
@@ -24,8 +31,9 @@ logout_button()
 
 st.title("Recipe Optimization")
 st.caption(
-    "Compares quality test results across every recipe version of a foam grade, showing "
-    "each formulation change's actual effect on quality."
+    "Formulation cost, version-to-version differences, and which raw material's dosage is "
+    "actually associated with each quality outcome - ranked and quantified, alongside the "
+    "usual property-outcome comparison across recipe versions."
 )
 session = get_session()
 
@@ -42,6 +50,7 @@ if not versions:
     st.stop()
 
 results_df = property_results_dataframe(session, foam_grade_id=grade.id)
+available_properties = sorted(results_df["property_name"].dropna().unique()) if not results_df.empty else []
 
 # Per-property summary tables, kept keyed by property name so the PI3
 # recommendation prompt below can reuse them instead of recomputing.
@@ -50,9 +59,8 @@ property_summaries = {}
 if results_df.empty:
     st.info("No quality test results recorded yet for this foam grade's production runs.")
 else:
-    properties = sorted(results_df["property_name"].dropna().unique())
     st.subheader("Property outcomes by recipe version")
-    for prop in properties:
+    for prop in available_properties:
         sub = results_df[results_df["property_name"] == prop]
         summary = (
             sub.groupby("recipe_version")
@@ -78,6 +86,134 @@ else:
                     "Review against current raw materials and process conditions before reusing."
                 )
 
+# ---------------------------------------------------------------------------
+# Formulation cost by version
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Formulation cost by version")
+cost_by_version = {v.id: recipe_version_cost(session, v) for v in versions}
+cost_rows = []
+for v in versions:
+    c = cost_by_version[v.id]
+    coverage_pct = round((c["priced_php"] / c["total_php"]) * 100, 0) if c["total_php"] else None
+    cost_rows.append(
+        {
+            "Version": v.version_label,
+            "Status": v.approval_status,
+            "Cost per 100 parts": c["total_cost"],
+            "Cost coverage": f"{coverage_pct:.0f}%" if coverage_pct is not None else "—",
+            "Materials missing cost": ", ".join(c["missing"]) if c["missing"] else "—",
+        }
+    )
+cost_df = pd.DataFrame(cost_rows)
+st.dataframe(cost_df, hide_index=True, use_container_width=True)
+if any(c["missing"] for c in cost_by_version.values()):
+    st.caption(
+        "Costs shown are a lower-bound estimate where materials are missing a recorded cost/kg - "
+        "add pricing on the Raw Materials page to complete these totals. Nothing here is invented."
+    )
+
+# ---------------------------------------------------------------------------
+# Version-to-version diff
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Compare two versions")
+st.caption("What specifically changed in the formulation between two recipe versions.")
+
+diff_col1, diff_col2 = st.columns(2)
+version_a = diff_col1.selectbox(
+    "Version A",
+    versions,
+    index=max(len(versions) - 2, 0),
+    format_func=lambda v: v.version_label,
+    key=f"diff_a_{grade.id}",
+)
+version_b = diff_col2.selectbox(
+    "Version B",
+    versions,
+    index=len(versions) - 1,
+    format_func=lambda v: v.version_label,
+    key=f"diff_b_{grade.id}",
+)
+
+if version_a.id == version_b.id:
+    st.info("Choose two different versions to compare.")
+else:
+    diff_df = recipe_version_diff(version_a, version_b)
+    if diff_df.empty:
+        st.caption("Neither version has any components recorded.")
+    else:
+        show_unchanged = st.checkbox(
+            "Show unchanged materials", value=False, key=f"diff_show_unchanged_{grade.id}"
+        )
+        display_diff = diff_df if show_unchanged else diff_df[diff_df["status"] != "Unchanged"]
+        st.dataframe(
+            display_diff.rename(
+                columns={
+                    "raw_material_name": "Raw material",
+                    "role": "Role",
+                    "php_a": f"php ({version_a.version_label})",
+                    "php_b": f"php ({version_b.version_label})",
+                    "delta": "Change (php)",
+                    "delta_pct": "Change (%)",
+                    "status": "Status",
+                }
+            ),
+            hide_index=True,
+            use_container_width=True,
+        )
+        changed_count = (diff_df["status"] != "Unchanged").sum()
+        st.caption(
+            f"{changed_count} of {len(diff_df)} materials differ between {version_a.version_label} "
+            f"and {version_b.version_label}."
+        )
+
+# ---------------------------------------------------------------------------
+# Which ingredient actually drives the outcome
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Which ingredient drives each outcome")
+if not available_properties:
+    st.info("No quality test results recorded yet - nothing to correlate ingredient dosage against.")
+elif len(versions) < 3:
+    st.info(
+        f"This foam grade currently has {len(versions)} recipe version(s). Correlating an "
+        "ingredient's dosage against outcomes needs at least 3 versions with varying php and "
+        "recorded results - not enough version history yet to say which ingredient matters."
+    )
+else:
+    corr_property = st.selectbox(
+        "Property", available_properties, key=f"corr_property_{grade.id}"
+    )
+    component_ranked = rank_component_correlations(session, grade.id, corr_property)
+    if component_ranked.empty:
+        st.info(
+            f"No raw material appears (with a recorded php) across enough versions with "
+            f"{corr_property} results to compute a correlation yet."
+        )
+    else:
+        st.dataframe(
+            component_ranked.rename(
+                columns={
+                    "raw_material_name": "Raw material",
+                    "n_versions": "Versions compared",
+                    "correlation": "Correlation with outcome",
+                }
+            ),
+            hide_index=True,
+            use_container_width=True,
+        )
+        top_component = component_ranked.iloc[0]
+        st.caption(
+            f"Strongest association for {corr_property}: **{top_component['raw_material_name']}** "
+            f"(correlation {top_component['correlation']:+.3f} across "
+            f"{int(top_component['n_versions'])} versions). Review applicability against current "
+            "raw materials and process conditions before adjusting dosage."
+        )
+
+# ---------------------------------------------------------------------------
+# Recipes (version controlled) - raw ingredient list per version
+# ---------------------------------------------------------------------------
 st.divider()
 st.subheader("Recipes (version controlled)")
 st.caption("The raw materials, dosage (php), and role recorded for each recipe version.")
@@ -100,6 +236,9 @@ for v in versions:
         else:
             st.caption("No components recorded for this version yet.")
 
+# ---------------------------------------------------------------------------
+# PI3 recommendation, grounded in cost / diff / correlation data above
+# ---------------------------------------------------------------------------
 st.divider()
 st.subheader("Ask PI3 for a formulation recommendation")
 
@@ -107,25 +246,16 @@ plant_id = grade.product_family.plant_id if grade.product_family else None
 
 if ai_assistant.is_enabled_for_plant(session, plant_id):
     st.caption(
-        "PI3 reviews this foam grade's recipe versions, formulation, and quality-test history "
-        "against the target properties below, and proposes a formulation for your technical "
-        "team to evaluate and confirm. Prefilled from this foam grade's stored specification - "
-        "add any other targets (resilience, tensile strength, ...) before asking."
+        "PI3 reviews this foam grade's formulation cost, version-to-version differences, "
+        "ingredient-outcome correlations, and quality-test history against the target "
+        "properties below, and proposes a formulation for your technical team to evaluate and "
+        "confirm. Prefilled from this foam grade's stored specification - add any other targets "
+        "(resilience, tensile strength, ...) before asking."
     )
-    # Prefilled from this foam grade's own stored targets so the operator
-    # isn't retyping numbers the database already has - editable, and only
-    # set once per foam grade (keying the widget by grade.id means picking
-    # a different grade gets its own fresh default instead of overwriting
-    # whatever the operator already typed for this one).
     default_targets = []
     if grade.target_density is not None:
         default_targets.append(f"Density {grade.target_density:g} kg/m3")
     if grade.target_hardness is not None:
-        # No unit is stored against target_hardness (hardness is reported in
-        # kPa for CLD or N for IFD/ILD depending on the method) - leave the
-        # number as recorded rather than guessing a unit, since
-        # quality_specification (added below, when present) usually states
-        # the actual test method and unit alongside it.
         default_targets.append(f"Hardness {grade.target_hardness:g} (unit per test method)")
     if grade.quality_specification:
         default_targets.append(grade.quality_specification.strip())
@@ -152,6 +282,54 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
         ]
         composition_summary = "\n".join(composition_lines) or "No formulation data recorded for any version."
 
+        cost_lines = []
+        for v in versions:
+            c = cost_by_version[v.id]
+            if c["total_cost"] is not None:
+                note = "" if c["complete"] else f" (partial - missing cost for {', '.join(c['missing'])})"
+                cost_lines.append(f"Version {v.version_label}: {c['total_cost']:.3f} per 100 parts{note}")
+            else:
+                cost_lines.append(f"Version {v.version_label}: no cost data recorded")
+        cost_summary = "\n".join(cost_lines)
+
+        diff_summary = "No version comparison available (fewer than 2 recipe versions)."
+        if len(versions) >= 2:
+            latest, previous = versions[-1], versions[-2]
+            latest_diff = recipe_version_diff(previous, latest)
+            changed = latest_diff[latest_diff["status"] != "Unchanged"]
+            if changed.empty:
+                diff_summary = f"No formulation change between {previous.version_label} and {latest.version_label}."
+            else:
+                diff_lines = [
+                    f"{row['raw_material_name']}: {row['status']} "
+                    f"({row['php_a']} -> {row['php_b']} php)"
+                    for _, row in changed.iterrows()
+                ]
+                diff_summary = (
+                    f"Changes from {previous.version_label} to {latest.version_label} (latest):\n"
+                    + "\n".join(diff_lines)
+                )
+
+        correlation_lines = []
+        if len(versions) >= 3:
+            for prop in available_properties:
+                ranked = rank_component_correlations(session, grade.id, prop)
+                if ranked.empty:
+                    continue
+                top3 = ranked.head(3)
+                correlation_lines.append(
+                    f"{prop}: "
+                    + "; ".join(
+                        f"{r['raw_material_name']} (r={r['correlation']:+.3f}, n={int(r['n_versions'])})"
+                        for _, r in top3.iterrows()
+                    )
+                )
+        correlation_summary = (
+            "\n".join(correlation_lines)
+            if correlation_lines
+            else "Not enough recipe version history yet to correlate individual ingredients with outcomes."
+        )
+
         outcome_lines = []
         for prop, summary in property_summaries.items():
             for _, row in summary.iterrows():
@@ -166,14 +344,23 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
 
         prompt = (
             "You are helping a technical reviewer at a flexible slabstock foam manufacturer "
-            f"select a formulation direction for {grade.grade_name}. Using this foam grade's "
-            "recipe version history, formulation composition, and quality test outcomes below, "
+            f"select a formulation direction for {grade.grade_name}. Below is this foam grade's "
+            "recipe version history: formulation composition, formulation cost, the most recent "
+            "version-to-version change, which ingredient's dosage is statistically associated "
+            "with each quality outcome, and quality test outcomes by version. Use this "
+            "quantified data - not just the ingredient list - as the basis of your reasoning, "
             "plus any relevant expert notes or historical cases in the connected knowledge "
-            "base, propose a formulation that could meet the target properties given.\n\n"
+            "base, to propose a formulation that could meet the target properties given.\n\n"
             "Phrase this as a recommendation for the reviewer to evaluate and confirm through "
-            "their own trial process, addressed directly to the target properties requested.\n\n"
+            "their own trial process, addressed directly to the target properties requested. "
+            "Where you rely on a specific cost, diff, or correlation figure below, refer to it "
+            "explicitly rather than restating the raw ingredient list.\n\n"
             f"Foam grade: {grade.grade_name}\n\n"
             f"Recipe versions and composition:\n{composition_summary}\n\n"
+            f"Formulation cost by version:\n{cost_summary}\n\n"
+            f"Most recent formulation change:\n{diff_summary}\n\n"
+            f"Ingredient-outcome correlations (top 3 per property, where enough version history "
+            f"exists):\n{correlation_summary}\n\n"
             f"Quality test outcomes by version:\n{outcome_summary}\n\n"
             f"Target properties requested:\n{target_properties.strip()}\n"
         )
@@ -186,9 +373,9 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
     if ai_answer:
         st.subheader("🤖 PI3 recommendation")
         st.caption(
-            "Generated by PI3 from this foam grade's recipe and quality-test history plus "
-            "expert notes and historical cases. For your technical team to evaluate and "
-            "confirm before applying."
+            "Generated by PI3 from this foam grade's formulation cost, version differences, "
+            "ingredient-outcome correlations, and quality-test history, plus expert notes and "
+            "historical cases. For your technical team to evaluate and confirm before applying."
         )
         st.write(ai_answer)
 else:
@@ -196,4 +383,3 @@ else:
         "Enable PI3 connectivity for this plant (PI3 Connectivity, in Admin) to get a "
         "formulation recommendation here."
     )
-
