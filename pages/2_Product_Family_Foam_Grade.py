@@ -11,7 +11,15 @@ from cascades import (
     product_family_dependency_counts,
 )
 from db import FoamGrade, Plant, ProductFamily, get_session, init_db
-from helpers import clickable_table, csv_excel_uploader, delete_with_confirm, page_setup
+from helpers import (
+    clickable_table,
+    csv_excel_uploader,
+    dedupe_import_rows,
+    delete_with_confirm,
+    page_setup,
+    set_pending_banner,
+    show_pending_banner,
+)
 
 GRADE_REQUIRED_COLUMNS = ["product_family_id", "grade_name"]
 GRADE_OPTIONAL_COLUMNS = ["target_density", "target_hardness", "quality_specification", "notes"]
@@ -171,6 +179,7 @@ with tab_grade:
                             st.rerun()
 
         with tab_grade_import:
+            show_pending_banner("grade_import_msg")
             df, filename = csv_excel_uploader(GRADE_REQUIRED_COLUMNS, GRADE_OPTIONAL_COLUMNS, key="grade_upload")
             if df is not None:
                 valid_family_ids = {f.id for f in families}
@@ -187,7 +196,16 @@ with tab_grade:
                     st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
 
                 if good_rows and st.button("Confirm import", key="confirm_grade_import"):
-                    for row in good_rows:
+                    existing_keys = {
+                        (g.product_family_id, g.grade_name.strip().lower())
+                        for g in session.query(FoamGrade).all()
+                    }
+                    new_rows, dup_rows = dedupe_import_rows(
+                        good_rows,
+                        existing_keys,
+                        key_func=lambda row: (int(row["product_family_id"]), str(row["grade_name"]).strip().lower()),
+                    )
+                    for row in new_rows:
                         session.add(
                             FoamGrade(
                                 product_family_id=int(row["product_family_id"]),
@@ -199,7 +217,10 @@ with tab_grade:
                             )
                         )
                     session.commit()
-                    st.success(f"Imported {len(good_rows)} foam grade(s) from {filename}.")
+                    msg = f"Imported {len(new_rows)} foam grade(s) from {filename}."
+                    if dup_rows:
+                        msg += f" Skipped {len(dup_rows)} row(s) already recorded for their product family (likely a repeat click)."
+                    set_pending_banner("grade_import_msg", msg)
                     st.rerun()
 
         st.divider()

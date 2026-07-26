@@ -127,6 +127,43 @@ def delete_with_confirm(label, on_confirm, key_prefix, extra_warning=""):
         st.rerun()
 
 
+def show_pending_banner(key):
+    """Show a one-shot success banner stashed in session_state by an action
+    that immediately called st.rerun() right after it. A plain st.success()
+    called right before st.rerun() gets wiped before the user ever sees it,
+    since the rerun restarts the script - this is why "Confirm import"
+    buttons across the app could look like they silently did nothing, which
+    led to operators clicking Confirm a second time and duplicating rows.
+    Call this near the top of a page/section, before the action that might
+    set the banner via set_pending_banner()."""
+    msg = st.session_state.pop(key, None)
+    if msg:
+        st.success(msg)
+
+
+def set_pending_banner(key, message):
+    """Stash a success message so show_pending_banner() displays it after
+    the immediate st.rerun() that follows a successful action."""
+    st.session_state[key] = message
+
+
+def dedupe_import_rows(rows, existing_keys, key_func):
+    """Split CSV-import rows into (new_rows, duplicate_rows) based on
+    key_func(row) already being present in existing_keys (a set, mutated in
+    place as rows are accepted). Used by every "Confirm import" button so
+    that clicking it twice - e.g. because the previous success message
+    wasn't visibly persistent - can't silently insert the same rows again."""
+    new_rows, dup_rows = [], []
+    for row in rows:
+        k = key_func(row)
+        if k in existing_keys:
+            dup_rows.append(row)
+        else:
+            new_rows.append(row)
+            existing_keys.add(k)
+    return new_rows, dup_rows
+
+
 def csv_excel_uploader(required_cols, optional_cols=None, key=None):
     """Render a file uploader for bulk CSV/Excel import, parse it, and check
     that the required columns are present. Used by every "CSV / Excel

@@ -33,7 +33,17 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import clickable_table, combine_date_time, csv_excel_uploader, delete_with_confirm, page_setup, parse_dt
+from helpers import (
+    clickable_table,
+    combine_date_time,
+    csv_excel_uploader,
+    dedupe_import_rows,
+    delete_with_confirm,
+    page_setup,
+    parse_dt,
+    set_pending_banner,
+    show_pending_banner,
+)
 
 RESULT_REQUIRED_COLUMNS = ["production_run_id", "property_name", "test_method", "unit", "actual_value"]
 RESULT_OPTIONAL_COLUMNS = [
@@ -108,6 +118,7 @@ with st.expander("Add sample", expanded=False):
                 st.rerun()
 
 with st.expander("Bulk import samples (CSV / Excel)", expanded=False):
+    show_pending_banner("sample_import_msg")
     sample_df, sample_filename = csv_excel_uploader(
         SAMPLE_REQUIRED_COLUMNS, SAMPLE_OPTIONAL_COLUMNS, key="sample_upload"
     )
@@ -126,7 +137,15 @@ with st.expander("Bulk import samples (CSV / Excel)", expanded=False):
             st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
 
         if good_rows and st.button("Confirm import", key="confirm_sample_import"):
-            for row in good_rows:
+            existing_keys = {
+                (s.production_run_id, s.zone_label.strip().lower()) for s in session.query(Sample).all()
+            }
+            new_rows, dup_rows = dedupe_import_rows(
+                good_rows,
+                existing_keys,
+                key_func=lambda row: (int(row["production_run_id"]), str(row["zone_label"]).strip().lower()),
+            )
+            for row in new_rows:
                 session.add(
                     Sample(
                         production_run_id=int(row["production_run_id"]),
@@ -137,7 +156,10 @@ with st.expander("Bulk import samples (CSV / Excel)", expanded=False):
                     )
                 )
             session.commit()
-            st.success(f"Imported {len(good_rows)} sample(s) from {sample_filename}.")
+            msg = f"Imported {len(new_rows)} sample(s) from {sample_filename}."
+            if dup_rows:
+                msg += f" Skipped {len(dup_rows)} row(s) already recorded for their run + zone (likely a repeat click)."
+            set_pending_banner("sample_import_msg", msg)
             st.rerun()
 
 samples = session.query(Sample).order_by(Sample.id.desc()).all()
@@ -514,6 +536,7 @@ with tab_result_manual:
                 st.rerun()
 
 with tab_result_import:
+    show_pending_banner("result_import_msg")
     st.caption(
         "property_name must match a name in the physical property master list (case-insensitive). "
         "test_method and unit are stored as typed — they don't need to match an existing method/UOM."
@@ -558,7 +581,25 @@ with tab_result_import:
             st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
 
         if good_rows and st.button("Confirm import", key="confirm_result_import"):
-            for row in good_rows:
+            existing_keys = {
+                (r.production_run_id, r.property_definition_id, r.sample_id, r.replicate_no)
+                for r in session.query(PhysicalPropertyResult).all()
+            }
+
+            def _result_key(row):
+                prop_def = defs_by_name[str(row["property_name"]).strip().lower()]
+                sample_val = row.get("sample_id")
+                replicate_val = row.get("replicate_no")
+                return (
+                    int(row["production_run_id"]),
+                    prop_def.id,
+                    int(sample_val) if not pd.isna(sample_val) else None,
+                    int(replicate_val) if not pd.isna(replicate_val) else 1,
+                )
+
+            new_rows, dup_rows = dedupe_import_rows(good_rows, existing_keys, key_func=_result_key)
+
+            for row in new_rows:
                 prop_def = defs_by_name[str(row["property_name"]).strip().lower()]
                 test_method = str(row["test_method"]).strip()
                 method_match = next(
@@ -601,7 +642,10 @@ with tab_result_import:
                     )
                 )
             session.commit()
-            st.success(f"Imported {len(good_rows)} quality test result(s) from {result_filename}.")
+            msg = f"Imported {len(new_rows)} quality test result(s) from {result_filename}."
+            if dup_rows:
+                msg += f" Skipped {len(dup_rows)} row(s) already recorded for their run/property/sample (likely a repeat click)."
+            set_pending_banner("result_import_msg", msg)
             st.rerun()
 
 st.divider()

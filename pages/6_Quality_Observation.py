@@ -15,7 +15,16 @@ import streamlit as st
 
 from db import CONFIDENCE_LEVELS, ProductionRun, QualityObservation, TrialRecord, get_session, init_db
 from auth import logout_button, require_login
-from helpers import clickable_table, confidence_badge, csv_excel_uploader, delete_with_confirm, page_setup
+from helpers import (
+    clickable_table,
+    confidence_badge,
+    csv_excel_uploader,
+    dedupe_import_rows,
+    delete_with_confirm,
+    page_setup,
+    set_pending_banner,
+    show_pending_banner,
+)
 
 OBSERVATION_REQUIRED_COLUMNS = ["production_run_id", "observation_type"]
 OBSERVATION_OPTIONAL_COLUMNS = [
@@ -97,6 +106,7 @@ with tab_obs_manual:
                     st.rerun()
 
 with tab_obs_import:
+    show_pending_banner("observation_import_msg")
     obs_df, obs_filename = csv_excel_uploader(
         OBSERVATION_REQUIRED_COLUMNS, OBSERVATION_OPTIONAL_COLUMNS, key="observation_upload"
     )
@@ -126,7 +136,22 @@ with tab_obs_import:
             st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
 
         if good_rows and st.button("Confirm import", key="confirm_observation_import"):
-            for row in good_rows:
+            existing_keys = {
+                (o.production_run_id, o.observation_type.strip().lower(), o.observed_at)
+                for o in session.query(QualityObservation).all()
+            }
+
+            def _obs_key(row):
+                observed_val = pd.to_datetime(row.get("observed_at"), errors="coerce")
+                return (
+                    int(row["production_run_id"]),
+                    str(row["observation_type"]).strip().lower(),
+                    observed_val.date() if not pd.isna(observed_val) else dt.date.today(),
+                )
+
+            new_rows, dup_rows = dedupe_import_rows(good_rows, existing_keys, key_func=_obs_key)
+
+            for row in new_rows:
                 trial_val = row.get("trial_record_id")
                 severity_val = str(row.get("severity", "") or "").strip()
                 frequency_val = str(row.get("frequency", "") or "").strip()
@@ -149,7 +174,10 @@ with tab_obs_import:
                     )
                 )
             session.commit()
-            st.success(f"Imported {len(good_rows)} quality issue(s) from {obs_filename}.")
+            msg = f"Imported {len(new_rows)} quality issue(s) from {obs_filename}."
+            if dup_rows:
+                msg += f" Skipped {len(dup_rows)} row(s) already recorded for their run/type/date (likely a repeat click)."
+            set_pending_banner("observation_import_msg", msg)
             st.rerun()
 
 st.divider()

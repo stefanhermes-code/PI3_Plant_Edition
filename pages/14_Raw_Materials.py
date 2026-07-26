@@ -12,7 +12,15 @@ import streamlit as st
 import ai_assistant
 from auth import logout_button, require_login
 from db import RAW_MATERIAL_CATEGORIES, RawMaterial, RecipeComponent, get_session, init_db
-from helpers import clickable_table, csv_excel_uploader, delete_with_confirm, page_setup, parse_bool
+from helpers import (
+    clickable_table,
+    csv_excel_uploader,
+    delete_with_confirm,
+    page_setup,
+    parse_bool,
+    set_pending_banner,
+    show_pending_banner,
+)
 
 
 def _extract_pdf_text(uploaded_file):
@@ -141,6 +149,7 @@ with tab_tds:
                 st.rerun()
 
 with tab_import:
+    show_pending_banner("rawmat_import_msg")
     df, filename = csv_excel_uploader(RAW_MATERIAL_REQUIRED_COLUMNS, RAW_MATERIAL_OPTIONAL_COLUMNS, key="rawmat_upload")
     if df is not None:
         existing_names = {m.name.strip().lower() for m in session.query(RawMaterial).all()}
@@ -173,7 +182,7 @@ with tab_import:
                     )
                 )
             session.commit()
-            st.success(f"Imported {len(good_rows)} raw material(s) from {filename}.")
+            set_pending_banner("rawmat_import_msg", f"Imported {len(good_rows)} raw material(s) from {filename}.")
             st.rerun()
 
 st.divider()

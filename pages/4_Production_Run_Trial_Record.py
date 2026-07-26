@@ -59,9 +59,12 @@ from helpers import (
     clickable_table,
     combine_date_time,
     csv_excel_uploader,
+    dedupe_import_rows,
     delete_with_confirm,
     page_setup,
     parse_dt,
+    set_pending_banner,
+    show_pending_banner,
 )
 
 RUN_REQUIRED_COLUMNS = ["foam_grade_id", "recipe_version_id"]
@@ -408,6 +411,7 @@ with tab_runs:
                         st.rerun()
 
         with sub_import:
+            show_pending_banner("run_import_msg")
             st.caption(
                 "recipe_version_id must belong to the foam_grade_id on the same row. plant_id and machine "
                 "assignment are derived/validated from the foam grade automatically."
@@ -441,12 +445,31 @@ with tab_runs:
                     st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
 
                 if good_rows and st.button("Confirm import", key="confirm_run_import"):
+                    # Rows with an explicit batch_reference are deduped against
+                    # what's already in the database, so re-clicking Confirm
+                    # import (e.g. because the previous success message wasn't
+                    # visibly persistent) can't silently insert the same batch
+                    # twice. Rows with a blank batch_reference always get a
+                    # fresh auto-generated one, so they need no such check.
+                    existing_batch_refs = {
+                        r.batch_reference for r in session.query(ProductionRun).all() if r.batch_reference
+                    }
+                    import_rows, dup_rows = [], []
+                    for row in good_rows:
+                        br = str(row.get("batch_reference", "") or "").strip()
+                        if br and br in existing_batch_refs:
+                            dup_rows.append(row)
+                        else:
+                            import_rows.append(row)
+                            if br:
+                                existing_batch_refs.add(br)
+
                     # Rows that already carry a batch_reference (e.g. migrating a
                     # historical log) keep it as-is; blank ones get auto-generated,
                     # tracking the running sequence per day in-memory so multiple
                     # blank rows for the same date in one file don't collide.
                     seq_by_prefix = {}
-                    for row in good_rows:
+                    for row in import_rows:
                         grade_row = grades_by_id[row["foam_grade_id"]]
                         machine_val = row.get("machine_id")
                         run_date_val = pd.to_datetime(row.get("run_date"), errors="coerce")
@@ -472,7 +495,10 @@ with tab_runs:
                             )
                         )
                     session.commit()
-                    st.success(f"Imported {len(good_rows)} production run(s) from {run_filename}.")
+                    msg = f"Imported {len(import_rows)} production run(s) from {run_filename}."
+                    if dup_rows:
+                        msg += f" Skipped {len(dup_rows)} row(s) whose batch_reference already exists (likely a repeat click)."
+                    set_pending_banner("run_import_msg", msg)
                     st.rerun()
 
 # ---------------------------------------------------------------------------

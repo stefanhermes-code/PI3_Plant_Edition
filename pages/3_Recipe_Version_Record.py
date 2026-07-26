@@ -16,7 +16,15 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import clickable_table, csv_excel_uploader, delete_with_confirm, page_setup
+from helpers import (
+    clickable_table,
+    csv_excel_uploader,
+    dedupe_import_rows,
+    delete_with_confirm,
+    page_setup,
+    set_pending_banner,
+    show_pending_banner,
+)
 
 RECIPE_VERSION_REQUIRED_COLUMNS = ["foam_grade_id", "version_label"]
 RECIPE_VERSION_OPTIONAL_COLUMNS = ["effective_date", "change_note", "approval_status", "created_by"]
@@ -99,6 +107,7 @@ with tab_import:
         "components' further down this page, below the recipe version list - it's a separate "
         "upload with its own Confirm import button."
     )
+    show_pending_banner("recipe_version_import_msg")
     df, filename = csv_excel_uploader(
         RECIPE_VERSION_REQUIRED_COLUMNS, RECIPE_VERSION_OPTIONAL_COLUMNS, key="recipe_version_upload"
     )
@@ -117,7 +126,15 @@ with tab_import:
             st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
 
         if good_rows and st.button("Confirm import (recipe versions)", key="confirm_recipe_version_import"):
-            for row in good_rows:
+            existing_keys = {
+                (r.foam_grade_id, r.version_label.strip().lower()) for r in session.query(RecipeVersion).all()
+            }
+            new_rows, dup_rows = dedupe_import_rows(
+                good_rows,
+                existing_keys,
+                key_func=lambda row: (int(row["foam_grade_id"]), str(row["version_label"]).strip().lower()),
+            )
+            for row in new_rows:
                 status = str(row.get("approval_status", "") or "").strip()
                 eff_date = pd.to_datetime(row.get("effective_date"), errors="coerce")
                 session.add(
@@ -131,7 +148,10 @@ with tab_import:
                     )
                 )
             session.commit()
-            st.success(f"Imported {len(good_rows)} recipe version(s) from {filename}.")
+            msg = f"Imported {len(new_rows)} recipe version(s) from {filename}."
+            if dup_rows:
+                msg += f" Skipped {len(dup_rows)} row(s) already recorded for their foam grade + version label (likely a repeat click)."
+            set_pending_banner("recipe_version_import_msg", msg)
             st.rerun()
 
 st.divider()
@@ -334,6 +354,7 @@ st.caption(
     "above for IDs) and a raw material name — unmatched raw material names are automatically "
     "added to the Raw Materials master list."
 )
+show_pending_banner("recipe_component_import_msg")
 comp_df, comp_filename = csv_excel_uploader(
     COMPONENT_REQUIRED_COLUMNS, COMPONENT_OPTIONAL_COLUMNS, key="component_upload"
 )
@@ -352,7 +373,16 @@ if comp_df is not None:
         st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
 
     if good_rows and st.button("Confirm import (recipe components)", key="confirm_component_import"):
-        for row in good_rows:
+        existing_keys = {
+            (c.recipe_version_id, c.raw_material_name.strip().lower())
+            for c in session.query(RecipeComponent).all()
+        }
+        new_rows, dup_rows = dedupe_import_rows(
+            good_rows,
+            existing_keys,
+            key_func=lambda row: (int(row["recipe_version_id"]), str(row["raw_material_name"]).strip().lower()),
+        )
+        for row in new_rows:
             name_val = str(row["raw_material_name"]).strip()
             supplier_val = str(row.get("supplier", "") or "")
             rm = _match_or_create_raw_material(name_val, supplier_val)
@@ -368,6 +398,9 @@ if comp_df is not None:
                 )
             )
         session.commit()
-        st.success(f"Imported {len(good_rows)} recipe component(s) from {comp_filename}.")
+        msg = f"Imported {len(new_rows)} recipe component(s) from {comp_filename}."
+        if dup_rows:
+            msg += f" Skipped {len(dup_rows)} row(s) already recorded for their recipe version (likely a repeat click)."
+        set_pending_banner("recipe_component_import_msg", msg)
         st.rerun()
 
