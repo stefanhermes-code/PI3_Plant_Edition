@@ -93,7 +93,12 @@ with tab_manual:
                     st.rerun()
 
 with tab_import:
-    st.caption("Bulk-create recipe version header records (e.g. migrating a formulation library).")
+    st.caption(
+        "Bulk-create recipe version HEADER records only (e.g. migrating a formulation library) - "
+        "not the ingredients/components inside each version. For that, see 'Bulk import recipe "
+        "components' further down this page, below the recipe version list - it's a separate "
+        "upload with its own Confirm import button."
+    )
     df, filename = csv_excel_uploader(
         RECIPE_VERSION_REQUIRED_COLUMNS, RECIPE_VERSION_OPTIONAL_COLUMNS, key="recipe_version_upload"
     )
@@ -111,7 +116,7 @@ with tab_import:
             st.warning("Flagged rows reference an unknown foam_grade_id or have no version_label.")
             st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
 
-        if good_rows and st.button("Confirm import", key="confirm_recipe_version_import"):
+        if good_rows and st.button("Confirm import (recipe versions)", key="confirm_recipe_version_import"):
             for row in good_rows:
                 status = str(row.get("approval_status", "") or "").strip()
                 eff_date = pd.to_datetime(row.get("effective_date"), errors="coerce")
@@ -321,11 +326,13 @@ for v in versions:
                         st.rerun()
 
 st.divider()
-st.subheader("Bulk import recipe components")
+st.subheader("🧪 Bulk import recipe components (ingredients)")
 st.caption(
-    "Import a whole formulation sheet at once. Each row needs the recipe_version_id it belongs to "
-    "(see the recipe version list above for IDs) and a raw material name — unmatched raw material "
-    "names are automatically added to the Raw Materials master list."
+    "A separate import from 'CSV / Excel import' above - that one creates recipe version "
+    "headers, this one fills in the raw materials/php/role inside a version that already "
+    "exists. Each row needs the recipe_version_id it belongs to (see the recipe version list "
+    "above for IDs) and a raw material name — unmatched raw material names are automatically "
+    "added to the Raw Materials master list."
 )
 comp_df, comp_filename = csv_excel_uploader(
     COMPONENT_REQUIRED_COLUMNS, COMPONENT_OPTIONAL_COLUMNS, key="component_upload"
@@ -344,7 +351,7 @@ if comp_df is not None:
         st.warning("Flagged rows reference an unknown recipe_version_id or have no raw_material_name.")
         st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
 
-    if good_rows and st.button("Confirm import", key="confirm_component_import"):
+    if good_rows and st.button("Confirm import (recipe components)", key="confirm_component_import"):
         for row in good_rows:
             name_val = str(row["raw_material_name"]).strip()
             supplier_val = str(row.get("supplier", "") or "")
