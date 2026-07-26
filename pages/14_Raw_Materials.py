@@ -122,7 +122,7 @@ with tab_tds:
         t_supplier = tc2.text_input("Default supplier", value=tds_extracted.get("default_supplier", ""))
         t_notes = st.text_area("Notes", value=tds_extracted.get("notes", ""), height=150)
         t_active = st.checkbox("Active", value=True, key="tds_active")
-        if st.form_submit_button("Save raw material"):
+        if st.form_submit_button("Save raw material (from TDS)"):
             if not t_name.strip():
                 st.error("Raw material name is required.")
             else:
