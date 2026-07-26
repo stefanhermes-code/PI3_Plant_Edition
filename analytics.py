@@ -17,7 +17,9 @@ ProductionPhase/PhysicalPropertyResult directly by production_run_id
 instead.
 """
 
+import numpy as np
 import pandas as pd
+from scipy import stats as scipy_stats
 
 from db import (
     ComponentStreamReading,
@@ -533,3 +535,303 @@ def rank_component_actual_correlations(session, foam_grade_id, property_name, mi
         ranked["_abs"] = ranked["correlation"].abs()
         ranked = ranked.sort_values("_abs", ascending=False).drop(columns=["_abs"]).reset_index(drop=True)
     return ranked
+
+
+# ---------------------------------------------------------------------------
+# Trend Analysis: statistical process control, not just a line chart
+# ---------------------------------------------------------------------------
+# A plot of actual-vs-target over time cannot, by itself, tell a reviewer
+# whether a wobble is real or just noise, or when a real shift actually
+# started. That is what statistical process control (SPC) exists for. The
+# four functions below are the standard SPC toolkit for exactly this kind of
+# data (one measurement per production run, tracked over time against a
+# target): an individuals control chart with real control limits and the
+# classic Western Electric/Nelson run rules (catches sudden shifts and
+# short-run drift), a process capability index against the property's
+# tolerance band (catches "technically stable but too close to spec" even
+# with no rule violations), a CUSUM chart (catches slow sustained drift a
+# Shewhart chart is notoriously bad at catching early - pump wear, catalyst
+# degradation, a slightly-off raw material lot), and a formal trend test
+# (replaces "average of the first half vs. the second half" with an actual
+# significance test). All four are deterministic - no ingredient list, no
+# assumption, no interpretation. Interpretation is PI3's job, downstream of
+# these numbers, same as everywhere else in the app.
+
+_D2_MOVING_RANGE = 1.128  # control-chart constant for a 2-point moving range (individuals chart)
+
+
+def property_run_series(session, foam_grade_id, property_name):
+    """One row per production run (mean of any replicate results) for a
+    foam grade/property, sorted chronologically by test date. This is the
+    base series every SPC function below works from - a control chart,
+    capability index, or trend test needs one point per run, not one point
+    per replicate."""
+    df = property_results_dataframe(session, foam_grade_id=foam_grade_id, property_name=property_name)
+    if df.empty:
+        return df
+    per_run = (
+        df.groupby("run_id")
+        .agg(
+            actual_value=("actual_value", "mean"),
+            target_value=("target_value", "mean"),
+            tested_at=("tested_at", "max"),
+            recipe_version=("recipe_version", "first"),
+            machine=("machine", "first"),
+            n_replicates=("result_id", "count"),
+        )
+        .reset_index()
+    )
+    per_run = per_run.dropna(subset=["tested_at", "actual_value"]).sort_values("tested_at").reset_index(drop=True)
+    return per_run
+
+
+def _moving_range_sigma(values):
+    """Short-term sigma estimated from the mean moving range between
+    consecutive points (values / d2), rather than the naive sample stdev -
+    the standard control-chart estimator, since it isn't inflated by a real
+    shift the way the plain stdev of the whole series would be. Falls back
+    to the sample stdev if there aren't enough points for a moving range."""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    mr = np.abs(np.diff(values))
+    mr_bar = mr.mean()
+    if mr_bar > 0:
+        return mr_bar / _D2_MOVING_RANGE
+    return float(np.std(values, ddof=1)) if n >= 2 else 0.0
+
+
+def control_chart_analysis(series_df, min_points=5):
+    """Individuals (I-MR) control chart: center line at the process mean,
+    control limits at +/-3 sigma (moving-range sigma, see
+    _moving_range_sigma), plus the 4 most commonly used Western
+    Electric/Nelson run rules so a real signal is flagged explicitly instead
+    of left for the reviewer to eyeball:
+    - beyond the 3-sigma control limits (a genuine special-cause point)
+    - 8+ consecutive points on one side of the center line (a sustained shift)
+    - 6+ consecutive points steadily rising or falling (a sustained drift)
+    - 2 of any 3 consecutive points beyond the 2-sigma warning line
+    Returns a dict with the annotated per-point DataFrame, the control
+    limits, and a flags list (each flag reduced to its first occurrence -
+    "the earliest point where this pattern is already true" - plus how many
+    points match it). Returns {"ready": False, "n": n} if there aren't at
+    least `min_points` results yet - a control chart from a handful of
+    points is noise dressed up as insight."""
+    n = len(series_df)
+    if n < min_points:
+        return {"ready": False, "n": n}
+
+    values = series_df["actual_value"].to_numpy(dtype=float)
+    mean = float(values.mean())
+    sigma = _moving_range_sigma(values)
+    ucl = mean + 3 * sigma
+    lcl = mean - 3 * sigma
+    warn_hi = mean + 2 * sigma
+    warn_lo = mean - 2 * sigma
+
+    chart_df = series_df.copy().reset_index(drop=True)
+    chart_df["center_line"] = mean
+    chart_df["ucl"] = ucl
+    chart_df["lcl"] = lcl
+
+    flag_hits = {}  # rule -> list of point indices
+
+    def _record(rule, idx):
+        flag_hits.setdefault(rule, []).append(idx)
+
+    if sigma > 0:
+        for i, v in enumerate(values):
+            if v > ucl or v < lcl:
+                _record("Beyond 3-sigma control limit", i)
+
+        side = np.sign(values - mean)
+        run_len = 1
+        for i in range(1, n):
+            run_len = run_len + 1 if side[i] == side[i - 1] and side[i] != 0 else 1
+            if run_len >= 8:
+                _record("Sustained shift (8+ consecutive points on one side)", i)
+
+        trend_len = 1
+        direction = 0
+        for i in range(1, n):
+            d = np.sign(values[i] - values[i - 1])
+            trend_len = trend_len + 1 if d == direction and d != 0 else 1
+            direction = d if d != 0 else direction
+            if trend_len >= 6:
+                _record("Sustained drift (6+ consecutive points trending)", i)
+
+        for i in range(2, n):
+            window = values[i - 2 : i + 1]
+            if (window > warn_hi).sum() >= 2 or (window < warn_lo).sum() >= 2:
+                _record("2-of-3 beyond 2-sigma warning line", i)
+
+    flags = []
+    for rule, indices in flag_hits.items():
+        first_i = min(indices)
+        flags.append(
+            {
+                "rule": rule,
+                "first_index": first_i,
+                "first_run_id": int(chart_df.iloc[first_i]["run_id"]),
+                "first_tested_at": chart_df.iloc[first_i]["tested_at"],
+                "points_matching": len(indices),
+            }
+        )
+    flags.sort(key=lambda f: f["first_index"])
+
+    return {
+        "ready": True,
+        "n": n,
+        "mean": mean,
+        "sigma": sigma,
+        "ucl": ucl,
+        "lcl": lcl,
+        "chart_df": chart_df,
+        "flags": flags,
+        "in_control": len(flags) == 0,
+    }
+
+
+def capability_analysis(series_df, tolerance_pct=0.10, min_points=5):
+    """Process capability (Cpk) against the property's tolerance band - the
+    app's own +/-10% pass/fail convention, reused here as the spec limits
+    rather than inventing a separate one. Cpk answers a different question
+    than the control chart: a process can be perfectly "in control" (no rule
+    violations, stable mean) and still be a Cpk of 0.6 - too close to its
+    own spec limits to have any real margin. Returns None if there isn't a
+    usable, consistent target value or not enough points yet.
+
+    Rule of thumb this function's callers should use for the number:
+    Cpk >= 1.33 is generally considered capable, 1.0-1.33 marginal, <1.0 not
+    capable (the process routinely produces some results outside the
+    tolerance band even when "in control")."""
+    n = len(series_df)
+    if n < min_points:
+        return None
+    target = series_df["target_value"].dropna().median()
+    if pd.isna(target) or target == 0:
+        return None
+
+    values = series_df["actual_value"].to_numpy(dtype=float)
+    mean = float(values.mean())
+    sigma = _moving_range_sigma(values)
+    if sigma <= 0:
+        return None
+
+    usl = target * (1 + tolerance_pct)
+    lsl = target * (1 - tolerance_pct)
+    cpu = (usl - mean) / (3 * sigma)
+    cpl = (mean - lsl) / (3 * sigma)
+    cpk = min(cpu, cpl)
+
+    return {
+        "n": n,
+        "target": target,
+        "mean": mean,
+        "sigma": sigma,
+        "usl": usl,
+        "lsl": lsl,
+        "cpu": round(cpu, 3),
+        "cpl": round(cpl, 3),
+        "cpk": round(cpk, 3),
+    }
+
+
+def cusum_analysis(series_df, k=0.5, h=5.0, min_points=8):
+    """Two-sided tabular CUSUM: standardizes each point to z = (x -
+    reference) / sigma, then accumulates C+ (upward drift) and C- (downward
+    drift), resetting toward zero each step by a slack k (in sigma units -
+    default 0.5 sigma, tuned to detect a sustained ~1-sigma shift) and
+    flagging a breach once the cumulative sum exceeds the decision interval
+    h (default 5 sigma). This exists because a Shewhart control chart is
+    bad at catching exactly this failure mode: a small, sustained shift (a
+    pump slowly wearing, a catalyst slowly losing activity) that never puts
+    any single point outside the 3-sigma control limits but is still a
+    real, accumulating drift.
+
+    The reference point is the property's own recorded target value, not
+    the sample mean of the series - deliberately. CUSUM is meant to detect
+    drift away from where the process is supposed to be; if the series
+    already contains an unaddressed shift, the sample mean is itself
+    contaminated by that shift; centering on it would dilute the very drift
+    this function exists to catch (and can even flag the earlier, correct
+    period as the anomaly instead of the later, shifted one). Falls back to
+    the sample mean only if no target value is recorded for this property.
+    Returns None if there aren't enough points yet."""
+    n = len(series_df)
+    if n < min_points:
+        return None
+
+    values = series_df["actual_value"].to_numpy(dtype=float)
+    target = series_df["target_value"].dropna().median()
+    reference = float(target) if pd.notna(target) else float(values.mean())
+    sigma = _moving_range_sigma(values)
+    if sigma <= 0:
+        return None
+
+    z = (values - reference) / sigma
+    c_pos = np.zeros(n)
+    c_neg = np.zeros(n)
+    for i in range(n):
+        prev_pos = c_pos[i - 1] if i > 0 else 0.0
+        prev_neg = c_neg[i - 1] if i > 0 else 0.0
+        c_pos[i] = max(0.0, prev_pos + z[i] - k)
+        c_neg[i] = min(0.0, prev_neg + z[i] + k)
+
+    breach_index = None
+    breach_direction = None
+    for i in range(n):
+        if c_pos[i] > h:
+            breach_index, breach_direction = i, "upward"
+            break
+        if c_neg[i] < -h:
+            breach_index, breach_direction = i, "downward"
+            break
+
+    chart_df = series_df.copy().reset_index(drop=True)
+    chart_df["cusum_positive"] = c_pos
+    chart_df["cusum_negative"] = c_neg
+
+    result = {
+        "n": n,
+        "k": k,
+        "h": h,
+        "reference": reference,
+        "chart_df": chart_df,
+        "breach_index": breach_index,
+        "breach_direction": breach_direction,
+    }
+    if breach_index is not None:
+        result["breach_run_id"] = int(chart_df.iloc[breach_index]["run_id"])
+        result["breach_tested_at"] = chart_df.iloc[breach_index]["tested_at"]
+    return result
+
+
+def trend_test(series_df, min_points=5, alpha=0.05):
+    """Formal test for a monotonic trend over the run sequence: linear
+    regression of actual_value against run order, with a significance test
+    on the slope (via scipy.stats.linregress). This replaces an
+    eyeballed/first-half-vs-second-half average with an actual answer to
+    "is this a statistically real trend or is it noise" - p < 0.05 is the
+    conventional threshold used here. Returns None if there aren't enough
+    points yet."""
+    n = len(series_df)
+    if n < min_points:
+        return None
+
+    values = series_df["actual_value"].to_numpy(dtype=float)
+    x = np.arange(n, dtype=float)
+    result = scipy_stats.linregress(x, values)
+
+    direction = "increasing" if result.slope > 0 else ("decreasing" if result.slope < 0 else "flat")
+    significant = result.pvalue < alpha
+
+    return {
+        "n": n,
+        "slope_per_run": round(float(result.slope), 5),
+        "r_squared": round(float(result.rvalue) ** 2, 3),
+        "p_value": round(float(result.pvalue), 4),
+        "significant": significant,
+        "direction": direction,
+        "alpha": alpha,
+    }
