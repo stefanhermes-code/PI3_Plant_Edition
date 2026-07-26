@@ -3,8 +3,9 @@
 Wraps the OpenAI Responses API (file_search over a vector store) behind a
 few simple functions so pages don't need to know API details:
 is_configured(), is_enabled_for_plant(), any_plant_enabled(),
-push_document_to_vector_store(), delete_document_from_vector_store(), and
-ask_assistant().
+push_document_to_vector_store(), delete_document_from_vector_store(),
+ask_assistant(), and (a one-off structured-extraction helper, not tied to
+the vector store) openai_key_configured() / extract_raw_material_from_tds().
 
 Migration history: this module originally called the OpenAI Assistants
 API (threads/runs against a persisted Assistant object). That API was
@@ -65,11 +66,12 @@ every OpenAI call below is also wrapped in try/except so a transient API
 problem shows a friendly st.error instead of crashing the page.
 """
 
+import json
 import os
 
 import streamlit as st
 
-from db import PI3AIConnectionSetting
+from db import RAW_MATERIAL_CATEGORIES, PI3AIConnectionSetting
 
 # Balances answer quality against cost for a fairly detailed, rule-heavy
 # system prompt (SYSTEM_PROMPT below has many formatting/structure
@@ -330,6 +332,16 @@ def is_configured():
     return bool(_get_secret("OPENAI_API_KEY") and _get_secret("PI3_VECTOR_STORE_ID"))
 
 
+def openai_key_configured():
+    """True once OPENAI_API_KEY alone is present - no vector store needed.
+
+    Used by features that call the Responses API directly for a one-off
+    task unrelated to the company knowledge base (e.g.
+    extract_raw_material_from_tds() below), so they aren't blocked on a
+    vector store id that has nothing to do with what they're doing."""
+    return bool(_get_secret("OPENAI_API_KEY"))
+
+
 def is_enabled_for_plant(session, plant_id):
     """True only when PI3 is both configured (secrets present) AND
     switched on for this specific plant on the PI3 Connectivity admin
@@ -464,4 +476,74 @@ def ask_assistant(prompt):
         return response.output_text or None
     except Exception as exc:
         st.error(f"Could not reach PI3: {exc}")
+        return None
+
+
+def extract_raw_material_from_tds(tds_text, sds_text=None):
+    """Pull a structured raw-material record out of a technical data
+    sheet's extracted text, for prefilling the Add Raw Material form (see
+    pages/14_Raw_Materials.py). An SDS's extracted text can optionally be
+    passed alongside for supplementary hazard/handling notes.
+
+    Returns a dict with keys name, category, default_supplier, notes (each
+    a string, possibly empty if not found in the source text), or None
+    (with an st.error already shown) on failure, timeout, or if
+    OPENAI_API_KEY isn't set.
+
+    Deliberately does not use SYSTEM_PROMPT, is_configured(), or
+    file_search: this is a one-off structured-extraction task on text
+    already extracted locally from an uploaded PDF, not a
+    polyurethane-expert Q&A over the company knowledge base, so it gets
+    its own narrow instructions and only needs an API key - not the
+    vector store the rest of this module is built around.
+    """
+    if not tds_text or not tds_text.strip():
+        return None
+    if not openai_key_configured():
+        return None
+    try:
+        client = _client()
+        model = _get_secret("PI3_MODEL") or DEFAULT_MODEL
+        instructions = (
+            "You extract structured raw-material master data from a supplier "
+            "technical data sheet (TDS), for a polyurethane foam manufacturer's "
+            "raw material database. Respond with ONLY a single JSON object, no "
+            "other text and no markdown code fences, with exactly these keys: "
+            "\"name\" (the product's trade name), \"category\" (choose the "
+            f"single best fit from this exact list: {RAW_MATERIAL_CATEGORIES}), "
+            "\"default_supplier\" (the manufacturer or supplier name), and "
+            "\"notes\" (a concise plain-text summary of the key specs a "
+            "formulator would want at a glance: chemical type, appearance, and "
+            "key numeric properties such as OH value, viscosity, density, "
+            "NCO%, or functionality where present). Use an empty string for "
+            "any field you cannot determine from the source text. Do not "
+            "invent data that is not present in the source text."
+        )
+        input_text = f"TECHNICAL DATA SHEET TEXT:\n{tds_text[:8000]}"
+        if sds_text and sds_text.strip():
+            input_text += (
+                "\n\nSAFETY DATA SHEET TEXT (supplementary - use only to add "
+                f"hazard/handling notes):\n{sds_text[:4000]}"
+            )
+
+        response = client.responses.create(
+            model=model,
+            instructions=instructions,
+            input=input_text,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        raw = (response.output_text or "").strip()
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw.lower().startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw)
+        return {
+            "name": str(data.get("name") or "").strip(),
+            "category": str(data.get("category") or "").strip(),
+            "default_supplier": str(data.get("default_supplier") or "").strip(),
+            "notes": str(data.get("notes") or "").strip(),
+        }
+    except Exception as exc:
+        st.error(f"Could not extract raw material data from this document: {exc}")
         return None

@@ -79,7 +79,7 @@ else:
                 )
 
 st.divider()
-st.subheader("Formulation by version")
+st.subheader("Recipes (version controlled)")
 st.caption("The raw materials, dosage (php), and role recorded for each recipe version.")
 for v in versions:
     with st.expander(f"{v.version_label} — {v.approval_status} — {v.change_note or ''}"):
@@ -108,16 +108,36 @@ plant_id = grade.product_family.plant_id if grade.product_family else None
 if ai_assistant.is_enabled_for_plant(session, plant_id):
     st.caption(
         "PI3 reviews this foam grade's recipe versions, formulation, and quality-test history "
-        "against the target properties you enter below, and proposes a formulation for your "
-        "technical team to evaluate and confirm."
+        "against the target properties below, and proposes a formulation for your technical "
+        "team to evaluate and confirm. Prefilled from this foam grade's stored specification - "
+        "add any other targets (resilience, tensile strength, ...) before asking."
     )
+    # Prefilled from this foam grade's own stored targets so the operator
+    # isn't retyping numbers the database already has - editable, and only
+    # set once per foam grade (keying the widget by grade.id means picking
+    # a different grade gets its own fresh default instead of overwriting
+    # whatever the operator already typed for this one).
+    default_targets = []
+    if grade.target_density is not None:
+        default_targets.append(f"Density {grade.target_density:g} kg/m3")
+    if grade.target_hardness is not None:
+        # No unit is stored against target_hardness (hardness is reported in
+        # kPa for CLD or N for IFD/ILD depending on the method) - leave the
+        # number as recorded rather than guessing a unit, since
+        # quality_specification (added below, when present) usually states
+        # the actual test method and unit alongside it.
+        default_targets.append(f"Hardness {grade.target_hardness:g} (unit per test method)")
+    if grade.quality_specification:
+        default_targets.append(grade.quality_specification.strip())
+
     target_properties = st.text_area(
         "Target properties",
+        value="\n".join(default_targets),
         placeholder=(
             "e.g. Density 28 kg/m3, Hardness (CLD 40%) 3.5-4.0 kPa, Resilience > 55%, "
             "Tensile strength > 100 kPa"
         ),
-        key="recipe_opt_targets",
+        key=f"recipe_opt_targets_{grade.id}",
     )
     if st.button(
         "Get PI3 recommendation",

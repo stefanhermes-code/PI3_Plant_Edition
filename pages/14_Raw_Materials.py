@@ -9,9 +9,24 @@ material lists commonly already exist as an ERP/supplier export.
 import pandas as pd
 import streamlit as st
 
+import ai_assistant
 from auth import logout_button, require_login
 from db import RAW_MATERIAL_CATEGORIES, RawMaterial, RecipeComponent, get_session, init_db
 from helpers import clickable_table, csv_excel_uploader, delete_with_confirm, page_setup, parse_bool
+
+
+def _extract_pdf_text(uploaded_file):
+    """Best-effort text extraction from an uploaded PDF (TDS or SDS).
+    Returns "" on any failure rather than raising, since a badly-scanned
+    or image-only PDF shouldn't crash the page - the user still has the
+    manual entry tab as a fallback."""
+    try:
+        import pdfplumber
+
+        with pdfplumber.open(uploaded_file) as pdf:
+            return "\n".join(page.extract_text() or "" for page in pdf.pages)
+    except Exception:
+        return ""
 
 RAW_MATERIAL_REQUIRED_COLUMNS = ["name"]
 RAW_MATERIAL_OPTIONAL_COLUMNS = ["category", "default_supplier", "notes", "active"]
@@ -29,7 +44,7 @@ st.caption(
 )
 session = get_session()
 
-tab_manual, tab_import = st.tabs(["Manual entry", "CSV / Excel import"])
+tab_manual, tab_tds, tab_import = st.tabs(["Manual entry", "Add from TDS", "CSV / Excel import"])
 
 with tab_manual:
     with st.form("add_raw_material"):
@@ -55,6 +70,74 @@ with tab_manual:
                 )
                 session.commit()
                 st.success(f"Raw material '{name}' added.")
+                st.rerun()
+
+with tab_tds:
+    st.caption(
+        "Upload a supplier technical data sheet (TDS) to prefill the fields below instead of "
+        "retyping them. An SDS is optional and only adds handling/hazard notes."
+    )
+    tds_file = st.file_uploader("Technical data sheet (PDF) *", type=["pdf"], key="tds_upload")
+    sds_file = st.file_uploader("Safety data sheet (PDF, optional)", type=["pdf"], key="sds_upload")
+
+    if tds_file is not None:
+        if st.button("Extract from document(s)", key="extract_tds_btn"):
+            tds_text = _extract_pdf_text(tds_file)
+            sds_text = _extract_pdf_text(sds_file) if sds_file is not None else None
+            if not tds_text.strip():
+                st.warning(
+                    "Could not read any text from this PDF (it may be a scanned image). "
+                    "Use Manual entry instead."
+                )
+            elif ai_assistant.openai_key_configured():
+                with st.spinner("Using PI3 to read the document..."):
+                    extracted = ai_assistant.extract_raw_material_from_tds(tds_text, sds_text)
+                if extracted:
+                    st.session_state["tds_extracted"] = extracted
+                    st.success("Extracted - review and adjust the fields below, then save.")
+            else:
+                # No OpenAI key configured: hand the operator the raw text to
+                # copy from by hand rather than offering a feature that can't run.
+                st.session_state["tds_extracted"] = {
+                    "name": "",
+                    "category": "",
+                    "default_supplier": "",
+                    "notes": tds_text[:2000],
+                }
+                st.info(
+                    "PI3 isn't configured on this deployment, so fields can't be auto-filled. "
+                    "The extracted document text is in Notes below for you to copy from."
+                )
+
+    tds_extracted = st.session_state.get("tds_extracted", {})
+    with st.form("add_raw_material_from_tds"):
+        t_name = st.text_input("Raw material name *", value=tds_extracted.get("name", ""))
+        tc1, tc2 = st.columns(2)
+        tds_category = tds_extracted.get("category", "")
+        t_category = tc1.selectbox(
+            "Category",
+            RAW_MATERIAL_CATEGORIES,
+            index=RAW_MATERIAL_CATEGORIES.index(tds_category) if tds_category in RAW_MATERIAL_CATEGORIES else 0,
+        )
+        t_supplier = tc2.text_input("Default supplier", value=tds_extracted.get("default_supplier", ""))
+        t_notes = st.text_area("Notes", value=tds_extracted.get("notes", ""), height=150)
+        t_active = st.checkbox("Active", value=True, key="tds_active")
+        if st.form_submit_button("Save raw material"):
+            if not t_name.strip():
+                st.error("Raw material name is required.")
+            else:
+                session.add(
+                    RawMaterial(
+                        name=t_name.strip(),
+                        category=t_category,
+                        default_supplier=t_supplier,
+                        notes=t_notes,
+                        active=t_active,
+                    )
+                )
+                session.commit()
+                st.session_state.pop("tds_extracted", None)
+                st.success(f"Raw material '{t_name}' added.")
                 st.rerun()
 
 with tab_import:

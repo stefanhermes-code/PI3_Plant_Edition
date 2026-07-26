@@ -33,13 +33,16 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import clickable_table, combine_date_time, csv_excel_uploader, delete_with_confirm, page_setup
+from helpers import clickable_table, combine_date_time, csv_excel_uploader, delete_with_confirm, page_setup, parse_dt
 
 RESULT_REQUIRED_COLUMNS = ["production_run_id", "property_name", "test_method", "unit", "actual_value"]
 RESULT_OPTIONAL_COLUMNS = [
     "target_value", "sample_id", "trial_record_id", "method_revision",
     "replicate_no", "tested_at", "notes",
 ]
+
+SAMPLE_REQUIRED_COLUMNS = ["production_run_id", "zone_label"]
+SAMPLE_OPTIONAL_COLUMNS = ["sample_ts", "cure_age_hours", "notes"]
 
 page_setup("Quality Test Result")
 init_db()
@@ -103,6 +106,39 @@ with st.expander("Add sample", expanded=False):
                 session.commit()
                 st.success("Sample saved.")
                 st.rerun()
+
+with st.expander("Bulk import samples (CSV / Excel)", expanded=False):
+    sample_df, sample_filename = csv_excel_uploader(
+        SAMPLE_REQUIRED_COLUMNS, SAMPLE_OPTIONAL_COLUMNS, key="sample_upload"
+    )
+    if sample_df is not None:
+        run_ids = {r.id for r in runs}
+        good_rows, bad_rows = [], []
+        for _, row in sample_df.iterrows():
+            if row.get("production_run_id") in run_ids and str(row.get("zone_label", "")).strip():
+                good_rows.append(row)
+            else:
+                bad_rows.append(row)
+
+        st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged as invalid: **{len(bad_rows)}**")
+        if bad_rows:
+            st.warning("These rows have a production_run_id that doesn't exist, or a blank zone_label.")
+            st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+
+        if good_rows and st.button("Confirm import", key="confirm_sample_import"):
+            for row in good_rows:
+                session.add(
+                    Sample(
+                        production_run_id=int(row["production_run_id"]),
+                        zone_label=str(row["zone_label"]).strip(),
+                        sample_ts=parse_dt(row.get("sample_ts")),
+                        cure_age_hours=row.get("cure_age_hours") if pd.notna(row.get("cure_age_hours")) else None,
+                        notes=str(row.get("notes", "") or ""),
+                    )
+                )
+            session.commit()
+            st.success(f"Imported {len(good_rows)} sample(s) from {sample_filename}.")
+            st.rerun()
 
 samples = session.query(Sample).order_by(Sample.id.desc()).all()
 if samples:
