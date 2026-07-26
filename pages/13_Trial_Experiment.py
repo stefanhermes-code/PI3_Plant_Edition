@@ -34,9 +34,8 @@ logout_button()
 
 st.title("Trial / Experiment (optional)")
 st.caption(
-    "Flag a production run as a deliberate trial or change investigation. This is optional — "
-    "only use it when there's a real hypothesis and a closeout/approval requirement, not for "
-    "routine batches."
+    "Flag a production run as a deliberate trial or change investigation. Optional — use it "
+    "when there's a real hypothesis and a closeout/approval requirement."
 )
 session = get_session()
 

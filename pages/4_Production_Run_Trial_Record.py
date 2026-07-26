@@ -191,9 +191,8 @@ logout_button()
 
 st.title("Production Run")
 st.caption(
-    "Every batch made goes here: recipe used, machine parameters, and quality results. "
-    "This is routine data entry, not an experiment log — if this particular run is a "
-    "deliberate trial or change investigation, flag it as one on the Trial / Experiment page."
+    "Every batch made goes here: recipe used, machine parameters, and quality results. For a "
+    "deliberate trial or change investigation, flag this run as one on the Trial / Experiment page."
 )
 session = get_session()
 

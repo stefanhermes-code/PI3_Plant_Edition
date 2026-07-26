@@ -30,8 +30,8 @@ logout_button()
 
 st.title("Quality Issue")
 st.caption(
-    "Captures what was observed on a production run — not a defect-tracking or "
-    "customer-complaint tool. Used to build a factual, confidence-rated history."
+    "Captures what was observed on a production run, building a factual, confidence-rated "
+    "history of quality issues."
 )
 session = get_session()
 

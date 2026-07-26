@@ -59,9 +59,8 @@ if not runs:
 # ---------------------------------------------------------------------------
 st.subheader("🧊 Samples")
 st.caption(
-    "Where in the block a sample was taken, and when. Lab results should be linked to a sample "
-    "rather than analyzed as a bare number, so density/compression can be mapped back to location "
-    "and cure age."
+    "Where in the block a sample was taken, and when. Linking a lab result to a sample maps "
+    "density/compression back to location and cure age."
 )
 
 with st.expander("Add sample", expanded=False):

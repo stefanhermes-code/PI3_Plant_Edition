@@ -22,8 +22,8 @@ logout_button()
 st.title("Machine Settings Optimization")
 st.caption(
     "Groups a process setting into low/medium/high ranges across a foam grade's production "
-    "runs, and shows which range has historically landed closest to the property's target — a "
-    "starting range for review, not an automatic setpoint change."
+    "runs, and shows which range has historically landed closest to the property's target, as "
+    "a starting range for your team to review."
 )
 session = get_session()
 

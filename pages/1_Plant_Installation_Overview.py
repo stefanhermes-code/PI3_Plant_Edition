@@ -104,8 +104,8 @@ else:
 st.divider()
 st.subheader("Machines / foaming lines")
 st.caption(
-    "So process parameters (conveyor speed, sidewall width, laydown mode, etc.) connect to the actual "
-    "equipment that produced them, not just a plant. A production run picks one of these."
+    "Process parameters (conveyor speed, sidewall width, laydown mode, etc.) connect to the "
+    "specific equipment that produced them. A production run picks one of these."
 )
 
 if not plants:
