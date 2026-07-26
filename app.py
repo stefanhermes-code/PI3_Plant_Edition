@@ -169,6 +169,7 @@ def render_overview():
     a4.page_link("pages/9_Similar_Case_Retrieval.py", label="Find similar historical cases", icon="🔎")
 
 overview_page = st.Page(render_overview, title="Overview", icon="🏠", default=True)
+report_page = st.Page("pages/21_Report.py", title="Report", icon="🖨️")
 
 setup_pages = [
     st.Page("pages/1_Plant_Installation_Overview.py", title="Plant & Foam Equipment Overview", icon="🏭"),
@@ -223,7 +224,7 @@ nav_sections = {
 # always renders its automatic nav menu first, before any other sidebar
 # content, regardless of where in the script that content is written.
 pg = st.navigation(
-    {"PI3 Plant Edition": [overview_page], **nav_sections},
+    {"PI3 Plant Edition": [overview_page, report_page], **nav_sections},
     position="hidden",
 )
 
@@ -236,6 +237,7 @@ with st.sidebar:
     st.divider()
 
     st.page_link(overview_page)
+    st.page_link(report_page)
     for section_name, pages in nav_sections.items():
         st.caption(section_name)
         for page in pages:
