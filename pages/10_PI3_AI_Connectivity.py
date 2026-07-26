@@ -10,8 +10,9 @@ admin settings. Even when enabled, final decisions require human review
 and approval — no autonomous formulation commands, ever.
 
 This screen owns the per-plant enable/disable toggle and commercial fee.
-The actual PI3 reasoning layer (an OpenAI Assistant with a vector store
-over historical trial narratives and expert notes) lives in ai_assistant.py.
+The actual PI3 reasoning layer (OpenAI's Responses API, with file_search
+over a vector store of historical trial narratives and expert notes)
+lives in ai_assistant.py.
 """
 
 import datetime as dt
