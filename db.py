@@ -847,7 +847,58 @@ def get_session():
     accessing a not-yet-loaded (lazy) relationship on it would raise
     sqlalchemy.orm.exc.DetachedInstanceError. Reusing one session per
     browser session keeps those objects attached and loadable.
+
+    IMPORTANT - see close_out_session() below: reusing one session across
+    reruns means every read this session does opens a transaction that, if
+    never explicitly closed, stays open for as long as that browser tab's
+    Streamlit session lives - not just for this rerun. app.py must call
+    close_out_session() once, after routing to whichever page ran, on
+    every single rerun. Do not call get_session() from anywhere that isn't
+    already covered by that (e.g. a background job), without also arranging
+    to close the transaction it opens.
     """
     if "_sa_session" not in st.session_state:
         st.session_state["_sa_session"] = SessionLocal()
     return st.session_state["_sa_session"]
+
+
+def close_out_session():
+    """Commit (or roll back, on failure) whatever transaction the page that
+    just ran opened, so no Streamlit rerun ever ends with an open, idle
+    transaction left sitting on the database.
+
+    Why this exists: get_session() deliberately reuses ONE session per
+    browser tab across every rerun (see its docstring), and every read
+    (.query()/.get()/...) under SQLAlchemy's default autocommit=False opens
+    a transaction. Pages that only display data - Trend Analysis, Recipe
+    Optimization, Root-Cause Assistant, Process-Property Correlation,
+    Machine Settings Optimization, Demo Data Admin, and any read-only view
+    of a page that also supports editing - never call session.commit()
+    themselves, since they have nothing to save. Without this function,
+    that transaction would sit "idle in transaction" - holding read locks
+    on every table it queried - until some later rerun happened to submit a
+    form, or forever, if the user only browses and then leaves the tab
+    open or closes it.
+
+    This is not a theoretical concern: exactly this happened in production
+    - a single read-only page view left a transaction open for roughly 18
+    hours, holding locks that blocked an unrelated schema migration until
+    the stale connection was manually terminated.
+
+    Safe to call unconditionally after every rerun: every place in this app
+    that adds/edits/deletes already calls session.commit() itself within
+    the same rerun the change happens in (see cascades.py's docstring - a
+    whole master-data delete is deliberately one all-or-nothing
+    transaction, committed once by the caller). So by the time this runs,
+    there is never a "half-finished" change sitting uncommitted - this only
+    ever closes out a transaction that was already left in a fully
+    consistent state, whether that's a page's own prior commit or just the
+    read-only queries a view-only page issued.
+    """
+    session = st.session_state.get("_sa_session")
+    if session is None:
+        return
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()

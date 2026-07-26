@@ -23,6 +23,7 @@ from db import (
     ProductionRun,
     QualityObservation,
     TrialRecord,
+    close_out_session,
     get_session,
     init_db,
 )
@@ -240,4 +241,14 @@ with st.sidebar:
         for page in pages:
             st.page_link(page)
 
-pg.run()
+try:
+    pg.run()
+finally:
+    # See db.py close_out_session(): every rerun of every page must end
+    # with no open transaction left on the database, or a read-only page
+    # view (Trend Analysis, Recipe Optimization, ...) leaves one sitting
+    # idle for as long as the browser tab stays open - which has already
+    # caused a real production incident (an 18-hour-old idle transaction
+    # blocking a schema migration). The try/finally ensures this still
+    # runs even if the routed page's script raised an exception.
+    close_out_session()
