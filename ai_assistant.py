@@ -840,7 +840,15 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
                         rows, executed_sql = pi3_query_tool.run_plant_query(sql, plant_id)
                         result = {"rows": rows, "row_count": len(rows)}
                         tool_log.append(
-                            {"tool": "query_plant_data", "sql": executed_sql, "rows_returned": len(rows)}
+                            {
+                                "tool": "query_plant_data",
+                                "sql": executed_sql,
+                                "rows_returned": len(rows),
+                                # Full result rows, kept alongside the summary above so a
+                                # report export (see reports.render_pi3_qa_report_docx) can
+                                # show the actual data PI3 checked, not just row counts.
+                                "rows": _to_jsonable(rows),
+                            }
                         )
                     except pi3_query_tool.QueryRejected as exc:
                         result = {"error": str(exc)}
@@ -853,7 +861,7 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
                         args.get("foam_grade_id", default_foam_grade_id),
                         args.get("property_name"),
                     )
-                    tool_log.append({"tool": "get_verified_analysis", "args": args})
+                    tool_log.append({"tool": "get_verified_analysis", "args": args, "result": result})
                 else:
                     result = {"error": f"Unknown tool '{call.name}'."}
 

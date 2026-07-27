@@ -22,11 +22,28 @@ Streamlit import, easy to unit test) and a PDF + Excel renderer pair:
 
 pages/21_Report.py wires these to selectors, an in-app preview, and
 st.download_button for both file formats.
+
+A fourth, narrower report type lives here too:
+
+- build_pi3_qa_report_data() / render_pi3_qa_report_docx()
+  A single "Ask PI3" question-and-answer exchange (see
+  helpers.render_ask_pi3_section) - the question, PI3's answer, and an
+  appendix of the exact data PI3 checked to produce it (SQL + rows
+  returned, or the verified-analysis arguments and result). Unlike the
+  three reports above, this is DOCX only (no PDF/Excel - there's no
+  tabular data here that benefits from a spreadsheet), and it is always
+  built from this same code path, so every export has identical
+  formatting regardless of who generates it or what was asked - a
+  hand-maintained Word template would drift over time; this can't.
 """
 
+import datetime as dt
 import io
+import os
 
 import pandas as pd
+from docx import Document
+from docx.shared import Cm, Pt, RGBColor
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
@@ -540,3 +557,204 @@ def render_trial_report_excel(data):
         "Adjustments": data["adjustments"],
         "Approvals": data["approvals"],
     })
+
+
+# ---------------------------------------------------------------------------
+# 4. PI3 Q&A Report (DOCX only)
+# ---------------------------------------------------------------------------
+
+_HTC_LOGO_PATH = "assets/htc_global_logo_blue_steel.png"
+_HTC_BLUE = RGBColor(0x1B, 0x6F, 0xA8)  # matches .streamlit/config.toml primaryColor
+_HTC_GREY = RGBColor(0x5A, 0x6B, 0x74)
+
+
+def build_pi3_qa_report_data(
+    question, answer, tool_log, page_context="", plant_name=None,
+    foam_grade_name=None, asked_by=None, asked_at=None,
+):
+    """Plain-dict data assembly for one 'Ask PI3' question/answer exchange -
+    no Streamlit or python-docx import, so this half is easy to unit test
+    on its own. `tool_log` is exactly what ai_assistant.ask_plant_question()
+    returns: a list of dicts, each either
+    {"tool": "query_plant_data", "sql", "rows_returned", "rows", ["error"]}
+    or {"tool": "get_verified_analysis", "args", "result"}."""
+    return {
+        "question": (question or "").strip(),
+        "answer": (answer or "").strip(),
+        "tool_log": tool_log or [],
+        "page_context": (page_context or "").strip(),
+        "plant_name": plant_name,
+        "foam_grade_name": foam_grade_name,
+        "asked_by": asked_by,
+        "asked_at": asked_at or dt.datetime.utcnow(),
+    }
+
+
+def _docx_heading(doc, text, size=13, color=_HTC_BLUE, space_before=12):
+    """A styled heading paragraph - deliberately not doc.add_heading()'s
+    built-in Heading styles, since those pull from the default Word theme
+    (unpredictable across machines); this way every report's headings look
+    identical regardless of what Word template the opening machine has."""
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(space_before)
+    p.paragraph_format.space_after = Pt(4)
+    run = p.add_run(text)
+    run.bold = True
+    run.font.size = Pt(size)
+    run.font.color.rgb = color
+    return p
+
+
+def _docx_kv_table(doc, pairs):
+    table = doc.add_table(rows=0, cols=2)
+    table.autofit = True
+    for label, value in pairs:
+        row = table.add_row().cells
+        label_run = row[0].paragraphs[0].add_run(label)
+        label_run.bold = True
+        label_run.font.size = Pt(9.5)
+        row[1].paragraphs[0].add_run("—" if value in (None, "") else str(value)).font.size = Pt(9.5)
+    return table
+
+
+def _docx_data_table(doc, rows, max_rows=200):
+    """Renders a list-of-dicts as a bordered table, capped at max_rows so a
+    very large query result doesn't produce an unusable multi-hundred-page
+    appendix - the SQL that produced it is always shown alongside, so the
+    full result set is still reproducible."""
+    if not rows:
+        doc.add_paragraph("No rows returned.").runs[0].font.size = Pt(9)
+        return
+    shown = rows[:max_rows]
+    headers = list(shown[0].keys())
+    table = doc.add_table(rows=1, cols=len(headers))
+    table.style = "Light Grid Accent 1"
+    for cell, header in zip(table.rows[0].cells, headers):
+        run = cell.paragraphs[0].add_run(header)
+        run.bold = True
+        run.font.size = Pt(8.5)
+    for row_data in shown:
+        cells = table.add_row().cells
+        for cell, header in zip(cells, headers):
+            value = row_data.get(header)
+            cell.paragraphs[0].add_run("—" if value in (None, "") else str(value)).font.size = Pt(8.5)
+    if len(rows) > max_rows:
+        note = doc.add_paragraph(f"... {len(rows) - max_rows} further row(s) not shown.")
+        note.runs[0].italic = True
+        note.runs[0].font.size = Pt(8.5)
+
+
+def render_pi3_qa_report_docx(data):
+    """Renders one PI3 Q&A exchange as DOCX bytes: HTC-branded header,
+    a metadata block, the question, PI3's answer, an advisory-boundary
+    disclaimer, and an appendix showing exactly what PI3 checked to
+    produce the answer. Same layout, same styling, every single time -
+    that consistency is the whole point of generating this from code
+    rather than starting from a hand-edited Word file each time."""
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = "Calibri"
+    normal.font.size = Pt(10.5)
+
+    # --- Header: logo + title -------------------------------------------
+    header = doc.add_table(rows=1, cols=2)
+    header.autofit = False
+    header.columns[0].width = Cm(3.6)
+    logo_cell, title_cell = header.rows[0].cells
+    if os.path.exists(_HTC_LOGO_PATH):
+        run = logo_cell.paragraphs[0].add_run()
+        run.add_picture(_HTC_LOGO_PATH, width=Cm(3.0))
+    title_p = title_cell.paragraphs[0]
+    title_run = title_p.add_run("PI3 Q&A Report")
+    title_run.bold = True
+    title_run.font.size = Pt(20)
+    title_run.font.color.rgb = _HTC_BLUE
+    subtitle_p = title_cell.add_paragraph()
+    subtitle_run = subtitle_p.add_run("Flexible slabstock foam expert system | HTC Global Co. Ltd")
+    subtitle_run.italic = True
+    subtitle_run.font.size = Pt(10)
+    subtitle_run.font.color.rgb = _HTC_GREY
+
+    doc.add_paragraph()
+
+    # --- Metadata ----------------------------------------------------------
+    _docx_kv_table(doc, [
+        ("Generated", data["asked_at"].strftime("%Y-%m-%d %H:%M UTC")),
+        ("Plant", data.get("plant_name") or "—"),
+        ("Foam grade", data.get("foam_grade_name") or "—"),
+        ("Asked by", data.get("asked_by") or "—"),
+        ("Page context", data.get("page_context") or "—"),
+    ])
+
+    # --- Question / answer ---------------------------------------------
+    _docx_heading(doc, "Question asked")
+    doc.add_paragraph(data["question"] or "—")
+
+    _docx_heading(doc, "PI3's answer")
+    for line in (data["answer"] or "—").split("\n"):
+        if line.strip():
+            doc.add_paragraph(line)
+
+    disclaimer = doc.add_paragraph()
+    disclaimer.paragraph_format.space_before = Pt(10)
+    disc_run = disclaimer.add_run(
+        "This is historical reference for the reviewer's own investigation, not an "
+        "instruction. Confirm through your own investigation before acting on it."
+    )
+    disc_run.italic = True
+    disc_run.font.size = Pt(9)
+    disc_run.font.color.rgb = _HTC_GREY
+
+    # --- Appendix: exactly what PI3 checked ------------------------------
+    doc.add_page_break()
+    _docx_heading(doc, "Appendix: data PI3 checked", size=15)
+    tool_log = data.get("tool_log") or []
+    if not tool_log:
+        doc.add_paragraph("No tool calls were recorded for this answer.")
+    for i, entry in enumerate(tool_log, start=1):
+        tool_name = entry.get("tool", "unknown tool")
+        _docx_heading(doc, f"{i}. {tool_name}", size=11.5, color=_HTC_GREY, space_before=14)
+        if tool_name == "query_plant_data":
+            sql_p = doc.add_paragraph()
+            sql_run = sql_p.add_run(entry.get("sql", "—"))
+            sql_run.font.name = "Consolas"
+            sql_run.font.size = Pt(9)
+            if "error" in entry:
+                err_p = doc.add_paragraph()
+                err_run = err_p.add_run(f"Rejected: {entry['error']}")
+                err_run.font.color.rgb = RGBColor(0xB0, 0x00, 0x00)
+                err_run.font.size = Pt(9)
+            else:
+                count_p = doc.add_paragraph()
+                count_run = count_p.add_run(f"{entry.get('rows_returned', 0)} row(s) returned:")
+                count_run.font.size = Pt(9)
+                _docx_data_table(doc, entry.get("rows") or [])
+        elif tool_name == "get_verified_analysis":
+            args_p = doc.add_paragraph()
+            args_run = args_p.add_run(f"Arguments: {entry.get('args')}")
+            args_run.font.size = Pt(9)
+            result = entry.get("result")
+            if isinstance(result, dict):
+                kv_pairs = []
+                table_keys = []  # list-of-dicts values, rendered as a sub-table below instead
+                for k, v in result.items():
+                    if isinstance(v, list) and v and isinstance(v[0], dict):
+                        kv_pairs.append((k, f"[{len(v)} row(s) - see table below]"))
+                        table_keys.append(k)
+                    elif isinstance(v, list):
+                        # Plain-value list (e.g. warnings/successes strings) - show the
+                        # actual content inline rather than hiding it behind a count.
+                        kv_pairs.append((k, "; ".join(str(x) for x in v) if v else "—"))
+                    else:
+                        kv_pairs.append((k, v))
+                _docx_kv_table(doc, kv_pairs)
+                for k in table_keys:
+                    sub = doc.add_paragraph()
+                    sub_run = sub.add_run(k)
+                    sub_run.bold = True
+                    sub_run.font.size = Pt(9)
+                    _docx_data_table(doc, result[k])
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()

@@ -6,7 +6,9 @@ import pandas as pd
 import streamlit as st
 
 import ai_assistant
-from db import get_session
+import reports
+from auth import current_user
+from db import FoamGrade, get_session
 
 
 def page_setup(title: str):
@@ -288,3 +290,25 @@ def render_ask_pi3_section(session, plant_id, default_foam_grade_id, page_contex
                     elif entry["tool"] == "get_verified_analysis":
                         st.caption(f"Verified analysis called: {entry.get('args')}")
         st.caption("Confirm through your own investigation before acting on this.")
+
+        grade_name = None
+        if default_foam_grade_id:
+            grade = session.get(FoamGrade, default_foam_grade_id)
+            grade_name = grade.grade_name if grade else None
+
+        report_data = reports.build_pi3_qa_report_data(
+            question=st.session_state.get(f"{key_prefix}_asked", ""),
+            answer=answer,
+            tool_log=tool_log,
+            page_context=page_context,
+            plant_name=reports.plant_label(session, plant_id),
+            foam_grade_name=grade_name,
+            asked_by=current_user().get("display_name"),
+        )
+        st.download_button(
+            "Download as Word (.docx)",
+            data=reports.render_pi3_qa_report_docx(report_data),
+            file_name=f"pi3_qa_report_{key_prefix}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key=f"{key_prefix}_download_docx",
+        )
