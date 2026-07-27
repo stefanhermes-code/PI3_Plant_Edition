@@ -23,7 +23,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, render_ask_pi3_section
+from helpers import page_setup, render_ask_pi3_section, render_pi3_docx_download
 
 page_setup("Recipe Optimization")
 init_db()
@@ -446,6 +446,14 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "historical cases. For your technical team to evaluate and confirm before applying."
         )
         st.write(ai_answer)
+        render_pi3_docx_download(
+            session,
+            plant_id,
+            key_prefix=f"recipe_opt_fixed_{grade.id}",
+            question_label=f"PI3 formulation recommendation for {grade.grade_name}",
+            answer=ai_answer,
+            foam_grade_id=grade.id,
+        )
 elif ai_assistant.availability_status(session, plant_id) == "not_configured":
     st.caption(
         "PI3 isn't configured for this deployment yet (missing API credentials) - contact "

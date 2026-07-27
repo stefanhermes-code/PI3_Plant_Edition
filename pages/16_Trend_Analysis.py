@@ -31,7 +31,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, QualityObservation, get_session, init_db
-from helpers import page_setup, render_ask_pi3_section
+from helpers import page_setup, render_ask_pi3_section, render_pi3_docx_download
 
 page_setup("Trend Analysis")
 init_db()
@@ -40,12 +40,30 @@ logout_button()
 
 st.title("Trend Analysis")
 st.caption(
-    "Statistical process control for one property over a foam grade's production history: a "
-    "control chart with real control limits and run-rule flags, process capability against the "
-    "tolerance band, a CUSUM chart for slow sustained drift, and a formal trend test - not just a "
-    "line chart, so a real shift is flagged instead of left for the reviewer to eyeball."
+    "A deeper look at one quality property over a foam grade's production history than a plain "
+    "line chart: automatically flags sudden changes, checks how much margin there is to spec, "
+    "catches a slow drift building up over time, and tests whether an apparent trend is real or "
+    "just normal run-to-run variation."
 )
 session = get_session()
+
+# Plain-language description for each control-chart rule name from
+# analytics.control_chart_analysis() - the analysis itself keeps its
+# precise statistical rule names (used elsewhere, e.g. the PI3 prompt
+# below), but the on-screen table shouldn't require knowing what "3-sigma"
+# or "2-of-3" mean, so this translates purely for display.
+RULE_PLAIN_LABELS = {
+    "Beyond 3-sigma control limit": "A single result landed well outside the normal run-to-run range",
+    "Sustained shift (8+ consecutive points on one side)": (
+        "8 or more runs in a row landed on the same side of the average - a real, sustained shift"
+    ),
+    "Sustained drift (6+ consecutive points trending)": (
+        "6 or more runs in a row have been steadily rising or falling"
+    ),
+    "2-of-3 beyond 2-sigma warning line": (
+        "Several recent results have been unusually far from the average, close together"
+    ),
+}
 
 grades = session.query(FoamGrade).all()
 if not grades:
@@ -85,13 +103,14 @@ st.caption(f"{len(series)} production run(s) with a {property_name} result, {ser
 # Control chart
 # ---------------------------------------------------------------------------
 st.divider()
-st.subheader("Control chart (individuals / moving range)")
+st.subheader("Sudden changes check")
 chart_result = control_chart_analysis(series)
 
 if not chart_result["ready"]:
     st.info(
-        f"Only {chart_result['n']} result(s) so far - a control chart needs at least 5 to estimate "
-        "meaningful control limits. Add more production runs with this property tested to unlock this."
+        f"Only {chart_result['n']} result(s) so far - checking for sudden changes needs at least 5 "
+        "results to know what 'normal' looks like for this property. Add more production runs with "
+        "this property tested to unlock this."
     )
 else:
     chart_df = chart_result["chart_df"].set_index("tested_at")[
@@ -99,18 +118,18 @@ else:
     ]
     st.line_chart(chart_df)
     st.caption(
-        f"Center line {chart_result['mean']:.3g}, control limits [{chart_result['lcl']:.3g}, "
-        f"{chart_result['ucl']:.3g}] (+/-3 sigma, sigma estimated from the run-to-run moving range: "
-        f"{chart_result['sigma']:.3g})."
+        f"Based on how much this property normally varies run-to-run, results are expected to fall "
+        f"between {chart_result['lcl']:.3g} and {chart_result['ucl']:.3g}, centered around "
+        f"{chart_result['mean']:.3g}."
     )
     if chart_result["in_control"]:
-        st.success("No control-chart rule violations - this property looks statistically stable across these runs.")
+        st.success("No unusual patterns found - this property has been behaving consistently across these runs.")
     else:
-        st.warning(f"{len(chart_result['flags'])} rule violation(s) found:")
+        st.warning(f"{len(chart_result['flags'])} unusual pattern(s) found:")
         flags_display = pd.DataFrame(
             [
                 {
-                    "Rule": f["rule"],
+                    "What was seen": RULE_PLAIN_LABELS.get(f["rule"], f["rule"]),
                     "First seen": f["first_tested_at"],
                     "Run ID": f["first_run_id"],
                     "Points matching": f["points_matching"],
@@ -124,38 +143,40 @@ else:
 # Process capability
 # ---------------------------------------------------------------------------
 st.divider()
-st.subheader("Process capability (Cpk)")
+st.subheader("Margin to spec")
 capability = capability_analysis(series)
 if capability is None:
     st.info(
-        "Not enough results, or no consistent target value recorded, to compute process capability yet."
+        "Not enough results, or no consistent target value recorded, to check margin to spec yet."
     )
 else:
     cpk = capability["cpk"]
     if cpk >= 1.33:
-        capability_read = "capable - comfortable margin to the tolerance band"
+        capability_read = "comfortable margin to spec"
     elif cpk >= 1.0:
-        capability_read = "marginal - some results will likely fall outside the tolerance band"
+        capability_read = "tight - some results will likely fall outside spec"
     else:
-        capability_read = "not capable - this process routinely produces results outside the tolerance band"
+        capability_read = "not enough margin - this process routinely produces results outside spec"
     m1, m2, m3 = st.columns(3)
-    m1.metric("Cpk", f"{cpk:.2f}")
-    m2.metric("Cpu (upper side)", f"{capability['cpu']:.2f}")
-    m3.metric("Cpl (lower side)", f"{capability['cpl']:.2f}")
+    m1.metric("Overall margin to spec", f"{cpk:.2f}")
+    m2.metric("Margin to upper limit", f"{capability['cpu']:.2f}")
+    m3.metric("Margin to lower limit", f"{capability['cpl']:.2f}")
     st.caption(
-        f"Against a tolerance band of {capability['lsl']:.3g}-{capability['usl']:.3g} (target "
-        f"{capability['target']:.3g} +/-10%, the app's own pass/fail convention): **{capability_read}**. "
-        "Cpk >= 1.33 is generally considered capable, 1.0-1.33 marginal, below 1.0 not capable."
+        f"Spec range is {capability['lsl']:.3g}-{capability['usl']:.3g} (target "
+        f"{capability['target']:.3g} +/-10%, this app's own pass/fail convention): **{capability_read}**. "
+        "As a guide: a margin score of 1.33 or higher means comfortable room to spec, 1.0-1.33 is "
+        "tight (some risk of results drifting outside spec), and below 1.0 means the process is "
+        "likely already producing some out-of-spec results even without any further drift."
     )
 
 # ---------------------------------------------------------------------------
 # CUSUM - slow sustained drift
 # ---------------------------------------------------------------------------
 st.divider()
-st.subheader("CUSUM (slow sustained drift)")
+st.subheader("Slow drift check")
 cusum = cusum_analysis(series)
 if cusum is None:
-    st.info("Not enough results yet (need at least 8) to run a CUSUM drift check.")
+    st.info("Not enough results yet (need at least 8) to check for a slow drift.")
 else:
     cusum_df = cusum["chart_df"].copy()
     cusum_df["upper_limit"] = cusum["h"]
@@ -163,12 +184,16 @@ else:
     st.line_chart(
         cusum_df.set_index("tested_at")[["cusum_positive", "cusum_negative", "upper_limit", "lower_limit"]]
     )
-    st.caption(f"Measured against a reference of {cusum['reference']:.3g} (this property's target value).")
+    st.caption(
+        f"Compares each run against the target value of {cusum['reference']:.3g}, adding up small "
+        "persistent differences over time - this catches a slow drift building up long before a "
+        "single result would look unusual on its own."
+    )
     if cusum["breach_index"] is None:
-        st.success("No sustained drift detected - the cumulative sum stays within its decision limits.")
+        st.success("No slow drift detected - results have stayed close to target over time.")
     else:
         st.warning(
-            f"Sustained {cusum['breach_direction']} drift detected, first crossing the decision limit "
+            f"A slow {cusum['breach_direction']} drift has been building up, first becoming clear "
             f"at run {cusum['breach_run_id']} ({cusum['breach_tested_at']})."
         )
 
@@ -176,21 +201,20 @@ else:
 # Trend test
 # ---------------------------------------------------------------------------
 st.divider()
-st.subheader("Trend test")
+st.subheader("Is this a real trend?")
 trend = trend_test(series)
 if trend is None:
-    st.info("Not enough results yet to test for a statistically real trend.")
+    st.info("Not enough results yet to tell whether this is a real trend or just noise.")
 else:
     if trend["significant"]:
         st.warning(
-            f"Statistically significant {trend['direction']} trend (p={trend['p_value']:.4f}, "
-            f"R²={trend['r_squared']:.2f}): {trend['slope_per_run']:+.4g} per run, across "
-            f"{trend['n']} runs."
+            f"Yes - this is a real, sustained {trend['direction']} trend, not just noise: changing "
+            f"by about {trend['slope_per_run']:+.4g} per run on average, across {trend['n']} runs."
         )
     else:
         st.success(
-            f"No statistically significant trend (p={trend['p_value']:.4f}) - the apparent "
-            f"{trend['direction']} movement across {trend['n']} runs is not distinguishable from noise."
+            f"No - the apparent {trend['direction']} movement across {trend['n']} runs looks like "
+            "normal run-to-run variation, not a real trend."
         )
 
 # ---------------------------------------------------------------------------
@@ -230,7 +254,7 @@ for qi in quality_issues:
 if change_rows:
     change_df = pd.DataFrame(change_rows).sort_values("Date")
     st.dataframe(change_df, hide_index=True, use_container_width=True)
-    st.caption("Cross-reference these dates against any control-chart flag, CUSUM breach, or trend above.")
+    st.caption("Cross-reference these dates against any unusual pattern, slow drift, or trend flagged above.")
 else:
     st.caption("No recipe-version changes, machine changes, or quality issues recorded across these runs.")
 
@@ -338,6 +362,14 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "acting on it."
         )
         st.write(ai_answer)
+        render_pi3_docx_download(
+            session,
+            plant_id,
+            key_prefix=f"trend_fixed_{grade.id}_{property_name}",
+            question_label=f"PI3 interpretation of {property_name} for {grade.grade_name}",
+            answer=ai_answer,
+            foam_grade_id=grade.id,
+        )
 elif ai_assistant.availability_status(session, plant_id) == "not_configured":
     st.caption(
         "PI3 isn't configured for this deployment yet (missing API credentials) - contact "

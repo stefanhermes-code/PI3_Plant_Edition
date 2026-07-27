@@ -201,6 +201,48 @@ def csv_excel_uploader(required_cols, optional_cols=None, key=None):
     return df, uploaded.name
 
 
+def render_pi3_docx_download(
+    session, plant_id, key_prefix, question_label, answer, tool_log=None,
+    page_context="", foam_grade_id=None,
+):
+    """Shared 'Download as Word (.docx)' button for any PI3-generated
+    answer - both the older fixed-prompt sections (Recipe Optimization's
+    formulation recommendation, Trend Analysis's and Process-Property
+    Correlation's interpretation) and the free-form Ask PI3 box below them
+    call this, so every PI3 answer on every page can be exported the same
+    way, with identical formatting (see reports.render_pi3_qa_report_docx).
+
+    `question_label` is what appears as "Question asked" in the export -
+    for the free-form box this is literally what the reviewer typed; for a
+    fixed-prompt section there's no user-typed question, so callers pass a
+    short description of what was requested instead (e.g. "PI3 formulation
+    recommendation for <grade>"). `tool_log` is optional and only
+    populated for the free-form box, which goes through the tool-calling
+    agent - fixed-prompt sections call ai_assistant.ask_assistant()
+    directly (file_search only, no tools), so they have none to show."""
+    grade_name = None
+    if foam_grade_id:
+        grade = session.get(FoamGrade, foam_grade_id)
+        grade_name = grade.grade_name if grade else None
+
+    report_data = reports.build_pi3_qa_report_data(
+        question=question_label,
+        answer=answer,
+        tool_log=tool_log or [],
+        page_context=page_context,
+        plant_name=reports.plant_label(session, plant_id),
+        foam_grade_name=grade_name,
+        asked_by=current_user().get("display_name"),
+    )
+    st.download_button(
+        "Download as Word (.docx)",
+        data=reports.render_pi3_qa_report_docx(report_data),
+        file_name=f"pi3_report_{key_prefix}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        key=f"{key_prefix}_download_docx",
+    )
+
+
 def render_ask_pi3_section(session, plant_id, default_foam_grade_id, page_context, sample_questions, key_prefix):
     """Free-form 'ask PI3 anything about this plant's data' box, shared by
     Recipe Optimization, Process-Property Correlation, and Trend Analysis -
@@ -291,24 +333,13 @@ def render_ask_pi3_section(session, plant_id, default_foam_grade_id, page_contex
                         st.caption(f"Verified analysis called: {entry.get('args')}")
         st.caption("Confirm through your own investigation before acting on this.")
 
-        grade_name = None
-        if default_foam_grade_id:
-            grade = session.get(FoamGrade, default_foam_grade_id)
-            grade_name = grade.grade_name if grade else None
-
-        report_data = reports.build_pi3_qa_report_data(
-            question=st.session_state.get(f"{key_prefix}_asked", ""),
+        render_pi3_docx_download(
+            session,
+            plant_id,
+            key_prefix=key_prefix,
+            question_label=st.session_state.get(f"{key_prefix}_asked", ""),
             answer=answer,
             tool_log=tool_log,
             page_context=page_context,
-            plant_name=reports.plant_label(session, plant_id),
-            foam_grade_name=grade_name,
-            asked_by=current_user().get("display_name"),
-        )
-        st.download_button(
-            "Download as Word (.docx)",
-            data=reports.render_pi3_qa_report_docx(report_data),
-            file_name=f"pi3_qa_report_{key_prefix}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key=f"{key_prefix}_download_docx",
+            foam_grade_id=default_foam_grade_id,
         )
