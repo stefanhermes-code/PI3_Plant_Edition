@@ -17,6 +17,7 @@ flag against recipe changes, machine changes, and quality issue history -
 never to guess whether a trend exists in the first place.
 """
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -64,6 +65,30 @@ RULE_PLAIN_LABELS = {
         "Several recent results have been unusually far from the average, close together"
     ),
 }
+
+
+def _line_chart_no_zero(df, value_cols):
+    """Same idea as st.line_chart(df[value_cols]), but without forcing the
+    Y-axis down to zero. These properties normally sit in a narrow band
+    (e.g. density around 30) with control limits only a little above and
+    below - a zero-anchored axis squeezes all of that real variation into
+    a thin sliver at the top of the chart, making it hard to actually see
+    whether a line is moving. df's index is used as the X-axis (must be
+    named or reset first)."""
+    long_df = df.reset_index().melt(
+        id_vars=df.index.name or "index", value_vars=value_cols, var_name="series", value_name="value"
+    )
+    chart = (
+        alt.Chart(long_df)
+        .mark_line()
+        .encode(
+            x=alt.X(f"{df.index.name or 'index'}:T", title=None),
+            y=alt.Y("value:Q", title=None, scale=alt.Scale(zero=False)),
+            color=alt.Color("series:N", title=None),
+        )
+    )
+    st.altair_chart(chart, use_container_width=True)
+
 
 grades = session.query(FoamGrade).all()
 if not grades:
@@ -116,7 +141,7 @@ else:
     chart_df = chart_result["chart_df"].set_index("tested_at")[
         ["actual_value", "center_line", "ucl", "lcl"]
     ]
-    st.line_chart(chart_df)
+    _line_chart_no_zero(chart_df, ["actual_value", "center_line", "ucl", "lcl"])
     st.caption(
         f"Based on how much this property normally varies run-to-run, results are expected to fall "
         f"between {chart_result['lcl']:.3g} and {chart_result['ucl']:.3g}, centered around "
@@ -181,8 +206,9 @@ else:
     cusum_df = cusum["chart_df"].copy()
     cusum_df["upper_limit"] = cusum["h"]
     cusum_df["lower_limit"] = -cusum["h"]
-    st.line_chart(
-        cusum_df.set_index("tested_at")[["cusum_positive", "cusum_negative", "upper_limit", "lower_limit"]]
+    _line_chart_no_zero(
+        cusum_df.set_index("tested_at")[["cusum_positive", "cusum_negative", "upper_limit", "lower_limit"]],
+        ["cusum_positive", "cusum_negative", "upper_limit", "lower_limit"],
     )
     st.caption(
         f"Compares each run against the target value of {cusum['reference']:.3g}, adding up small "
