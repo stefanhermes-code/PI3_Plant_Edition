@@ -20,6 +20,44 @@ def page_setup(title: str):
     pass
 
 
+def render_centered_table(df):
+    """Renders a small pandas DataFrame as a centered, content-width HTML
+    table with centered cell text.
+
+    st.dataframe(..., use_container_width=True) always stretches to the
+    full page width no matter how little data there is, which spreads a
+    handful of short rows across the whole screen and makes them harder
+    to read, not easier. This sizes to the actual content and centers it
+    instead. Deliberately avoids pandas' Styler (its HTML-rendering path
+    requires jinja2, which isn't otherwise a dependency of this app) by
+    building the HTML directly - fine for the small summary tables this
+    is meant for, not a general-purpose replacement for st.dataframe."""
+
+    def _esc(v):
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return "—"
+        return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    header_cells = "".join(
+        f"<th style='text-align:center; padding:6px 16px; border-bottom:2px solid #1B6FA8;'>{_esc(c)}</th>"
+        for c in df.columns
+    )
+    body_rows = []
+    for _, row in df.iterrows():
+        cells = "".join(
+            f"<td style='text-align:center; padding:6px 16px; border-bottom:1px solid #E4ECF1;'>{_esc(v)}</td>"
+            for v in row
+        )
+        body_rows.append(f"<tr>{cells}</tr>")
+    html = (
+        "<div style='display:flex; justify-content:center;'>"
+        "<table style='border-collapse:collapse;'>"
+        f"<thead><tr>{header_cells}</tr></thead><tbody>{''.join(body_rows)}</tbody>"
+        "</table></div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
 def confidence_badge(level: str) -> str:
     colors = {
         "Confirmed": "🟢",

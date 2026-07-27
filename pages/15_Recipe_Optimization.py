@@ -23,7 +23,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, render_ask_pi3_section, render_pi3_docx_download
+from helpers import page_setup, render_ask_pi3_section, render_centered_table, render_pi3_docx_download
 
 page_setup("Recipe Optimization")
 init_db()
@@ -84,7 +84,7 @@ else:
         lambda p: f"{p:.0%}" if pd.notna(p) else "—"
     )
     overall_summary = overall_summary[["Property", "Avg target", "Avg actual", "Pass rate"]]
-    st.dataframe(overall_summary, hide_index=True, use_container_width=True)
+    render_centered_table(overall_summary)
     n_runs = results_df["run_id"].nunique()
     st.caption(
         f"Based on {n_runs} production run(s) with quality test results for {grade.grade_name}, "
