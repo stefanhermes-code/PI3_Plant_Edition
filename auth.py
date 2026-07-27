@@ -37,9 +37,30 @@ def _users_from_secrets():
         return {}
 
 
+def _auth_disabled():
+    try:
+        return bool(st.secrets.get("AUTH_DISABLED", False))
+    except Exception:
+        return False
+
+
 def require_login():
     """Render a login form if the user is not authenticated. Stops execution
-    of the calling page until login succeeds."""
+    of the calling page until login succeeds.
+
+    Development-only bypass: if AUTH_DISABLED = true is set in secrets, this
+    skips the login form entirely and logs in as a synthetic admin user, so
+    the whole app is reachable without credentials. Meant for a UAT/dev
+    deployment only - remove or set to false before anyone relies on this
+    deployment being access-controlled, since with it on, anyone with the
+    app's URL sees everything with full admin rights, no login needed."""
+
+    if _auth_disabled():
+        st.session_state["authenticated"] = True
+        st.session_state.setdefault("username", "dev")
+        st.session_state.setdefault("display_name", "Dev (auth disabled)")
+        st.session_state.setdefault("role", "admin")
+        return
 
     if st.session_state.get("authenticated"):
         return
