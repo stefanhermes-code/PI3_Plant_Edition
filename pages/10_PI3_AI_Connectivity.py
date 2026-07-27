@@ -19,6 +19,8 @@ import datetime as dt
 
 import streamlit as st
 
+import ai_assistant
+import pi3_query_tool
 from db import Plant, PI3AIConnectionSetting, get_session, init_db
 from auth import current_user, logout_button, require_login, require_role
 from helpers import page_setup
@@ -34,6 +36,54 @@ st.info(
     "and approval) is fully available without this add-on. PI3 connectivity is "
     "optional, separately billed, and disabled by default per plant."
 )
+
+if current_user()["role"] == "admin":
+    st.subheader("Deployment diagnostics")
+    st.caption(
+        "Checks whether this deployment's secrets are actually visible to the app right "
+        "now, so a missing-credentials message elsewhere in the app doesn't send you "
+        "guessing. This is independent of the per-plant toggle below."
+    )
+    secret_checks = [
+        ("OPENAI_API_KEY", ai_assistant._get_secret("OPENAI_API_KEY"), "Required for every PI3 feature."),
+        (
+            "PI3_VECTOR_STORE_ID",
+            ai_assistant._get_secret("PI3_VECTOR_STORE_ID"),
+            "Required for every PI3 feature (the file_search knowledge base).",
+        ),
+        (
+            "PI3_MODEL",
+            ai_assistant._get_secret("PI3_MODEL"),
+            "Optional - falls back to a built-in default model if unset.",
+        ),
+        (
+            "PI3_READONLY_DATABASE_URL",
+            pi3_query_tool._get_secret("PI3_READONLY_DATABASE_URL"),
+            "Optional - enables the free-form SQL query tool. PI3 still answers "
+            "questions without it, just without that one tool.",
+        ),
+    ]
+    st.dataframe(
+        [
+            {"Secret": name, "Present": "Yes" if value else "No", "Notes": note}
+            for name, value, note in secret_checks
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
+    if not (secret_checks[0][1] and secret_checks[1][1]):
+        st.error(
+            "OPENAI_API_KEY and/or PI3_VECTOR_STORE_ID show as missing, which is why "
+            "pages show \"PI3 isn't configured for this deployment yet\". The single "
+            "most common cause: in Streamlit Cloud's Secrets editor, TOML attaches any "
+            "line to the LAST [section] header above it, not to the top level - so if "
+            "either line was pasted below a [users.yourname] block (or any other "
+            "[section]), it silently stops being visible here even though the text is "
+            "in the file. Move both lines above every [section] header and save."
+        )
+    else:
+        st.success("OPENAI_API_KEY and PI3_VECTOR_STORE_ID are both visible to the app.")
+    st.divider()
 
 session = get_session()
 plants = session.query(Plant).all()
