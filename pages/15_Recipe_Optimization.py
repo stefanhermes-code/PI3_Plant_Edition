@@ -38,9 +38,20 @@ st.caption(
 )
 session = get_session()
 
-grades = session.query(FoamGrade).all()
+
+# Only offer a grade here if this page can actually do something useful with
+# it - a recipe version (for cost/diff) and at least one quality test result
+# (for the property-outcomes table and correlations) - rather than letting
+# the reviewer pick a grade and then hit a dead end on every section.
+grades = [
+    g for g in session.query(FoamGrade).all()
+    if g.recipe_versions and not property_results_dataframe(session, foam_grade_id=g.id).empty
+]
 if not grades:
-    st.warning("Add a foam grade and at least one recipe version first.")
+    st.warning(
+        "No foam grade yet has both a recipe version and quality test results recorded - "
+        "add these first before using Recipe Optimization."
+    )
     st.stop()
 
 grade = st.selectbox("Foam grade", grades, format_func=lambda g: g.grade_name)
@@ -53,39 +64,55 @@ if not versions:
 results_df = property_results_dataframe(session, foam_grade_id=grade.id)
 available_properties = sorted(results_df["property_name"].dropna().unique()) if not results_df.empty else []
 
-# Per-property summary tables, kept keyed by property name so the PI3
-# recommendation prompt below can reuse them instead of recomputing.
-property_summaries = {}
-
 if results_df.empty:
     st.info("No quality test results recorded yet for this foam grade's production runs.")
 else:
-    st.subheader("Property outcomes by recipe version")
-    for prop in available_properties:
-        sub = results_df[results_df["property_name"] == prop]
-        summary = (
-            sub.groupby("recipe_version")
-            .agg(
-                avg_actual=("actual_value", "mean"),
-                avg_target=("target_value", "mean"),
-                results=("result_id", "count"),
-                pass_rate=("pass_fail", pass_rate),
-            )
-            .reset_index()
+    st.subheader("Property outcomes")
+    overall_summary = (
+        results_df.groupby("property_name")
+        .agg(
+            avg_target=("target_value", "mean"),
+            avg_actual=("actual_value", "mean"),
+            pass_rate=("pass_fail", pass_rate),
         )
-        summary["avg_actual"] = summary["avg_actual"].round(2)
-        summary["avg_target"] = summary["avg_target"].round(2)
-        property_summaries[prop] = summary
-        with st.container(border=True):
-            st.markdown(f"**{prop}**")
-            st.dataframe(summary, hide_index=True, use_container_width=True)
-            best = summary.dropna(subset=["pass_rate"]).sort_values("pass_rate", ascending=False)
-            if not best.empty:
-                st.caption(
-                    f"Highest pass rate for {prop}: recipe {best.iloc[0]['recipe_version']} "
-                    f"({best.iloc[0]['pass_rate']:.0%}, n={int(best.iloc[0]['results'])}). "
-                    "Review against current raw materials and process conditions before reusing."
-                )
+        .reset_index()
+        .rename(columns={"property_name": "Property", "avg_target": "Avg target", "avg_actual": "Avg actual"})
+    )
+    overall_summary["Avg target"] = overall_summary["Avg target"].round(2)
+    overall_summary["Avg actual"] = overall_summary["Avg actual"].round(2)
+    overall_summary["Pass rate"] = overall_summary["pass_rate"].apply(
+        lambda p: f"{p:.0%}" if pd.notna(p) else "—"
+    )
+    overall_summary = overall_summary[["Property", "Avg target", "Avg actual", "Pass rate"]]
+    st.dataframe(overall_summary, hide_index=True, use_container_width=True)
+    n_runs = results_df["run_id"].nunique()
+    st.caption(
+        f"Based on {n_runs} production run(s) with quality test results for {grade.grade_name}, "
+        "combined across all recipe versions on record. Review against current raw materials and "
+        "process conditions before reusing - see 'Compare two versions' below for the "
+        "version-to-version breakdown."
+    )
+
+# Per-property, per-version summary tables - not shown on screen (see the
+# consolidated table above), but kept keyed by property name so the PI3
+# recommendation prompt below can still reference which specific recipe
+# version each result belongs to.
+property_summaries = {}
+for prop in available_properties:
+    sub = results_df[results_df["property_name"] == prop]
+    summary = (
+        sub.groupby("recipe_version")
+        .agg(
+            avg_actual=("actual_value", "mean"),
+            avg_target=("target_value", "mean"),
+            results=("result_id", "count"),
+            pass_rate=("pass_fail", pass_rate),
+        )
+        .reset_index()
+    )
+    summary["avg_actual"] = summary["avg_actual"].round(2)
+    summary["avg_target"] = summary["avg_target"].round(2)
+    property_summaries[prop] = summary
 
 # ---------------------------------------------------------------------------
 # Formulation cost by version
