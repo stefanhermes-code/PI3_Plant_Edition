@@ -232,15 +232,30 @@ def render_ask_pi3_section(session, plant_id, default_foam_grade_id, page_contex
     )
 
     sample_key = f"{key_prefix}_sample"
-    if sample_questions:
-        chosen_sample = st.selectbox(
-            "Example questions", ["Type my own..."] + list(sample_questions), key=sample_key
-        )
-    else:
-        chosen_sample = "Type my own..."
-    default_text = "" if chosen_sample == "Type my own..." else chosen_sample
+    question_key = f"{key_prefix}_question"
 
-    question = st.text_area("Your question", value=default_text, key=f"{key_prefix}_question")
+    def _apply_sample_question():
+        # Widgets that pass both `key` and `value` only honor `value` on their
+        # very first render - once session_state has an entry for that key
+        # (which it does after the first rerun), later `value=` changes are
+        # silently ignored. That meant picking a different sample question
+        # from the dropdown below never actually updated the text area, so
+        # it stayed empty and the "Ask PI3" button stayed disabled. Writing
+        # straight into st.session_state[question_key] from this on_change
+        # callback runs BEFORE the text_area widget is (re)built, so it picks
+        # up the new value like any other externally-set session_state entry.
+        chosen = st.session_state.get(sample_key)
+        st.session_state[question_key] = "" if chosen in (None, "Type my own...") else chosen
+
+    if sample_questions:
+        st.selectbox(
+            "Example questions",
+            ["Type my own..."] + list(sample_questions),
+            key=sample_key,
+            on_change=_apply_sample_question,
+        )
+
+    question = st.text_area("Your question", key=question_key)
 
     if st.button("Ask PI3", key=f"{key_prefix}_ask_btn", disabled=not question.strip()):
         with st.spinner("Using PI3..."):
