@@ -573,7 +573,8 @@ Rules:
 - Always be ready to show your work: assume the reviewer can see exactly which tool(s) you called and with what arguments, so do not hide your reasoning behind a confident-sounding number - state what you found and where it came from.
 - Phrase everything as historical reference and observation for the reviewer's own investigation, never as an instruction to change a setting or formulation. This is a hard requirement, not a style preference.
 - If a question is ambiguous about which foam grade, property, or date range it means, use whatever page/context information you were given to disambiguate; if it's still ambiguous, ask a brief clarifying question rather than guessing.
-- Keep answers direct and reasonably concise. Lead with the answer, then the figures that support it."""
+- Keep answers direct and reasonably concise. Lead with the answer, then the figures that support it.
+- Never use statistical or technical jargon in your answer - not Cpk, Cpu, Cpl, CUSUM, p-value, R-squared, sigma, control limit, moving range, or similar terms, even though the tools you call use them internally. Translate every finding into plain operational language a foam-plant technician without a statistics background would understand. For example: instead of "Cpk 0.87", say the process is running close to the edge of spec; instead of a CUSUM breach, say a slow drift has been building up since a certain point; instead of a p-value, say plainly whether a pattern looks like a real, sustained trend or just normal run-to-run variation. Numbers themselves (dates, quantities, costs, percentages) are fine - it's the statistical vocabulary that should disappear, not the underlying facts."""
 
 _QUERY_PLANT_DATA_TOOL = {
     "type": "function",

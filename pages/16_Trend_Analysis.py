@@ -313,7 +313,16 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "base, explain in plain language whether this property shows a real problem, what it might be "
             "connected to (cross-reference the dates above), and what the reviewer should look into next. "
             "This is a historical pattern for the reviewer's own investigation, not a directive - phrase it "
-            "as observations and hypotheses, not instructions to change anything."
+            "as observations and hypotheses, not instructions to change anything.\n\n"
+            "Do not use statistical or technical jargon in your explanation - not Cpk, Cpu, Cpl, CUSUM, "
+            "p-value, R-squared, sigma, control limit, moving range, or similar terms, even though they "
+            "appear in the data above. Translate every finding into plain operational language a "
+            "foam-plant technician without a statistics background would understand. For example: "
+            "instead of \"Cpk 0.87\", say the process is running close to the edge of spec; instead of "
+            "a CUSUM breach, say a slow drift has been building up since a certain point; instead of a "
+            "p-value, say plainly whether the pattern looks like a real, sustained trend or just normal "
+            "run-to-run variation. Dates, quantities, and other concrete facts are fine to state - it's "
+            "the statistical vocabulary that should disappear, not the underlying facts."
         )
         with st.spinner("Using PI3..."):
             answer = ai_assistant.ask_assistant(prompt)
