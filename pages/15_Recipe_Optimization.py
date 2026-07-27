@@ -23,7 +23,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup
+from helpers import page_setup, render_ask_pi3_section
 
 page_setup("Recipe Optimization")
 init_db()
@@ -446,8 +446,31 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "historical cases. For your technical team to evaluate and confirm before applying."
         )
         st.write(ai_answer)
+elif ai_assistant.availability_status(session, plant_id) == "not_configured":
+    st.caption(
+        "PI3 isn't configured for this deployment yet (missing API credentials) - contact "
+        "your administrator."
+    )
 else:
     st.caption(
         "Enable PI3 connectivity for this plant (PI3 Connectivity, in Admin) to get a "
         "formulation recommendation here."
     )
+
+st.divider()
+render_ask_pi3_section(
+    session,
+    plant_id,
+    default_foam_grade_id=grade.id,
+    page_context=(
+        f"The reviewer is on the Recipe Optimization page, looking at foam grade "
+        f"'{grade.grade_name}' (id {grade.id})."
+    ),
+    sample_questions=[
+        f"What does {grade.grade_name}'s current recipe cost per 100 parts?",
+        f"Which ingredient's actual dosage correlates most with density for {grade.grade_name}?",
+        f"What changed between the last two recipe versions of {grade.grade_name}?",
+        f"Have there been any quality issues reported for {grade.grade_name} recently?",
+    ],
+    key_prefix=f"ask_pi3_freeform_recipe_{grade.id}",
+)

@@ -31,7 +31,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, QualityObservation, get_session, init_db
-from helpers import page_setup
+from helpers import page_setup, render_ask_pi3_section
 
 page_setup("Trend Analysis")
 init_db()
@@ -329,3 +329,30 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "acting on it."
         )
         st.write(ai_answer)
+elif ai_assistant.availability_status(session, plant_id) == "not_configured":
+    st.caption(
+        "PI3 isn't configured for this deployment yet (missing API credentials) - contact "
+        "your administrator."
+    )
+else:
+    st.caption(
+        "Enable PI3 connectivity for this plant (PI3 Connectivity, in Admin) to get PI3's "
+        "interpretation here."
+    )
+
+st.divider()
+render_ask_pi3_section(
+    session,
+    plant_id,
+    default_foam_grade_id=grade.id,
+    page_context=(
+        f"The reviewer is on the Trend Analysis page, looking at '{property_name}' for foam "
+        f"grade '{grade.grade_name}' (id {grade.id})."
+    ),
+    sample_questions=[
+        f"Is there a real trend in {property_name} for {grade.grade_name}, or is it just noise?",
+        f"Has {property_name} for {grade.grade_name} ever gone out of control before?",
+        f"What changed around the time {property_name} started drifting for {grade.grade_name}?",
+    ],
+    key_prefix=f"ask_pi3_freeform_trend_{grade.id}_{property_name}",
+)

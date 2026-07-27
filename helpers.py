@@ -5,6 +5,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
+import ai_assistant
 from db import get_session
 
 
@@ -196,3 +197,79 @@ def csv_excel_uploader(required_cols, optional_cols=None, key=None):
         return None, None
 
     return df, uploaded.name
+
+
+def render_ask_pi3_section(session, plant_id, default_foam_grade_id, page_context, sample_questions, key_prefix):
+    """Free-form 'ask PI3 anything about this plant's data' box, shared by
+    Recipe Optimization, Process-Property Correlation, and Trend Analysis -
+    this is the same spot on each page that already had a fixed, single-
+    purpose PI3 prompt; this section sits alongside that one rather than
+    replacing it, so the existing tested recommendation/interpretation
+    still works exactly as before.
+
+    Silently renders nothing if PI3 isn't configured or isn't enabled for
+    this plant - the existing fixed-prompt section above this one on each
+    page already shows the right explanation for that (see
+    ai_assistant.availability_status), so this avoids showing the same
+    "enable PI3" message twice on one page.
+
+    `page_context` is a short plain-language string describing what page/
+    grade/property the reviewer is currently looking at, so PI3 can
+    disambiguate an underspecified question ("is this drifting" ->
+    drifting for which property, on which page). `sample_questions` is a
+    list of ready-made example questions shown in a dropdown - answers the
+    "how would a user know what's answerable" problem without requiring
+    them to write SQL-shaped questions themselves.
+    """
+    if ai_assistant.availability_status(session, plant_id) != "enabled":
+        return
+
+    st.markdown("**Ask PI3 your own question**")
+    st.caption(
+        "Ask anything about this plant's own production data - PI3 checks the actual recorded "
+        "numbers (it never guesses) and can also draw on expert notes and historical cases for "
+        "context. Answers are historical reference for your own investigation, not instructions."
+    )
+
+    sample_key = f"{key_prefix}_sample"
+    if sample_questions:
+        chosen_sample = st.selectbox(
+            "Example questions", ["Type my own..."] + list(sample_questions), key=sample_key
+        )
+    else:
+        chosen_sample = "Type my own..."
+    default_text = "" if chosen_sample == "Type my own..." else chosen_sample
+
+    question = st.text_area("Your question", value=default_text, key=f"{key_prefix}_question")
+
+    if st.button("Ask PI3", key=f"{key_prefix}_ask_btn", disabled=not question.strip()):
+        with st.spinner("Using PI3..."):
+            answer, tool_log = ai_assistant.ask_plant_question(
+                session,
+                plant_id,
+                question,
+                default_foam_grade_id=default_foam_grade_id,
+                page_context=page_context,
+            )
+        if answer:
+            st.session_state[f"{key_prefix}_answer"] = answer
+            st.session_state[f"{key_prefix}_tool_log"] = tool_log
+            st.session_state[f"{key_prefix}_asked"] = question
+
+    answer = st.session_state.get(f"{key_prefix}_answer")
+    if answer:
+        st.caption(f"You asked: {st.session_state.get(f'{key_prefix}_asked', '')}")
+        st.write(answer)
+        tool_log = st.session_state.get(f"{key_prefix}_tool_log") or []
+        if tool_log:
+            with st.expander("Show PI3's work (exactly what was checked)"):
+                for entry in tool_log:
+                    if entry["tool"] == "query_plant_data":
+                        st.code(entry.get("sql", ""), language="sql")
+                        if "error" in entry:
+                            st.error(entry["error"])
+                        else:
+                            st.caption(f"{entry.get('rows_returned', 0)} row(s) returned.")
+                    elif entry["tool"] == "get_verified_analysis":
+                        st.caption(f"Verified analysis called: {entry.get('args')}")
+        st.caption("Confirm through your own investigation before acting on this.")

@@ -20,7 +20,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup
+from helpers import page_setup, render_ask_pi3_section
 
 page_setup("Process-Property Correlation")
 init_db()
@@ -107,7 +107,8 @@ else:
         use_container_width=True,
     )
 
-if ai_assistant.is_enabled_for_plant(session, grade.product_family.plant_id if grade.product_family else None):
+plant_id = grade.product_family.plant_id if grade.product_family else None
+if ai_assistant.is_enabled_for_plant(session, plant_id):
     st.divider()
     st.subheader("Ask PI3 to interpret this pattern")
     if st.button("Get PI3 interpretation", key=f"ask_pi3_correlation_{grade.id}_{property_name}"):
@@ -142,4 +143,31 @@ if ai_assistant.is_enabled_for_plant(session, grade.product_family.plant_id if g
             "historical cases. Confirm through your own investigation before acting on it."
         )
         st.write(ai_answer)
+elif ai_assistant.availability_status(session, plant_id) == "not_configured":
+    st.caption(
+        "PI3 isn't configured for this deployment yet (missing API credentials) - contact "
+        "your administrator."
+    )
+else:
+    st.caption(
+        "Enable PI3 connectivity for this plant (PI3 Connectivity, in Admin) to get PI3's "
+        "interpretation here."
+    )
+
+st.divider()
+render_ask_pi3_section(
+    session,
+    plant_id,
+    default_foam_grade_id=grade.id,
+    page_context=(
+        f"The reviewer is on the Process-Property Correlation page, looking at '{property_name}' "
+        f"for foam grade '{grade.grade_name}' (id {grade.id})."
+    ),
+    sample_questions=[
+        f"Which process setting correlates most strongly with {property_name} for {grade.grade_name}?",
+        f"Which ingredient's dosage correlates most with {property_name} for {grade.grade_name}?",
+        f"Have there been any quality issues reported for {grade.grade_name} recently?",
+    ],
+    key_prefix=f"ask_pi3_freeform_correlation_{grade.id}_{property_name}",
+)
 

@@ -174,7 +174,15 @@ def rank_setting_correlations(session, foam_grade_id, property_name):
         corr = round(sub[field].corr(sub["actual_value"]), 3) if n >= 3 else None
         rows.append({"field": field, "label": PHASE_SETTING_LABELS.get(field, field), "n": n, "correlation": corr})
     ranked = pd.DataFrame(rows)
-    ranked["_abs"] = ranked["correlation"].abs()
+    # Every field is appended above regardless of whether a correlation could
+    # be computed (unlike rank_component_correlations etc., which skip
+    # uncomputable rows entirely) - so if every setting has too few points,
+    # "correlation" ends up an all-None object-dtype column, and pandas'
+    # .abs() raises TypeError on that (bad operand type for abs(): 'NoneType')
+    # rather than treating it as NaN. pd.to_numeric coerces None/object-None
+    # to a proper float NaN first, which .abs() (and na_position="last"
+    # below) handle correctly regardless of how many rows have no value yet.
+    ranked["_abs"] = pd.to_numeric(ranked["correlation"], errors="coerce").abs()
     ranked = ranked.sort_values("_abs", ascending=False, na_position="last").drop(columns=["_abs"]).reset_index(drop=True)
     return ranked
 

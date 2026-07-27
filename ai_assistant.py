@@ -71,7 +71,9 @@ import os
 
 import streamlit as st
 
-from db import RAW_MATERIAL_CATEGORIES, PI3AIConnectionSetting
+import analytics
+import pi3_query_tool
+from db import RAW_MATERIAL_CATEGORIES, FoamGrade, PI3AIConnectionSetting
 
 # Balances answer quality against cost for a fairly detailed, rule-heavy
 # system prompt (SYSTEM_PROMPT below has many formatting/structure
@@ -81,6 +83,12 @@ DEFAULT_MODEL = "gpt-5.6-terra"
 
 # How long a single Responses API call is allowed to take before giving up.
 REQUEST_TIMEOUT_SECONDS = 60
+
+# Ceiling on how many times ask_plant_question() will hand tool results back
+# to the model and let it call another tool before forcing a final answer -
+# a runaway tool-call loop should end the turn with whatever answer exists,
+# not hang indefinitely.
+MAX_TOOL_ITERATIONS = 6
 
 SYSTEM_PROMPT = """PI3 + PU ExpertCenter Assistant — Enterprise v9
 
@@ -358,6 +366,26 @@ def is_enabled_for_plant(session, plant_id):
     return bool(setting and setting.pi3_ai_connectivity_enabled)
 
 
+def availability_status(session, plant_id):
+    """Which of the two independent reasons is_enabled_for_plant() might be
+    False: "not_configured" (OPENAI_API_KEY/PI3_VECTOR_STORE_ID secrets
+    aren't set for this deployment - an admin/ops fix, unrelated to any
+    plant) vs "not_enabled" (secrets are fine, but this specific plant's
+    PI3 Connectivity toggle is off - a per-plant opt-in). Returns
+    "enabled" if is_enabled_for_plant() would be True.
+
+    Callers previously showed one generic "Enable PI3 connectivity for
+    this plant" caption in both cases, which is actively misleading when
+    a plant's toggle is already on and the real blocker is a missing
+    secret - it sends the reviewer to go recheck a setting that was never
+    the problem. Use this to phrase the right message for each case."""
+    if not is_configured():
+        return "not_configured"
+    if is_enabled_for_plant(session, plant_id):
+        return "enabled"
+    return "not_enabled"
+
+
 def any_plant_enabled(session):
     """True when at least one plant has PI3 connectivity switched on (and
     secrets are configured). Used by cross-plant screens (Similar Case
@@ -399,6 +427,25 @@ def push_document_to_vector_store(title, text, metadata=None):
     trial's narrative, ...) into the PI3 vector store so future
     ask_assistant() queries can retrieve it semantically via file_search.
 
+    `metadata` (a flat dict of string/number/bool values) is attached to
+    the vector store file as its "attributes" - this is what lets a
+    plant/trial-specific document be told apart from the general,
+    non-plant-specific knowledge (customer questions, TDS documents,
+    formulation science) that also lives in this same shared store. This
+    app's own callers should pass {"plant_id": <int>} here for anything
+    tied to one specific plant (see the two call sites in
+    pages/20_Expert_Notes.py) - documents with no natural plant dimension
+    should keep passing metadata=None, which is correct, not an oversight.
+
+    Note: none of this app's current file_search calls (ask_assistant(),
+    ask_plant_question()) actually filter by this attribute yet - the
+    plant-scoped question tool deliberately searches the whole shared
+    store, since general expertise is meant to inform every plant's
+    answers (see PLANT_QUERY_SYSTEM_PROMPT). Tagging happens here so that
+    filtering is possible wherever it's actually wanted later (e.g. a
+    future "only this plant's own history" mode), without needing to
+    backfill every previously-pushed document's attributes retroactively.
+
     Returns the new OpenAI file id (str) on success - callers that can
     store it (e.g. ExpertNote.vector_store_file_id) should, so a later
     edit/delete can resync or remove that exact file via
@@ -419,7 +466,7 @@ def push_document_to_vector_store(title, text, metadata=None):
         filename = f"{safe_title or 'note'}.txt"
         uploaded = client.files.create(file=(filename, text.encode("utf-8")), purpose="assistants")
         _vector_stores_api(client).files.create_and_poll(
-            vector_store_id=vector_store_id, file_id=uploaded.id
+            vector_store_id=vector_store_id, file_id=uploaded.id, attributes=(metadata or {})
         )
         return uploaded.id
     except Exception as exc:
@@ -477,6 +524,359 @@ def ask_assistant(prompt):
     except Exception as exc:
         st.error(f"Could not reach PI3: {exc}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Free-form plant-data questions ("ask PI3 anything about this plant")
+# ---------------------------------------------------------------------------
+# Deliberately a separate system prompt and a separate function from
+# ask_assistant() above: SYSTEM_PROMPT is a general polyurethane-industry-
+# expert persona built around file_search over documents, with its own
+# scope guardrail that would refuse a question like "how many runs did we
+# do last month" as off-topic. This feature needs PI3 to reason over this
+# plant's live structured data as well as that same document knowledge, so
+# it gets its own instructions and its own pair of tools.
+#
+# Two tools, two different trust levels, matching the two things this
+# project already validated separately:
+# - get_verified_analysis calls the exact same, already-tested functions
+#   backing Recipe Optimization / Trend Analysis / Process-Property
+#   Correlation (analytics.py). Every number that comes back has already
+#   been through the same scrutiny as what's on those pages.
+# - query_plant_data lets PI3 write its own SQL for anything the four
+#   verified analyses don't cover, but only against 5 curated, pre-joined
+#   views (never raw tables), executed through a restricted read-only
+#   Postgres role, with the plant filter injected server-side regardless
+#   of what the query itself does or doesn't filter on - see
+#   pi3_query_tool.py for the full reasoning.
+# file_search stays available on both, unscoped by plant on purpose - see
+# the project discussion: general expertise (customer questions, TDS
+# documents, formulation science) isn't plant-specific and should inform
+# every plant's answers; only this app's own plant/trial-specific pushes
+# (Expert Notes, Similar Case narratives) carry a plant tag (see
+# push_document_to_vector_store's plant_id parameter).
+
+PLANT_QUERY_SYSTEM_PROMPT = """You are PI3, answering a technical reviewer's question about ONE specific plant's own production data at a flexible slabstock foam manufacturer.
+
+Hard scope rule: every answer must stay within this one plant's data. You have no ability to see any other plant's data - the tools below are already restricted to it regardless of what you ask for, so do not worry about accidentally overstepping, but also never imply you checked "across plants" or "industry-wide" for anything that came from these tools.
+
+You have three tools:
+
+1. get_verified_analysis - use this FIRST whenever the question matches one of its analysis_type values: "trend" (control chart, process capability/Cpk, CUSUM drift, and a trend significance test for one property), "ingredient_correlation" (which raw material's actual metered dosage, and separately its planned recipe php, correlates with a property outcome), "recipe_cost" (formulation cost per recipe version), or "setting_correlation" (which machine/process setting correlates with a property outcome). These reuse the exact same tested calculations already shown on this app's Trend Analysis, Recipe Optimization, and Process-Property Correlation pages - prefer this tool over writing your own SQL whenever a question fits one of these four shapes.
+
+2. query_plant_data - a read-only SQL tool for anything the four analyses above don't cover. You may write a single SELECT statement against ONLY these views: v_pi3_production_runs, v_pi3_property_results, v_pi3_recipe_composition, v_pi3_stream_readings, v_pi3_quality_issues (columns are listed in the tool description). Your SELECT list must include plant_id (or use SELECT *) - it will be used to scope results. No other tables are reachable, and no INSERT/UPDATE/DELETE/DDL is possible - if you write one, the tool will reject it and tell you why so you can correct it.
+
+3. file_search - the shared knowledge base (expert notes, historical troubleshooting cases, technical documents). Use this for context a number alone can't give: has this come up before, what did an expert conclude about a similar case, what does a technical document say. This is NOT restricted to the current plant - it's general expertise that applies across the business, so use it freely to round out an answer, but never treat it as a substitute for checking the actual plant data first when the question is about this plant's own numbers.
+
+Rules:
+- Never state a number that did not come from a tool call. If no tool can answer part of the question, say so plainly instead of estimating or inferring a figure.
+- Always be ready to show your work: assume the reviewer can see exactly which tool(s) you called and with what arguments, so do not hide your reasoning behind a confident-sounding number - state what you found and where it came from.
+- Phrase everything as historical reference and observation for the reviewer's own investigation, never as an instruction to change a setting or formulation. This is a hard requirement, not a style preference.
+- If a question is ambiguous about which foam grade, property, or date range it means, use whatever page/context information you were given to disambiguate; if it's still ambiguous, ask a brief clarifying question rather than guessing.
+- Keep answers direct and reasonably concise. Lead with the answer, then the figures that support it."""
+
+_QUERY_PLANT_DATA_TOOL = {
+    "type": "function",
+    "name": "query_plant_data",
+    "description": (
+        "Run a single read-only SELECT statement against this plant's curated data views. "
+        "Available views and their columns:\n"
+        "v_pi3_production_runs(run_id, plant_id, foam_grade_id, grade_name, recipe_version_id, "
+        "version_label, recipe_approval_status, run_date, batch_reference, machine_id, machine_name)\n"
+        "v_pi3_property_results(plant_id, foam_grade_id, grade_name, run_id, run_date, "
+        "recipe_version_id, version_label, machine_name, property_name, target_value, "
+        "actual_value, unit, pass_fail, tested_at, replicate_no)\n"
+        "v_pi3_recipe_composition(plant_id, foam_grade_id, grade_name, recipe_version_id, "
+        "version_label, recipe_approval_status, raw_material_name, php, role_in_formulation, "
+        "cost_per_kg)\n"
+        "v_pi3_stream_readings(plant_id, foam_grade_id, grade_name, run_id, run_date, "
+        "recipe_version_id, version_label, phase_name, stream_name, flow, flow_unit, "
+        "pump_speed, flow_total_qty, pressure_bar, temperature_c, calibration_status)\n"
+        "v_pi3_quality_issues(plant_id, foam_grade_id, grade_name, run_id, run_date, "
+        "observation_type, severity, frequency, suspected_cause, confidence_level, "
+        "observed_at, notes)\n"
+        "The SELECT list must include plant_id (or use SELECT *). No other tables, no "
+        "semicolons/multiple statements, no INSERT/UPDATE/DELETE/DDL - these will be rejected "
+        "with a message explaining why, so you can correct and retry."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "sql": {"type": "string", "description": "A single SELECT statement against the views listed above."}
+        },
+        "required": ["sql"],
+        "additionalProperties": False,
+    },
+}
+
+_GET_VERIFIED_ANALYSIS_TOOL = {
+    "type": "function",
+    "name": "get_verified_analysis",
+    "description": (
+        "Run one of this app's existing, already-tested statistical analyses for one foam "
+        "grade. Prefer this over query_plant_data whenever the question matches one of these "
+        "four analysis_type values:\n"
+        "'trend' (requires property_name) - control chart (with rule-violation flags), process "
+        "capability/Cpk, CUSUM drift detection, and a trend significance test for one property "
+        "over this grade's production runs.\n"
+        "'ingredient_correlation' (requires property_name) - which raw material's ACTUAL metered "
+        "per-run dosage, and separately its PLANNED recipe php across versions, correlates with "
+        "this property's outcome.\n"
+        "'recipe_cost' - formulation cost per recipe version for this grade.\n"
+        "'setting_correlation' (requires property_name) - which machine/process setting "
+        "correlates with this property's outcome across this grade's runs."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "analysis_type": {
+                "type": "string",
+                "enum": ["trend", "ingredient_correlation", "recipe_cost", "setting_correlation"],
+            },
+            "foam_grade_id": {"type": "integer", "description": "The foam grade to analyze."},
+            "property_name": {
+                "type": "string",
+                "description": "Required for trend, ingredient_correlation, and setting_correlation.",
+            },
+        },
+        "required": ["analysis_type", "foam_grade_id"],
+        "additionalProperties": False,
+    },
+}
+
+
+def _to_jsonable(obj):
+    """Recursively converts pandas/numpy values (DataFrames, Series,
+    numpy scalar types, NaN, Timestamps/dates) into plain
+    JSON-serializable Python values, since analytics.py's functions return
+    numpy floats and DataFrames throughout and json.dumps chokes on both -
+    every tool result passed back to the model goes through this."""
+    import math
+
+    import numpy as np
+    import pandas as pd
+
+    if obj is None:
+        return None
+    if isinstance(obj, (str, bool, int)):
+        return obj
+    if isinstance(obj, float):
+        return None if math.isnan(obj) else obj
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        value = float(obj)
+        return None if math.isnan(value) else value
+    if isinstance(obj, pd.DataFrame):
+        return _to_jsonable(obj.to_dict(orient="records"))
+    if isinstance(obj, pd.Series):
+        return _to_jsonable(obj.tolist())
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    if hasattr(obj, "isoformat"):
+        return obj.isoformat()
+    return str(obj)
+
+
+def _grade_in_plant(session, foam_grade_id, plant_id):
+    """Looks up a FoamGrade and confirms it belongs to plant_id before
+    get_verified_analysis is allowed to touch it - the same "never trust
+    the model to remember the scope" principle as query_plant_data's
+    server-injected plant filter, applied to this tool too. Returns the
+    FoamGrade or None."""
+    grade = session.query(FoamGrade).filter(FoamGrade.id == foam_grade_id).first()
+    if grade is None or grade.product_family is None:
+        return None
+    return grade if grade.product_family.plant_id == plant_id else None
+
+
+def _run_verified_analysis(session, plant_id, analysis_type, foam_grade_id, property_name=None):
+    """Dispatches a get_verified_analysis tool call to the matching
+    analytics.py function(s) - see PLANT_QUERY_SYSTEM_PROMPT and the
+    _GET_VERIFIED_ANALYSIS_TOOL description for what each analysis_type
+    covers. Returns a JSON-serializable dict; never raises - a bad
+    argument comes back as {"error": ...} for the model to see and correct,
+    same pattern as pi3_query_tool.QueryRejected."""
+    valid_types = ("trend", "ingredient_correlation", "recipe_cost", "setting_correlation")
+    if analysis_type not in valid_types:
+        return {"error": f"Unknown analysis_type '{analysis_type}'. Valid values: {', '.join(valid_types)}."}
+
+    grade = _grade_in_plant(session, foam_grade_id, plant_id)
+    if grade is None:
+        return {"error": "foam_grade_id was not found, or does not belong to the current plant."}
+
+    if analysis_type in ("trend", "ingredient_correlation", "setting_correlation") and not property_name:
+        return {"error": f"property_name is required for analysis_type '{analysis_type}'."}
+
+    if analysis_type == "trend":
+        series = analytics.property_run_series(session, foam_grade_id, property_name)
+        if series.empty:
+            return {"note": f"No '{property_name}' results recorded yet for this foam grade."}
+        cc = analytics.control_chart_analysis(series)
+        cc_out = {"ready": cc["ready"], "n": cc["n"]}
+        if cc["ready"]:
+            cc_out.update(
+                {
+                    "mean": cc["mean"],
+                    "sigma": cc["sigma"],
+                    "ucl": cc["ucl"],
+                    "lcl": cc["lcl"],
+                    "in_control": cc["in_control"],
+                    "flags": [
+                        {
+                            "rule": f["rule"],
+                            "first_run_id": f["first_run_id"],
+                            "first_tested_at": f["first_tested_at"],
+                            "points_matching": f["points_matching"],
+                        }
+                        for f in cc["flags"]
+                    ],
+                }
+            )
+        capability = analytics.capability_analysis(series)
+        cusum = analytics.cusum_analysis(series)
+        cusum_out = None
+        if cusum is not None:
+            cusum_out = {
+                "reference": cusum["reference"],
+                "breach_index": cusum["breach_index"],
+                "breach_direction": cusum["breach_direction"],
+            }
+        trend = analytics.trend_test(series)
+        return _to_jsonable(
+            {
+                "n_runs": len(series),
+                "control_chart": cc_out,
+                "capability": capability,
+                "cusum": cusum_out,
+                "trend_test": trend,
+            }
+        )
+
+    if analysis_type == "ingredient_correlation":
+        actual = analytics.rank_component_actual_correlations(session, foam_grade_id, property_name)
+        planned = analytics.rank_component_correlations(session, foam_grade_id, property_name)
+        return _to_jsonable(
+            {
+                "actual_usage_correlation": actual.to_dict(orient="records") if not actual.empty else [],
+                "planned_recipe_correlation": planned.to_dict(orient="records") if not planned.empty else [],
+            }
+        )
+
+    if analysis_type == "recipe_cost":
+        versions = sorted(grade.recipe_versions, key=lambda v: v.created_at)
+        rows = []
+        for v in versions:
+            cost = analytics.recipe_version_cost(session, v)
+            rows.append({"version_label": v.version_label, "approval_status": v.approval_status, **cost})
+        return _to_jsonable({"recipe_versions": rows})
+
+    ranked = analytics.rank_setting_correlations(session, foam_grade_id, property_name)
+    return _to_jsonable(
+        {"process_setting_correlation": ranked.to_dict(orient="records") if not ranked.empty else []}
+    )
+
+
+def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, page_context=""):
+    """Free-form question about one plant's own data. Runs an agentic
+    tool-calling loop (get_verified_analysis, query_plant_data, and
+    file_search - see PLANT_QUERY_SYSTEM_PROMPT above) via the Responses
+    API, up to MAX_TOOL_ITERATIONS tool round-trips, then returns the
+    final text answer.
+
+    Returns (answer, tool_log) where tool_log is a list of dicts recording
+    every tool call made (the exact SQL run, or the verified-analysis
+    arguments) - callers should show this alongside the answer so a
+    reviewer can check PI3's work rather than trust it blindly, per this
+    feature's own design. Returns (None, []) if PI3 isn't configured, the
+    question is empty, or a call fails (an st.error is already shown in
+    that case, same as ask_assistant())."""
+    tool_log = []
+    if not question or not question.strip():
+        return None, tool_log
+    if not is_configured():
+        return None, tool_log
+
+    vector_store_id = _get_secret("PI3_VECTOR_STORE_ID")
+    model = _get_secret("PI3_MODEL") or DEFAULT_MODEL
+    tools = [
+        {"type": "file_search", "vector_store_ids": [vector_store_id]},
+        _QUERY_PLANT_DATA_TOOL,
+        _GET_VERIFIED_ANALYSIS_TOOL,
+    ]
+    input_text = question.strip()
+    if page_context:
+        input_text = f"Context: {page_context}\n\nQuestion: {question.strip()}"
+
+    try:
+        client = _client()
+        response = client.responses.create(
+            model=model,
+            instructions=PLANT_QUERY_SYSTEM_PROMPT,
+            input=input_text,
+            tools=tools,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+
+        for _ in range(MAX_TOOL_ITERATIONS):
+            function_calls = [item for item in response.output if getattr(item, "type", None) == "function_call"]
+            if not function_calls:
+                break
+
+            tool_outputs = []
+            for call in function_calls:
+                try:
+                    args = json.loads(call.arguments or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+
+                if call.name == "query_plant_data":
+                    sql = args.get("sql", "")
+                    try:
+                        rows, executed_sql = pi3_query_tool.run_plant_query(sql, plant_id)
+                        result = {"rows": rows, "row_count": len(rows)}
+                        tool_log.append(
+                            {"tool": "query_plant_data", "sql": executed_sql, "rows_returned": len(rows)}
+                        )
+                    except pi3_query_tool.QueryRejected as exc:
+                        result = {"error": str(exc)}
+                        tool_log.append({"tool": "query_plant_data", "sql": sql, "error": str(exc)})
+                elif call.name == "get_verified_analysis":
+                    result = _run_verified_analysis(
+                        session,
+                        plant_id,
+                        args.get("analysis_type"),
+                        args.get("foam_grade_id", default_foam_grade_id),
+                        args.get("property_name"),
+                    )
+                    tool_log.append({"tool": "get_verified_analysis", "args": args})
+                else:
+                    result = {"error": f"Unknown tool '{call.name}'."}
+
+                tool_outputs.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call.call_id,
+                        "output": json.dumps(_to_jsonable(result)),
+                    }
+                )
+
+            response = client.responses.create(
+                model=model,
+                previous_response_id=response.id,
+                input=tool_outputs,
+                tools=tools,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+
+        return response.output_text or None, tool_log
+    except Exception as exc:
+        st.error(f"Could not reach PI3: {exc}")
+        return None, tool_log
 
 
 def extract_raw_material_from_tds(tds_text, sds_text=None):

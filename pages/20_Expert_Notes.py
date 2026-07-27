@@ -96,7 +96,9 @@ with st.form("add_expert_note"):
                     f"Expert note on {link_label}\n"
                     f"Confidence: {confidence_level}\nAuthor: {author or '—'}\n\n{note_text.strip()}"
                 )
-                note.vector_store_file_id = ai_assistant.push_document_to_vector_store(link_label, doc_text)
+                note.vector_store_file_id = ai_assistant.push_document_to_vector_store(
+                    link_label, doc_text, metadata={"plant_id": plant_id} if plant_id else None
+                )
             session.add(note)
             session.commit()
             st.success("Expert note saved." + (" Fed into PI3." if note.vector_store_file_id else ""))
@@ -155,7 +157,9 @@ else:
                             f"Expert note on {link_label}\n"
                             f"Confidence: {e_confidence}\nAuthor: {e_author or '—'}\n\n{e_text.strip()}"
                         )
-                        selected.vector_store_file_id = ai_assistant.push_document_to_vector_store(link_label, doc_text)
+                        selected.vector_store_file_id = ai_assistant.push_document_to_vector_store(
+                            link_label, doc_text, metadata={"plant_id": plant_id} if plant_id else None
+                        )
                     selected.note_text = e_text.strip()
                     selected.confidence_level = e_confidence
                     selected.author = e_author
