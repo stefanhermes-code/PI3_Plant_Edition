@@ -243,6 +243,14 @@ class RecipeVersion(Base):
     approval_status = Column(String(50), default="Draft")
     created_by = Column(String(200))
     created_at = Column(DateTime, default=dt.datetime.utcnow)
+    # Separate from approval_status on purpose: approval_status tracks the
+    # Draft/Review/Approved/Rejected workflow for THIS version; is_active
+    # tracks whether it's the version currently in production use for its
+    # foam grade. A version can be Approved but no longer active (it was
+    # superseded by a later revision) - only one version per foam grade
+    # should be active at a time, enforced in application code (see
+    # helpers.activate_recipe_version), not a DB constraint.
+    is_active = Column(Boolean, default=True)
 
     foam_grade = relationship("FoamGrade", back_populates="recipe_versions")
     components = relationship("RecipeComponent", back_populates="recipe_version")

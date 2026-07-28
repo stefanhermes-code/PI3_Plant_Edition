@@ -1,4 +1,14 @@
-"""Screen 4: Recipe Version Record (formulation memory)"""
+"""Screen 4: Recipe Version Record (formulation memory)
+
+Each foam grade has exactly one ACTIVE recipe at a time - a new version
+replaces the previous one in production, they don't coexist. This page
+leads with that: "Create Recipe" starts a brand new formulation for a
+grade, "Edit Recipe" revises the current one (saving records it as a new
+version automatically and retires the one it replaces). Full version
+history - every retired version, its ingredients, who approved what and
+when - stays fully intact below, it's just not the first thing you have
+to manage by hand.
+"""
 
 import datetime as dt
 
@@ -17,10 +27,12 @@ from db import (
     init_db,
 )
 from helpers import (
+    activate_recipe_version,
     clickable_table,
     csv_excel_uploader,
     dedupe_import_rows,
     delete_with_confirm,
+    next_version_label,
     page_setup,
     render_data_table,
     set_pending_banner,
@@ -39,6 +51,12 @@ require_login()
 logout_button()
 
 st.title("Recipe Version Record")
+st.caption(
+    "Each foam grade has one active recipe at a time. Use 'Create Recipe' to start a brand new "
+    "formulation, or 'Edit Recipe' to revise the current one - saving automatically records it "
+    "as a new version and retires the one it replaces, so the full formulation history stays "
+    "intact without you having to manage versions by hand."
+)
 session = get_session()
 
 grades = session.query(FoamGrade).all()
@@ -68,37 +86,142 @@ def _match_or_create_raw_material(name, supplier=None):
     return new_rm
 
 
+def _active_version(grade):
+    return next((v for v in grade.recipe_versions if v.is_active), None)
+
+
 # ---------------------------------------------------------------------------
 # Recipe versions (header record)
 # ---------------------------------------------------------------------------
-tab_manual, tab_import = st.tabs(["Add recipe version", "CSV / Excel import"])
+tab_create, tab_edit, tab_import = st.tabs(["Create Recipe", "Edit Recipe", "CSV / Excel import"])
 
-with tab_manual:
-    with st.expander("Add recipe version", expanded=False):
-        with st.form("add_recipe_version"):
-            grade = st.selectbox("Foam grade *", grades, format_func=lambda g: g.grade_name)
-            version_label = st.text_input("Version label * (e.g. 28-MH-05)")
-            effective_date = st.date_input("Effective date", value=dt.date.today())
-            change_note = st.text_area("Change note (why this version exists) *")
-            approval_status = st.selectbox("Approval status", APPROVAL_STATUSES)
-            created_by = st.text_input("Created by")
-            submitted = st.form_submit_button("Save recipe version")
-            if submitted:
-                if not version_label or not change_note:
+with tab_create:
+    st.caption(
+        "Start a brand new formulation for a foam grade. If this grade already has an active "
+        "recipe, it will be retired the moment this one is saved."
+    )
+    with st.form("create_recipe"):
+        grade = st.selectbox(
+            "Foam grade *", grades, format_func=lambda g: g.grade_name, key="create_recipe_grade"
+        )
+        version_label = st.text_input("Version label * (e.g. 28-MH-05)")
+        effective_date = st.date_input("Effective date", value=dt.date.today())
+        change_note = st.text_area("Change note (why this recipe exists) *")
+        approval_status = st.selectbox("Approval status", APPROVAL_STATUSES)
+        created_by = st.text_input("Created by")
+        submitted = st.form_submit_button("Save recipe")
+        if submitted:
+            if not version_label or not change_note:
+                st.error("Version label and change note are required.")
+            else:
+                new_version = RecipeVersion(
+                    foam_grade_id=grade.id,
+                    version_label=version_label,
+                    effective_date=effective_date,
+                    change_note=change_note,
+                    approval_status=approval_status,
+                    created_by=created_by,
+                )
+                session.add(new_version)
+                session.flush()
+                activate_recipe_version(session, grade.id, new_version)
+                session.commit()
+                st.success(
+                    f"Recipe '{version_label}' created and set as {grade.grade_name}'s active recipe. "
+                    "Add its ingredients below in the recipe version list."
+                )
+                st.rerun()
+
+with tab_edit:
+    grades_with_active = [g for g in grades if _active_version(g)]
+    if not grades_with_active:
+        st.info("No foam grade has an active recipe yet - use 'Create Recipe' to start one.")
+    else:
+        edit_grade = st.selectbox(
+            "Foam grade *", grades_with_active, format_func=lambda g: g.grade_name, key="edit_recipe_grade"
+        )
+        active_version = _active_version(edit_grade)
+        st.caption(
+            f"Editing **{active_version.version_label}** ({active_version.approval_status}), "
+            f"currently active for {edit_grade.grade_name}. Saving creates a new version with the "
+            "changes below and retires this one - the current version is never modified in place."
+        )
+
+        components_df = (
+            pd.DataFrame(
+                [
+                    {
+                        "Raw material": c.raw_material_name,
+                        "Supplier": c.supplier or "",
+                        "php": c.php,
+                        "Role": c.role_in_formulation or "",
+                        "Notes": c.notes or "",
+                    }
+                    for c in active_version.components
+                ]
+            )
+            if active_version.components
+            else pd.DataFrame(columns=["Raw material", "Supplier", "php", "Role", "Notes"])
+        )
+
+        st.markdown("**Ingredients** — edit values directly, or use the row controls to add or remove ingredients.")
+        edited_df = st.data_editor(
+            components_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            key=f"edit_recipe_components_{edit_grade.id}_{active_version.id}",
+            column_config={
+                "php": st.column_config.NumberColumn("php", min_value=0.0, step=0.1),
+            },
+        )
+
+        suggested_label = next_version_label(active_version.version_label, len(edit_grade.recipe_versions))
+        with st.form(f"edit_recipe_{edit_grade.id}"):
+            new_label = st.text_input("New version label *", value=suggested_label)
+            new_effective = st.date_input("Effective date", value=dt.date.today())
+            new_change_note = st.text_area("Change note * (what changed and why)")
+            new_status = st.selectbox("Approval status", APPROVAL_STATUSES, index=0)
+            new_created_by = st.text_input("Created by")
+            save_edit = st.form_submit_button("Save as new version")
+            if save_edit:
+                clean_rows = [
+                    row for _, row in edited_df.iterrows() if str(row.get("Raw material") or "").strip()
+                ]
+                if not new_label.strip() or not new_change_note.strip():
                     st.error("Version label and change note are required.")
+                elif not clean_rows:
+                    st.error("At least one ingredient is required.")
                 else:
-                    session.add(
-                        RecipeVersion(
-                            foam_grade_id=grade.id,
-                            version_label=version_label,
-                            effective_date=effective_date,
-                            change_note=change_note,
-                            approval_status=approval_status,
-                            created_by=created_by,
-                        )
+                    new_version = RecipeVersion(
+                        foam_grade_id=edit_grade.id,
+                        version_label=new_label.strip(),
+                        effective_date=new_effective,
+                        change_note=new_change_note,
+                        approval_status=new_status,
+                        created_by=new_created_by,
                     )
+                    session.add(new_version)
+                    session.flush()
+                    for row in clean_rows:
+                        name = str(row["Raw material"]).strip()
+                        supplier = str(row.get("Supplier") or "")
+                        rm = _match_or_create_raw_material(name, supplier)
+                        session.add(
+                            RecipeComponent(
+                                recipe_version_id=new_version.id,
+                                raw_material_id=rm.id if rm else None,
+                                raw_material_name=name,
+                                supplier=supplier,
+                                php=row.get("php") if pd.notna(row.get("php")) else None,
+                                role_in_formulation=str(row.get("Role") or ""),
+                                notes=str(row.get("Notes") or ""),
+                            )
+                        )
+                    activate_recipe_version(session, edit_grade.id, new_version)
                     session.commit()
-                    st.success(f"Recipe version '{version_label}' added.")
+                    st.success(
+                        f"'{new_label}' saved and is now the active recipe for {edit_grade.grade_name}."
+                    )
                     st.rerun()
 
 with tab_import:
@@ -106,7 +229,10 @@ with tab_import:
         "Bulk-create recipe version HEADER records only (e.g. migrating a formulation library) - "
         "not the ingredients/components inside each version. For that, see 'Bulk import recipe "
         "components' further down this page, below the recipe version list - it's a separate "
-        "upload with its own Confirm import button."
+        "upload with its own Confirm import button. A grade with no active recipe yet gets its "
+        "first imported row for that grade marked active automatically; anything after that is "
+        "imported as historical/inactive - use 'Edit Recipe' or the recipe version list below to "
+        "change which one is active."
     )
     show_pending_banner("recipe_version_import_msg")
     df, filename = csv_excel_uploader(
@@ -135,17 +261,29 @@ with tab_import:
                 existing_keys,
                 key_func=lambda row: (int(row["foam_grade_id"]), str(row["version_label"]).strip().lower()),
             )
+            grades_with_active_ids = {
+                gid
+                for (gid,) in session.query(RecipeVersion.foam_grade_id)
+                .filter(RecipeVersion.is_active.is_(True))
+                .all()
+            }
+            activated_this_batch = set()
             for row in new_rows:
                 status = str(row.get("approval_status", "") or "").strip()
                 eff_date = pd.to_datetime(row.get("effective_date"), errors="coerce")
+                gid = int(row["foam_grade_id"])
+                make_active = gid not in grades_with_active_ids and gid not in activated_this_batch
+                if make_active:
+                    activated_this_batch.add(gid)
                 session.add(
                     RecipeVersion(
-                        foam_grade_id=int(row["foam_grade_id"]),
+                        foam_grade_id=gid,
                         version_label=str(row["version_label"]).strip(),
                         effective_date=eff_date.date() if not pd.isna(eff_date) else None,
                         change_note=str(row.get("change_note", "") or ""),
                         approval_status=status if status in APPROVAL_STATUSES else "Draft",
                         created_by=str(row.get("created_by", "") or ""),
+                        is_active=make_active,
                     )
                 )
             session.commit()
@@ -157,18 +295,58 @@ with tab_import:
 
 st.divider()
 st.subheader("Recipe versions")
+st.caption(
+    "Full formulation history across every foam grade. Click a row to view or manage that "
+    "version's details, ingredients, or delete it."
+)
 
 versions = session.query(RecipeVersion).order_by(RecipeVersion.created_at.desc()).all()
 if not versions:
     st.info("No recipe versions recorded yet.")
+else:
+    version_rows = [
+        {
+            "Version": v.version_label,
+            "Foam grade": v.foam_grade.grade_name if v.foam_grade else "—",
+            "Active": "Yes" if v.is_active else "No",
+            "Status": v.approval_status,
+            "Effective date": v.effective_date,
+            "Created by": v.created_by,
+        }
+        for v in versions
+    ]
+    idx = clickable_table(version_rows, key="recipe_versions_table")
+    if idx is not None:
+        st.session_state["rv_selected_id"] = versions[idx].id
+    elif st.session_state.get("rv_selected_id") not in {v.id for v in versions}:
+        st.session_state.pop("rv_selected_id", None)
 
-for v in versions:
-    with st.container(border=True):
-        st.markdown(f"**{v.version_label}** — {v.foam_grade.grade_name} · status: `{v.approval_status}`")
-        st.caption(f"Effective {v.effective_date or '—'} | Created by {v.created_by or '—'}")
+    selected_id = st.session_state.get("rv_selected_id")
+    v = next((x for x in versions if x.id == selected_id), None)
+
+    if v is None:
+        st.caption("Select a row above to view or manage that recipe version.")
+    else:
+        st.markdown(
+            f"### {v.version_label} — {v.foam_grade.grade_name if v.foam_grade else '—'} "
+            + ("🟢 Active" if v.is_active else "")
+        )
+        st.caption(f"Effective {v.effective_date or '—'} | Created by {v.created_by or '—'} | Status `{v.approval_status}`")
         st.write(v.change_note)
 
-        with st.expander("Edit / delete this recipe version"):
+        if not v.is_active:
+            if st.button("Set as active recipe", key=f"activate_{v.id}"):
+                activate_recipe_version(session, v.foam_grade_id, v)
+                session.commit()
+                st.success(f"'{v.version_label}' is now the active recipe for {v.foam_grade.grade_name}.")
+                st.rerun()
+
+        with st.expander("Edit details / delete this recipe version"):
+            st.caption(
+                "This edits this version's own header details in place (for example, fixing a typo "
+                "or updating its approval status) - it does not create a new version. To revise the "
+                "actual formulation, use the 'Edit Recipe' tab above instead."
+            )
             with st.form(f"edit_version_{v.id}"):
                 e_grade = st.selectbox(
                     "Foam grade *", grades,
@@ -231,9 +409,9 @@ for v in versions:
                     for c in v.components
                 ]
                 st.caption("Click a row to edit (and optionally delete) that component.")
-                idx = clickable_table(comp_rows, key=f"components_table_{v.id}")
-                if idx is not None:
-                    st.session_state["comp_selected_id"] = v.components[idx].id
+                comp_idx = clickable_table(comp_rows, key=f"components_table_{v.id}")
+                if comp_idx is not None:
+                    st.session_state["comp_selected_id"] = v.components[comp_idx].id
                 elif st.session_state.get("comp_selected_id") in {c.id for c in v.components}:
                     # a component belonging to THIS version was selected before, but the
                     # table no longer reports a selection - clear the stale reference
@@ -404,4 +582,3 @@ if comp_df is not None:
             msg += f" Skipped {len(dup_rows)} row(s) already recorded for their recipe version (likely a repeat click)."
         set_pending_banner("recipe_component_import_msg", msg)
         st.rerun()
-

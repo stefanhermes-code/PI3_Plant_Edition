@@ -117,6 +117,7 @@ def seed_demo_data(session) -> str:
         change_note="Baseline formulation, stable for over a year prior to the raw material substitution.",
         approval_status="Approved",
         created_by="R&D",
+        is_active=False,
     )
     session.add(v04)
     session.flush()
@@ -137,6 +138,7 @@ def seed_demo_data(session) -> str:
         change_note="Raw material substitution (Polyol A -> Polyol B) due to supplier availability. Coincides with onset of hardness drift and shrinkage.",
         approval_status="Approved",
         created_by="R&D",
+        is_active=False,
     )
     session.add(v05)
     session.flush()
@@ -157,6 +159,7 @@ def seed_demo_data(session) -> str:
         change_note="Catalyst balance and cure/cutting timing adjusted following trial series T1-T5.",
         approval_status="Draft",
         created_by="Technical Manager",
+        is_active=True,
     )
     session.add(v06)
     session.flush()

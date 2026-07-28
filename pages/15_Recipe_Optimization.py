@@ -69,11 +69,14 @@ if not versions:
     st.stop()
 
 # A new recipe version replaces the previous one in production - versions
-# don't normally coexist, so the current (most recent) one is what the page
+# don't normally coexist, so the current (active) one is what the page
 # leads with. Older versions are still fully available, just moved to the
 # "Version history" section at the bottom instead of competing for
-# attention with equal-weight sections up top.
-current_version = versions[-1]
+# attention with equal-weight sections up top. Falls back to the most
+# recently created version for legacy data recorded before is_active
+# existed (everything defaults to True at the DB level, so this only
+# matters if a grade somehow ended up with none or several marked active).
+current_version = next((v for v in versions if v.is_active), versions[-1])
 
 results_df = property_results_dataframe(session, foam_grade_id=grade.id)
 available_properties = sorted(results_df["property_name"].dropna().unique()) if not results_df.empty else []
@@ -489,6 +492,7 @@ with st.expander("Formulation cost by version"):
         cost_rows.append(
             {
                 "Version": v.version_label,
+                "Active": "Yes" if v.is_active else "No",
                 "Status": v.approval_status,
                 "Cost per 100 parts": c["total_cost"],
                 "Cost coverage": f"{coverage_pct:.0f}%" if coverage_pct is not None else "—",
@@ -552,7 +556,11 @@ with st.expander("Compare two versions"):
 
 with st.expander("All recipe versions"):
     for v in versions:
-        st.markdown(f"**{v.version_label} — {v.approval_status}**" + (f" — {v.change_note}" if v.change_note else ""))
+        active_tag = " — 🟢 Active" if v.is_active else ""
+        st.markdown(
+            f"**{v.version_label} — {v.approval_status}**{active_tag}"
+            + (f" — {v.change_note}" if v.change_note else "")
+        )
         if v.components:
             render_data_table(
                 pd.DataFrame(

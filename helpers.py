@@ -8,7 +8,7 @@ import streamlit as st
 import ai_assistant
 import reports
 from auth import current_user
-from db import FoamGrade, get_session
+from db import FoamGrade, RecipeVersion, get_session
 
 
 def page_setup(title: str):
@@ -18,6 +18,39 @@ def page_setup(title: str):
     under st.navigation), so this is intentionally a no-op — calling
     st.set_page_config() a second time would raise an error."""
     pass
+
+
+def activate_recipe_version(session, foam_grade_id, new_version):
+    """Marks new_version as the active recipe for its foam grade, and
+    deactivates whatever was active before it. Recipe versions don't
+    coexist in production - a new one replaces the previous one - so
+    exactly one version per foam grade should have is_active=True at a
+    time. Call this right after adding+flushing new_version, before
+    session.commit(). Does not touch approval_status - a version can be
+    Approved but no longer active (superseded by a later revision)."""
+    session.query(RecipeVersion).filter(
+        RecipeVersion.foam_grade_id == foam_grade_id,
+        RecipeVersion.id != new_version.id,
+    ).update({"is_active": False}, synchronize_session=False)
+    new_version.is_active = True
+
+
+def next_version_label(current_label, existing_count):
+    """Best-effort auto-generated label for the next recipe version: if
+    the current label ends in a number (e.g. "28-MH-05"), increments that
+    number (preserving its zero-padding width), matching the meaningful
+    product-code style labels this app's users already use. Falls back to
+    appending "-v{n}" if no trailing number is found. Always shown to the
+    user as an editable suggestion, never silently applied - two versions
+    for the same grade could otherwise collide on a generated label."""
+    import re
+
+    match = re.search(r"(\d+)$", current_label or "")
+    if match:
+        num = match.group(1)
+        next_num = str(int(num) + 1).zfill(len(num))
+        return current_label[: match.start()] + next_num
+    return f"{(current_label or 'v').strip()}-v{existing_count + 1}"
 
 
 def render_data_table(df, max_height=None):
