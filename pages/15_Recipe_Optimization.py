@@ -134,7 +134,7 @@ for v in versions:
         }
     )
 cost_df = pd.DataFrame(cost_rows)
-st.dataframe(cost_df, hide_index=True, use_container_width=True)
+render_centered_table(cost_df)
 if any(c["missing"] for c in cost_by_version.values()):
     st.caption(
         "Costs shown are a lower-bound estimate where materials are missing a recorded cost/kg - "
@@ -175,7 +175,7 @@ else:
             "Show unchanged materials", value=False, key=f"diff_show_unchanged_{grade.id}"
         )
         display_diff = diff_df if show_unchanged else diff_df[diff_df["status"] != "Unchanged"]
-        st.dataframe(
+        render_centered_table(
             display_diff.rename(
                 columns={
                     "raw_material_name": "Raw material",
@@ -186,9 +186,7 @@ else:
                     "delta_pct": "Change (%)",
                     "status": "Status",
                 }
-            ),
-            hide_index=True,
-            use_container_width=True,
+            )
         )
         changed_count = (diff_df["status"] != "Unchanged").sum()
         st.caption(
@@ -225,16 +223,14 @@ else:
             "Finalized phase of more runs to unlock this."
         )
     else:
-        st.dataframe(
+        render_centered_table(
             actual_ranked.rename(
                 columns={
                     "raw_material_name": "Raw material",
                     "n_runs": "Runs compared",
                     "correlation": "Correlation with outcome",
                 }
-            ),
-            hide_index=True,
-            use_container_width=True,
+            )
         )
         top_actual = actual_ranked.iloc[0]
         st.caption(
@@ -260,16 +256,14 @@ else:
                 f"{corr_property} results to compute a correlation yet."
             )
         else:
-            st.dataframe(
+            render_centered_table(
                 component_ranked.rename(
                     columns={
                         "raw_material_name": "Raw material",
                         "n_versions": "Versions compared",
                         "correlation": "Correlation with outcome",
                     }
-                ),
-                hide_index=True,
-                use_container_width=True,
+                )
             )
             top_component = component_ranked.iloc[0]
             st.caption(
@@ -288,18 +282,18 @@ st.caption("The raw materials, dosage (php), and role recorded for each recipe v
 for v in versions:
     with st.expander(f"{v.version_label} — {v.approval_status} — {v.change_note or ''}"):
         if v.components:
-            st.dataframe(
-                [
-                    {
-                        "Raw material": c.raw_material_name,
-                        "Supplier": c.supplier,
-                        "php": c.php,
-                        "Role": c.role_in_formulation,
-                    }
-                    for c in v.components
-                ],
-                hide_index=True,
-                use_container_width=True,
+            render_centered_table(
+                pd.DataFrame(
+                    [
+                        {
+                            "Raw material": c.raw_material_name,
+                            "Supplier": c.supplier,
+                            "php": c.php,
+                            "Role": c.role_in_formulation,
+                        }
+                        for c in v.components
+                    ]
+                )
             )
         else:
             st.caption("No components recorded for this version yet.")

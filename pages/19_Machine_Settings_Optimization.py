@@ -18,7 +18,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup
+from helpers import page_setup, render_centered_table
 
 page_setup("Machine Settings Optimization")
 init_db()
@@ -83,7 +83,7 @@ display_ranked = ranked_with_data.rename(
         "Gap vs worst range (pts)",
     ]
 ]
-st.dataframe(display_ranked, hide_index=True, use_container_width=True)
+render_centered_table(display_ranked)
 
 top = ranked_with_data.iloc[0]
 st.caption(
@@ -147,7 +147,7 @@ else:
     summary["avg_target"] = summary["avg_target"].round(2)
     summary["avg_abs_deviation_pct"] = (summary["avg_abs_deviation_pct"] * 100).round(1)
 
-    st.dataframe(summary, hide_index=True, use_container_width=True)
+    render_centered_table(summary)
 
     with_deviation = summary.dropna(subset=["avg_abs_deviation_pct"])
     if not with_deviation.empty:

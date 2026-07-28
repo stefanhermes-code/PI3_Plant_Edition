@@ -20,7 +20,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, render_ask_pi3_section, render_pi3_docx_download
+from helpers import page_setup, render_ask_pi3_section, render_centered_table, render_pi3_docx_download
 
 page_setup("Process-Property Correlation")
 init_db()
@@ -70,7 +70,7 @@ display_ranked["label"] = display_ranked["label"]
 display_ranked = display_ranked.rename(
     columns={"label": "Process setting", "n": "Runs compared", "correlation": "Correlation"}
 )[["Process setting", "Runs compared", "Correlation"]]
-st.dataframe(display_ranked, hide_index=True, use_container_width=True)
+render_centered_table(display_ranked)
 
 top = ranked_with_data.iloc[0]
 direction = "positive" if top["correlation"] > 0 else "negative"

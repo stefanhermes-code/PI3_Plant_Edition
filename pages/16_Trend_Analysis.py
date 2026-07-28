@@ -32,7 +32,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, QualityObservation, get_session, init_db
-from helpers import page_setup, render_ask_pi3_section, render_pi3_docx_download
+from helpers import page_setup, render_ask_pi3_section, render_centered_table, render_pi3_docx_download
 
 page_setup("Trend Analysis")
 init_db()
@@ -162,7 +162,7 @@ else:
                 for f in chart_result["flags"]
             ]
         )
-        st.dataframe(flags_display, hide_index=True, use_container_width=True)
+        render_centered_table(flags_display)
 
 # ---------------------------------------------------------------------------
 # Process capability
@@ -279,7 +279,7 @@ for qi in quality_issues:
 
 if change_rows:
     change_df = pd.DataFrame(change_rows).sort_values("Date")
-    st.dataframe(change_df, hide_index=True, use_container_width=True)
+    render_centered_table(change_df)
     st.caption("Cross-reference these dates against any unusual pattern, slow drift, or trend flagged above.")
 else:
     st.caption("No recipe-version changes, machine changes, or quality issues recorded across these runs.")
