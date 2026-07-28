@@ -63,6 +63,7 @@ from helpers import (
     delete_with_confirm,
     page_setup,
     parse_dt,
+    render_data_table,
     set_pending_banner,
     show_pending_banner,
 )
@@ -442,7 +443,7 @@ with tab_runs:
                         "Flagged rows reference an unknown foam_grade_id/recipe_version_id, a recipe version "
                         "that doesn't belong to that foam grade, or an unknown machine_id."
                     )
-                    st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+                    render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                 if good_rows and st.button("Confirm import", key="confirm_run_import"):
                     # Rows with an explicit batch_reference are deduped against
@@ -761,7 +762,7 @@ with tab_phases:
                                 "Flagged rows reference an unknown production_run_id or a phase_name outside "
                                 f"the controlled list ({', '.join(PHASE_NAMES)})."
                             )
-                            st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+                            render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                         if good_rows and st.button("Confirm import", key="confirm_phase_import"):
                             for row in good_rows:
@@ -872,7 +873,7 @@ with tab_phases:
                                         "Flagged rows reference a production_run_id/phase_name combination with "
                                         "no matching phase, or are missing section_number."
                                     )
-                                    st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+                                    render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                                 if good_rows and st.button("Confirm import", key="confirm_fallplate_import"):
                                     for row, phase_id in zip(good_rows, resolved_phase_ids):
@@ -897,19 +898,20 @@ with tab_phases:
                     .all()
                 )
                 if recent_fp:
-                    st.dataframe(
-                        [
-                            {
-                                "Phase": fp.phase.phase_name if fp.phase else "—",
-                                "Section": fp.section_number,
-                                "Position (mm)": fp.position_mm,
-                                "Angle (deg)": fp.angle_deg,
-                                "Notes": fp.notes,
-                            }
-                            for fp in recent_fp
-                        ],
-                        hide_index=True,
-                        use_container_width=True,
+                    render_data_table(
+                        pd.DataFrame(
+                            [
+                                {
+                                    "Phase": fp.phase.phase_name if fp.phase else "—",
+                                    "Section": fp.section_number,
+                                    "Position (mm)": fp.position_mm,
+                                    "Angle (deg)": fp.angle_deg,
+                                    "Notes": fp.notes,
+                                }
+                                for fp in recent_fp
+                            ]
+                        ),
+                        max_height="300px",
                     )
 
 # ---------------------------------------------------------------------------
@@ -1179,7 +1181,7 @@ with tab_streams:
                                     "Flagged rows reference a production_run_id with no Finalized phase yet, "
                                     "or are missing stream_name."
                                 )
-                                st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+                                render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                             if good_rows and st.button("Confirm import", key="confirm_stream_import"):
                                 # Dedupe on (production_run_id, stream_name): a repeat click of
@@ -1412,7 +1414,7 @@ with tab_events:
                                 "Flagged rows have an unknown production_run_id, an event_type outside "
                                 f"the controlled list ({', '.join(EVENT_TYPES)}), or an unparseable event_ts."
                             )
-                            st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+                            render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                         if good_rows and st.button("Confirm import", key="confirm_event_import"):
                             for row, phase_id in zip(good_rows, resolved_phase_ids):
@@ -1596,7 +1598,7 @@ with tab_runtime:
                         st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
                         if bad_rows:
                             st.warning("Flagged rows reference a production_run_id that does not exist and will be skipped.")
-                            st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+                            render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                         if good_rows and st.button("Confirm import", key="confirm_runtime_import"):
                             for row in good_rows:

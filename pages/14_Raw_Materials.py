@@ -18,6 +18,7 @@ from helpers import (
     delete_with_confirm,
     page_setup,
     parse_bool,
+    render_data_table,
     set_pending_banner,
     show_pending_banner,
 )
@@ -184,7 +185,7 @@ with tab_import:
         st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged as duplicates: **{len(dup_rows)}**")
         if dup_rows:
             st.warning("These rows match a raw material name already in the list and were skipped.")
-            st.dataframe(pd.DataFrame(dup_rows), use_container_width=True)
+            render_data_table(pd.DataFrame(dup_rows), max_height="400px")
 
         if good_rows and st.button("Confirm import", key="confirm_rawmat_import"):
             for row in good_rows:

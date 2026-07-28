@@ -20,18 +20,22 @@ def page_setup(title: str):
     pass
 
 
-def render_centered_table(df):
-    """Renders a small pandas DataFrame as a centered, content-width HTML
-    table with centered cell text.
+def render_data_table(df, max_height=None):
+    """Renders a pandas DataFrame as a left-aligned, content-width HTML
+    table with left-aligned cell text.
 
     st.dataframe(..., use_container_width=True) always stretches to the
     full page width no matter how little data there is, which spreads a
     handful of short rows across the whole screen and makes them harder
-    to read, not easier. This sizes to the actual content and centers it
-    instead. Deliberately avoids pandas' Styler (its HTML-rendering path
-    requires jinja2, which isn't otherwise a dependency of this app) by
-    building the HTML directly - fine for the small summary tables this
-    is meant for, not a general-purpose replacement for st.dataframe."""
+    to read, not easier. This sizes to the actual content instead and
+    aligns it (and its cell text) to the left, matching how a plain data
+    table normally reads. Deliberately avoids pandas' Styler (its
+    HTML-rendering path requires jinja2, which isn't otherwise a
+    dependency of this app) by building the HTML directly.
+
+    max_height, if given (e.g. "400px"), wraps the table in a scrollable
+    container - use this for tables that could have many rows, so a long
+    listing doesn't push the rest of the page down indefinitely."""
 
     def _esc(v):
         if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -39,22 +43,28 @@ def render_centered_table(df):
         return str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     header_cells = "".join(
-        f"<th style='text-align:center; padding:6px 16px; border-bottom:2px solid #1B6FA8;'>{_esc(c)}</th>"
+        f"<th style='text-align:left; padding:6px 16px; border-bottom:2px solid #1B6FA8; "
+        f"position:sticky; top:0; background:white;'>{_esc(c)}</th>"
         for c in df.columns
     )
     body_rows = []
     for _, row in df.iterrows():
         cells = "".join(
-            f"<td style='text-align:center; padding:6px 16px; border-bottom:1px solid #E4ECF1;'>{_esc(v)}</td>"
+            f"<td style='text-align:left; padding:6px 16px; border-bottom:1px solid #E4ECF1;'>{_esc(v)}</td>"
             for v in row
         )
         body_rows.append(f"<tr>{cells}</tr>")
-    html = (
-        "<div style='display:flex; justify-content:center;'>"
+    table_html = (
         "<table style='border-collapse:collapse;'>"
         f"<thead><tr>{header_cells}</tr></thead><tbody>{''.join(body_rows)}</tbody>"
-        "</table></div>"
+        "</table>"
     )
+    if max_height:
+        html = (
+            f"<div style='overflow:auto; max-height:{max_height}; display:inline-block;'>{table_html}</div>"
+        )
+    else:
+        html = f"<div style='display:inline-block;'>{table_html}</div>"
     st.markdown(html, unsafe_allow_html=True)
 
 

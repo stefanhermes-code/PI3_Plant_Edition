@@ -23,7 +23,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, render_ask_pi3_section, render_centered_table, render_pi3_docx_download
+from helpers import page_setup, render_ask_pi3_section, render_data_table, render_pi3_docx_download
 
 page_setup("Recipe Optimization")
 init_db()
@@ -84,7 +84,7 @@ else:
         lambda p: f"{p:.0%}" if pd.notna(p) else "—"
     )
     overall_summary = overall_summary[["Property", "Avg target", "Avg actual", "Pass rate"]]
-    render_centered_table(overall_summary)
+    render_data_table(overall_summary)
     n_runs = results_df["run_id"].nunique()
     st.caption(
         f"Based on {n_runs} production run(s) with quality test results for {grade.grade_name}, "
@@ -134,7 +134,7 @@ for v in versions:
         }
     )
 cost_df = pd.DataFrame(cost_rows)
-render_centered_table(cost_df)
+render_data_table(cost_df)
 if any(c["missing"] for c in cost_by_version.values()):
     st.caption(
         "Costs shown are a lower-bound estimate where materials are missing a recorded cost/kg - "
@@ -175,7 +175,7 @@ else:
             "Show unchanged materials", value=False, key=f"diff_show_unchanged_{grade.id}"
         )
         display_diff = diff_df if show_unchanged else diff_df[diff_df["status"] != "Unchanged"]
-        render_centered_table(
+        render_data_table(
             display_diff.rename(
                 columns={
                     "raw_material_name": "Raw material",
@@ -223,7 +223,7 @@ else:
             "Finalized phase of more runs to unlock this."
         )
     else:
-        render_centered_table(
+        render_data_table(
             actual_ranked.rename(
                 columns={
                     "raw_material_name": "Raw material",
@@ -256,7 +256,7 @@ else:
                 f"{corr_property} results to compute a correlation yet."
             )
         else:
-            render_centered_table(
+            render_data_table(
                 component_ranked.rename(
                     columns={
                         "raw_material_name": "Raw material",
@@ -282,7 +282,7 @@ st.caption("The raw materials, dosage (php), and role recorded for each recipe v
 for v in versions:
     with st.expander(f"{v.version_label} — {v.approval_status} — {v.change_note or ''}"):
         if v.components:
-            render_centered_table(
+            render_data_table(
                 pd.DataFrame(
                     [
                         {

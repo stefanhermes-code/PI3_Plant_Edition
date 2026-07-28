@@ -12,6 +12,7 @@ the individual screens.
 
 import datetime as dt
 
+import pandas as pd
 import streamlit as st
 
 from auth import current_user, logout_button, require_login
@@ -27,7 +28,7 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import page_setup
+from helpers import page_setup, render_data_table
 from version import APP_VERSION
 
 LOGO_PATH = "assets/htc_global_logo_blue_steel.png"
@@ -154,7 +155,7 @@ def render_overview():
         )
 
     if obs_rows:
-        st.dataframe(obs_rows, use_container_width=True, hide_index=True)
+        render_data_table(pd.DataFrame(obs_rows), max_height="500px")
     else:
         st.info("No quality issues recorded yet. Load demo data (see README) or start entering records.")
 

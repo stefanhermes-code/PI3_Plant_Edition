@@ -32,7 +32,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, QualityObservation, get_session, init_db
-from helpers import page_setup, render_ask_pi3_section, render_centered_table, render_pi3_docx_download
+from helpers import page_setup, render_ask_pi3_section, render_data_table, render_pi3_docx_download
 
 page_setup("Trend Analysis")
 init_db()
@@ -162,7 +162,7 @@ else:
                 for f in chart_result["flags"]
             ]
         )
-        render_centered_table(flags_display)
+        render_data_table(flags_display)
 
 # ---------------------------------------------------------------------------
 # Process capability
@@ -279,7 +279,7 @@ for qi in quality_issues:
 
 if change_rows:
     change_df = pd.DataFrame(change_rows).sort_values("Date")
-    render_centered_table(change_df)
+    render_data_table(change_df)
     st.caption("Cross-reference these dates against any unusual pattern, slow drift, or trend flagged above.")
 else:
     st.caption("No recipe-version changes, machine changes, or quality issues recorded across these runs.")
@@ -289,10 +289,9 @@ else:
 # ---------------------------------------------------------------------------
 st.divider()
 st.subheader("Results")
-st.dataframe(
+render_data_table(
     series[["tested_at", "run_id", "recipe_version", "machine", "actual_value", "target_value", "n_replicates"]],
-    hide_index=True,
-    use_container_width=True,
+    max_height="400px",
 )
 
 # ---------------------------------------------------------------------------

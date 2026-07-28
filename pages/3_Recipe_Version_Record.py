@@ -22,6 +22,7 @@ from helpers import (
     dedupe_import_rows,
     delete_with_confirm,
     page_setup,
+    render_data_table,
     set_pending_banner,
     show_pending_banner,
 )
@@ -123,7 +124,7 @@ with tab_import:
         st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
         if bad_rows:
             st.warning("Flagged rows reference an unknown foam_grade_id or have no version_label.")
-            st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+            render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
         if good_rows and st.button("Confirm import (recipe versions)", key="confirm_recipe_version_import"):
             existing_keys = {
@@ -370,7 +371,7 @@ if comp_df is not None:
     st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
     if bad_rows:
         st.warning("Flagged rows reference an unknown recipe_version_id or have no raw_material_name.")
-        st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+        render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
     if good_rows and st.button("Confirm import (recipe components)", key="confirm_component_import"):
         existing_keys = {

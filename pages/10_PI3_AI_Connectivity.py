@@ -17,13 +17,14 @@ lives in ai_assistant.py.
 
 import datetime as dt
 
+import pandas as pd
 import streamlit as st
 
 import ai_assistant
 import pi3_query_tool
 from db import Plant, PI3AIConnectionSetting, get_session, init_db
 from auth import current_user, logout_button, require_login, require_role
-from helpers import page_setup
+from helpers import page_setup, render_data_table
 
 page_setup("PI3 Connectivity")
 init_db()
@@ -63,13 +64,13 @@ if current_user()["role"] == "admin":
             "questions without it, just without that one tool.",
         ),
     ]
-    st.dataframe(
-        [
-            {"Secret": name, "Present": "Yes" if value else "No", "Notes": note}
-            for name, value, note in secret_checks
-        ],
-        hide_index=True,
-        use_container_width=True,
+    render_data_table(
+        pd.DataFrame(
+            [
+                {"Secret": name, "Present": "Yes" if value else "No", "Notes": note}
+                for name, value, note in secret_checks
+            ]
+        )
     )
     if not (secret_checks[0][1] and secret_checks[1][1]):
         st.error(

@@ -22,6 +22,7 @@ from helpers import (
     dedupe_import_rows,
     delete_with_confirm,
     page_setup,
+    render_data_table,
     set_pending_banner,
     show_pending_banner,
 )
@@ -133,7 +134,7 @@ with tab_obs_import:
                 "Flagged rows reference an unknown production_run_id/trial_record_id or have no "
                 "observation_type."
             )
-            st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+            render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
         if good_rows and st.button("Confirm import", key="confirm_observation_import"):
             existing_keys = {

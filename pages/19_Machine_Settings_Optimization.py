@@ -18,7 +18,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, render_centered_table
+from helpers import page_setup, render_data_table
 
 page_setup("Machine Settings Optimization")
 init_db()
@@ -83,7 +83,7 @@ display_ranked = ranked_with_data.rename(
         "Gap vs worst range (pts)",
     ]
 ]
-render_centered_table(display_ranked)
+render_data_table(display_ranked)
 
 top = ranked_with_data.iloc[0]
 st.caption(
@@ -126,10 +126,9 @@ if merged["range"].isna().all() or merged["range"].nunique(dropna=True) < 2:
         f"Not enough variation in {PHASE_SETTING_LABELS.get(setting_field, setting_field)} across these "
         "runs yet to split into ranges — showing the raw data instead."
     )
-    st.dataframe(
+    render_data_table(
         merged[["run_id", "run_date", setting_field, "actual_value", "target_value"]],
-        hide_index=True,
-        use_container_width=True,
+        max_height="400px",
     )
 else:
     summary = (
@@ -147,7 +146,7 @@ else:
     summary["avg_target"] = summary["avg_target"].round(2)
     summary["avg_abs_deviation_pct"] = (summary["avg_abs_deviation_pct"] * 100).round(1)
 
-    render_centered_table(summary)
+    render_data_table(summary)
 
     with_deviation = summary.dropna(subset=["avg_abs_deviation_pct"])
     if not with_deviation.empty:

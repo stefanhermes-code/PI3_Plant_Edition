@@ -20,7 +20,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, render_ask_pi3_section, render_centered_table, render_pi3_docx_download
+from helpers import page_setup, render_ask_pi3_section, render_data_table, render_pi3_docx_download
 
 page_setup("Process-Property Correlation")
 init_db()
@@ -70,7 +70,7 @@ display_ranked["label"] = display_ranked["label"]
 display_ranked = display_ranked.rename(
     columns={"label": "Process setting", "n": "Runs compared", "correlation": "Correlation"}
 )[["Process setting", "Runs compared", "Correlation"]]
-render_centered_table(display_ranked)
+render_data_table(display_ranked)
 
 top = ranked_with_data.iloc[0]
 direction = "positive" if top["correlation"] > 0 else "negative"
@@ -101,10 +101,9 @@ else:
         columns={setting_field: PHASE_SETTING_LABELS.get(setting_field, setting_field), "actual_value": property_name}
     )
     st.scatter_chart(chart_df, x=PHASE_SETTING_LABELS.get(setting_field, setting_field), y=property_name)
-    st.dataframe(
+    render_data_table(
         merged[["run_id", "run_date", "recipe_version", "machine", setting_field, "actual_value", "target_value"]],
-        hide_index=True,
-        use_container_width=True,
+        max_height="400px",
     )
 
 plant_id = grade.product_family.plant_id if grade.product_family else None

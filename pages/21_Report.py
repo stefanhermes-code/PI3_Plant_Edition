@@ -14,11 +14,12 @@ reports.py; this page is just selectors + st.download_button wiring.
 
 import datetime as dt
 
+import pandas as pd
 import streamlit as st
 
 from auth import logout_button, require_login
 from db import FoamGrade, Plant, ProductFamily, ProductionRun, TrialRecord, get_session, init_db
-from helpers import page_setup
+from helpers import page_setup, render_data_table
 import reports
 
 page_setup("Report")
@@ -64,17 +65,17 @@ with tab_run:
         st.write(f"**Run date:** {data['run_date']} · **Batch reference:** {data['batch_reference']}")
 
         st.write("**Recipe components**")
-        st.dataframe(data["components"] or [{"—": "No data recorded"}], hide_index=True)
+        render_data_table(pd.DataFrame(data["components"] or [{"—": "No data recorded"}]))
         st.write("**Process settings (by phase)**")
-        st.dataframe(data["phase_settings"] or [{"—": "No data recorded"}], hide_index=True)
+        render_data_table(pd.DataFrame(data["phase_settings"] or [{"—": "No data recorded"}]))
         st.write("**Quality test results**")
-        st.dataframe(data["quality_results"] or [{"—": "No data recorded"}], hide_index=True)
+        render_data_table(pd.DataFrame(data["quality_results"] or [{"—": "No data recorded"}]))
         st.write("**Quality issues**")
-        st.dataframe(data["quality_issues"] or [{"—": "No data recorded"}], hide_index=True)
+        render_data_table(pd.DataFrame(data["quality_issues"] or [{"—": "No data recorded"}]))
         st.write("**Adjustments & conclusions**")
-        st.dataframe(data["adjustments"] or [{"—": "No data recorded"}], hide_index=True)
+        render_data_table(pd.DataFrame(data["adjustments"] or [{"—": "No data recorded"}]))
         st.write("**Approvals**")
-        st.dataframe(data["approvals"] or [{"—": "No data recorded"}], hide_index=True)
+        render_data_table(pd.DataFrame(data["approvals"] or [{"—": "No data recorded"}]))
 
         dl1, dl2 = st.columns(2)
         dl1.download_button(
@@ -132,11 +133,11 @@ with tab_period:
     k4.metric("Recurring quality issues", data["recurring_issues"])
 
     st.write("**Production runs in range**")
-    st.dataframe(data["runs"] or [{"—": "No data recorded"}], hide_index=True)
+    render_data_table(pd.DataFrame(data["runs"] or [{"—": "No data recorded"}]))
     st.write("**Quality issues in range**")
-    st.dataframe(data["quality_issues"] or [{"—": "No data recorded"}], hide_index=True)
+    render_data_table(pd.DataFrame(data["quality_issues"] or [{"—": "No data recorded"}]))
     st.write("**Breakdown by foam grade**")
-    st.dataframe(data["grade_breakdown"] or [{"—": "No data recorded"}], hide_index=True)
+    render_data_table(pd.DataFrame(data["grade_breakdown"] or [{"—": "No data recorded"}]))
 
     dl1, dl2 = st.columns(2)
     period_label = f"{date_from}_to_{date_to}"
@@ -192,11 +193,11 @@ with tab_trial:
         st.write(f"**Reviewed by:** {data['reviewed_by']} · **Approved by:** {data['approved_by']}")
 
         st.write("**Quality issues observed**")
-        st.dataframe(data["quality_issues"] or [{"—": "No data recorded"}], hide_index=True)
+        render_data_table(pd.DataFrame(data["quality_issues"] or [{"—": "No data recorded"}]))
         st.write("**Adjustments & conclusions**")
-        st.dataframe(data["adjustments"] or [{"—": "No data recorded"}], hide_index=True)
+        render_data_table(pd.DataFrame(data["adjustments"] or [{"—": "No data recorded"}]))
         st.write("**Approvals**")
-        st.dataframe(data["approvals"] or [{"—": "No data recorded"}], hide_index=True)
+        render_data_table(pd.DataFrame(data["approvals"] or [{"—": "No data recorded"}]))
 
         dl1, dl2 = st.columns(2)
         dl1.download_button(

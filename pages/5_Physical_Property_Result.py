@@ -41,6 +41,7 @@ from helpers import (
     delete_with_confirm,
     page_setup,
     parse_dt,
+    render_data_table,
     set_pending_banner,
     show_pending_banner,
 )
@@ -134,7 +135,7 @@ with st.expander("Bulk import samples (CSV / Excel)", expanded=False):
         st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged as invalid: **{len(bad_rows)}**")
         if bad_rows:
             st.warning("These rows have a production_run_id that doesn't exist, or a blank zone_label.")
-            st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+            render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
         if good_rows and st.button("Confirm import", key="confirm_sample_import"):
             existing_keys = {
@@ -578,7 +579,7 @@ with tab_result_import:
                 "Flagged rows have an unrecognized property_name, production_run_id, sample_id, or "
                 "trial_record_id, or are missing test_method / unit / actual_value."
             )
-            st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+            render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
         if good_rows and st.button("Confirm import", key="confirm_result_import"):
             existing_keys = {

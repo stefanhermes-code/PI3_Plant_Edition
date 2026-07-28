@@ -17,6 +17,7 @@ from helpers import (
     dedupe_import_rows,
     delete_with_confirm,
     page_setup,
+    render_data_table,
     set_pending_banner,
     show_pending_banner,
 )
@@ -193,7 +194,7 @@ with tab_grade:
                 st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
                 if bad_rows:
                     st.warning("Flagged rows reference an unknown product_family_id or have no grade_name.")
-                    st.dataframe(pd.DataFrame(bad_rows), use_container_width=True)
+                    render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                 if good_rows and st.button("Confirm import", key="confirm_grade_import"):
                     existing_keys = {
