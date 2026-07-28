@@ -290,7 +290,7 @@ else:
 st.divider()
 st.subheader("Results")
 render_data_table(
-    series[["tested_at", "run_id", "recipe_version", "machine", "actual_value", "target_value", "n_replicates"]],
+    series[["tested_at", "run_id", "machine", "actual_value", "target_value", "n_replicates"]],
     max_height="400px",
 )
 

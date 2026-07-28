@@ -1,12 +1,19 @@
 """Industrial Intelligence: Recipe Optimization
 
-Recipe optimization means answering three questions a raw ingredient list
-and a results table can't answer by themselves: what does this formulation
-actually cost, what specifically changed between two versions, and which
-ingredient's dosage is actually associated with the property outcome -
-ranked and quantified, not eyeballed. PI3's recommendation is grounded in
-those three answers rather than a plain text dump of ingredients and
-averages (see the advisory boundary at the bottom of this page).
+Recipe optimization means answering questions a raw ingredient list and a
+results table can't answer by themselves: what does the current formulation
+actually cost, and which ingredient's dosage is actually associated with
+the property outcome - ranked and quantified, not eyeballed. PI3's
+recommendation is grounded in those answers rather than a plain text dump
+of ingredients and averages (see the advisory boundary at the bottom of
+this page).
+
+A recipe version replaces the previous one in production rather than
+coexisting with it, so the page leads with the CURRENT version only.
+Cost-by-version comparison, the version-diff tool, and older versions'
+ingredient lists are all still available, just moved into "Version
+history" at the bottom, since that's occasional-audit territory, not
+day-to-day use.
 """
 
 import pandas as pd
@@ -32,9 +39,9 @@ logout_button()
 
 st.title("Recipe Optimization")
 st.caption(
-    "Formulation cost, version-to-version differences, and which raw material's dosage is "
-    "actually associated with each quality outcome - ranked and quantified, alongside the "
-    "usual property-outcome comparison across recipe versions."
+    "The current formulation's cost and quality-outcome history, plus which raw material's "
+    "dosage is actually associated with each result - ranked and quantified, not eyeballed. "
+    "Older recipe versions are kept for reference under 'Version history' at the bottom."
 )
 session = get_session()
 
@@ -60,6 +67,13 @@ versions = sorted(grade.recipe_versions, key=lambda v: v.created_at)
 if not versions:
     st.info("This foam grade has no recipe versions yet.")
     st.stop()
+
+# A new recipe version replaces the previous one in production - versions
+# don't normally coexist, so the current (most recent) one is what the page
+# leads with. Older versions are still fully available, just moved to the
+# "Version history" section at the bottom instead of competing for
+# attention with equal-weight sections up top.
+current_version = versions[-1]
 
 results_df = property_results_dataframe(session, foam_grade_id=grade.id)
 available_properties = sorted(results_df["property_name"].dropna().unique()) if not results_df.empty else []
@@ -89,7 +103,7 @@ else:
     st.caption(
         f"Based on {n_runs} production run(s) with quality test results for {grade.grade_name}, "
         "combined across all recipe versions on record. Review against current raw materials and "
-        "process conditions before reusing - see 'Compare two versions' below for the "
+        "process conditions before reusing - see 'Version history' further down for the "
         "version-to-version breakdown."
     )
 
@@ -115,84 +129,58 @@ for prop in available_properties:
     property_summaries[prop] = summary
 
 # ---------------------------------------------------------------------------
-# Formulation cost by version
+# Current formulation - the one version actually in production use
 # ---------------------------------------------------------------------------
 st.divider()
-st.subheader("Formulation cost by version")
+st.subheader("Current formulation")
 cost_by_version = {v.id: recipe_version_cost(session, v) for v in versions}
-cost_rows = []
-for v in versions:
-    c = cost_by_version[v.id]
-    coverage_pct = round((c["priced_php"] / c["total_php"]) * 100, 0) if c["total_php"] else None
-    cost_rows.append(
-        {
-            "Version": v.version_label,
-            "Status": v.approval_status,
-            "Cost per 100 parts": c["total_cost"],
-            "Cost coverage": f"{coverage_pct:.0f}%" if coverage_pct is not None else "—",
-            "Materials missing cost": ", ".join(c["missing"]) if c["missing"] else "—",
-        }
-    )
-cost_df = pd.DataFrame(cost_rows)
-render_data_table(cost_df)
-if any(c["missing"] for c in cost_by_version.values()):
-    st.caption(
-        "Costs shown are a lower-bound estimate where materials are missing a recorded cost/kg - "
-        "add pricing on the Raw Materials page to complete these totals. Nothing here is invented."
-    )
+current_cost = cost_by_version[current_version.id]
+label_bits = [current_version.version_label, current_version.approval_status]
+if current_version.change_note:
+    label_bits.append(current_version.change_note)
+st.caption(" — ".join(label_bits))
 
-# ---------------------------------------------------------------------------
-# Version-to-version diff
-# ---------------------------------------------------------------------------
-st.divider()
-st.subheader("Compare two versions")
-st.caption("What specifically changed in the formulation between two recipe versions.")
-
-diff_col1, diff_col2 = st.columns(2)
-version_a = diff_col1.selectbox(
-    "Version A",
-    versions,
-    index=max(len(versions) - 2, 0),
-    format_func=lambda v: v.version_label,
-    key=f"diff_a_{grade.id}",
-)
-version_b = diff_col2.selectbox(
-    "Version B",
-    versions,
-    index=len(versions) - 1,
-    format_func=lambda v: v.version_label,
-    key=f"diff_b_{grade.id}",
-)
-
-if version_a.id == version_b.id:
-    st.info("Choose two different versions to compare.")
-else:
-    diff_df = recipe_version_diff(version_a, version_b)
-    if diff_df.empty:
-        st.caption("Neither version has any components recorded.")
-    else:
-        show_unchanged = st.checkbox(
-            "Show unchanged materials", value=False, key=f"diff_show_unchanged_{grade.id}"
-        )
-        display_diff = diff_df if show_unchanged else diff_df[diff_df["status"] != "Unchanged"]
-        render_data_table(
-            display_diff.rename(
-                columns={
-                    "raw_material_name": "Raw material",
-                    "role": "Role",
-                    "php_a": f"php ({version_a.version_label})",
-                    "php_b": f"php ({version_b.version_label})",
-                    "delta": "Change (php)",
-                    "delta_pct": "Change (%)",
-                    "status": "Status",
+if current_version.components:
+    render_data_table(
+        pd.DataFrame(
+            [
+                {
+                    "Raw material": c.raw_material_name,
+                    "Supplier": c.supplier,
+                    "php": c.php,
+                    "Role": c.role_in_formulation,
                 }
-            )
+                for c in current_version.components
+            ]
         )
-        changed_count = (diff_df["status"] != "Unchanged").sum()
+    )
+    coverage_pct = (
+        round((current_cost["priced_php"] / current_cost["total_php"]) * 100, 0)
+        if current_cost["total_php"] else None
+    )
+    if current_cost["total_cost"] is not None:
+        st.write(
+            f"**Cost per 100 parts: {current_cost['total_cost']:.3f}** "
+            f"(coverage {coverage_pct:.0f}%)" if coverage_pct is not None else
+            f"**Cost per 100 parts: {current_cost['total_cost']:.3f}**"
+        )
+    else:
+        st.caption("No cost data recorded for any material in this version yet.")
+    if current_cost["missing"]:
         st.caption(
-            f"{changed_count} of {len(diff_df)} materials differ between {version_a.version_label} "
-            f"and {version_b.version_label}."
+            "Cost shown is a lower-bound estimate - missing a recorded cost/kg for: "
+            f"{', '.join(current_cost['missing'])}. Add pricing on the Raw Materials page to "
+            "complete this total."
         )
+else:
+    st.caption("No components recorded for this version yet.")
+
+st.caption(
+    "This is the formulation currently in production use for this grade - a new version "
+    "replaces the previous one rather than running alongside it. For cost comparison, "
+    "what changed at the last revision, or an older version's ingredient list, see "
+    "'Version history' at the bottom of this page."
+)
 
 # ---------------------------------------------------------------------------
 # Which ingredient actually drives the outcome
@@ -272,31 +260,6 @@ else:
                 f"{int(top_component['n_versions'])} versions). Review applicability against current "
                 "raw materials and process conditions before adjusting dosage."
             )
-
-# ---------------------------------------------------------------------------
-# Recipes (version controlled) - raw ingredient list per version
-# ---------------------------------------------------------------------------
-st.divider()
-st.subheader("Recipes (version controlled)")
-st.caption("The raw materials, dosage (php), and role recorded for each recipe version.")
-for v in versions:
-    with st.expander(f"{v.version_label} — {v.approval_status} — {v.change_note or ''}"):
-        if v.components:
-            render_data_table(
-                pd.DataFrame(
-                    [
-                        {
-                            "Raw material": c.raw_material_name,
-                            "Supplier": c.supplier,
-                            "php": c.php,
-                            "Role": c.role_in_formulation,
-                        }
-                        for c in v.components
-                    ]
-                )
-            )
-        else:
-            st.caption("No components recorded for this version yet.")
 
 # ---------------------------------------------------------------------------
 # PI3 recommendation, grounded in cost / diff / correlation data above
@@ -503,3 +466,107 @@ render_ask_pi3_section(
     ],
     key_prefix=f"ask_pi3_freeform_recipe_{grade.id}",
 )
+
+# ---------------------------------------------------------------------------
+# Version history - reference only. A new version replaces the previous one
+# in production, so this is for occasional audit (cost comparison, what
+# changed at the last revision, an older version's ingredient list) rather
+# than routine use - kept out of the way at the bottom instead of competing
+# with the current formulation above.
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Version history")
+st.caption(
+    "Reference only - recipe versions don't normally coexist in production, so this is for "
+    "occasional audit rather than day-to-day use."
+)
+
+with st.expander("Formulation cost by version"):
+    cost_rows = []
+    for v in versions:
+        c = cost_by_version[v.id]
+        coverage_pct = round((c["priced_php"] / c["total_php"]) * 100, 0) if c["total_php"] else None
+        cost_rows.append(
+            {
+                "Version": v.version_label,
+                "Status": v.approval_status,
+                "Cost per 100 parts": c["total_cost"],
+                "Cost coverage": f"{coverage_pct:.0f}%" if coverage_pct is not None else "—",
+                "Materials missing cost": ", ".join(c["missing"]) if c["missing"] else "—",
+            }
+        )
+    render_data_table(pd.DataFrame(cost_rows))
+    if any(c["missing"] for c in cost_by_version.values()):
+        st.caption(
+            "Costs shown are a lower-bound estimate where materials are missing a recorded "
+            "cost/kg - add pricing on the Raw Materials page to complete these totals."
+        )
+
+with st.expander("Compare two versions"):
+    st.caption("What specifically changed in the formulation between two recipe versions.")
+    diff_col1, diff_col2 = st.columns(2)
+    version_a = diff_col1.selectbox(
+        "Version A",
+        versions,
+        index=max(len(versions) - 2, 0),
+        format_func=lambda v: v.version_label,
+        key=f"diff_a_{grade.id}",
+    )
+    version_b = diff_col2.selectbox(
+        "Version B",
+        versions,
+        index=len(versions) - 1,
+        format_func=lambda v: v.version_label,
+        key=f"diff_b_{grade.id}",
+    )
+
+    if version_a.id == version_b.id:
+        st.info("Choose two different versions to compare.")
+    else:
+        diff_df = recipe_version_diff(version_a, version_b)
+        if diff_df.empty:
+            st.caption("Neither version has any components recorded.")
+        else:
+            show_unchanged = st.checkbox(
+                "Show unchanged materials", value=False, key=f"diff_show_unchanged_{grade.id}"
+            )
+            display_diff = diff_df if show_unchanged else diff_df[diff_df["status"] != "Unchanged"]
+            render_data_table(
+                display_diff.rename(
+                    columns={
+                        "raw_material_name": "Raw material",
+                        "role": "Role",
+                        "php_a": f"php ({version_a.version_label})",
+                        "php_b": f"php ({version_b.version_label})",
+                        "delta": "Change (php)",
+                        "delta_pct": "Change (%)",
+                        "status": "Status",
+                    }
+                )
+            )
+            changed_count = (diff_df["status"] != "Unchanged").sum()
+            st.caption(
+                f"{changed_count} of {len(diff_df)} materials differ between "
+                f"{version_a.version_label} and {version_b.version_label}."
+            )
+
+with st.expander("All recipe versions"):
+    for v in versions:
+        st.markdown(f"**{v.version_label} — {v.approval_status}**" + (f" — {v.change_note}" if v.change_note else ""))
+        if v.components:
+            render_data_table(
+                pd.DataFrame(
+                    [
+                        {
+                            "Raw material": c.raw_material_name,
+                            "Supplier": c.supplier,
+                            "php": c.php,
+                            "Role": c.role_in_formulation,
+                        }
+                        for c in v.components
+                    ]
+                )
+            )
+        else:
+            st.caption("No components recorded for this version yet.")
+        st.markdown("---")

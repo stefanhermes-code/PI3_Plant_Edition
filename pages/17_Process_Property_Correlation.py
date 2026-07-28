@@ -102,7 +102,7 @@ else:
     )
     st.scatter_chart(chart_df, x=PHASE_SETTING_LABELS.get(setting_field, setting_field), y=property_name)
     render_data_table(
-        merged[["run_id", "run_date", "recipe_version", "machine", setting_field, "actual_value", "target_value"]],
+        merged[["run_id", "run_date", "machine", setting_field, "actual_value", "target_value"]],
         max_height="400px",
     )
 
