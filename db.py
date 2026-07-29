@@ -258,6 +258,26 @@ class RecipeVersion(Base):
 
 
 # ---------------------------------------------------------------------------
+# Suppliers (master data)
+#
+# A short, curated list of supplier names so RawMaterial.default_supplier can
+# be picked from a dropdown instead of retyped (and mistyped/duplicated -
+# "Yiahua" vs "Jiahua") every time. Deliberately just a name + free-text
+# notes: this is a lookup list for data entry, not a full vendor-management
+# record (no address/contact fields - add those later only if a real need
+# shows up).
+# ---------------------------------------------------------------------------
+class Supplier(Base):
+    __tablename__ = "suppliers"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False, unique=True)
+    notes = Column(Text)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
 # Raw materials (master data)
 # ---------------------------------------------------------------------------
 class RawMaterial(Base):
@@ -813,6 +833,7 @@ ALL_MODELS = [
     Machine,
     ProductFamily,
     FoamGrade,
+    Supplier,
     RawMaterial,
     RecipeVersion,
     RecipeComponent,
