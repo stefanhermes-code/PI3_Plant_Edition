@@ -13,7 +13,7 @@ import ai_assistant
 from analytics import PHASE_SETTING_LABELS, run_settings_dataframe
 from auth import logout_button, require_login
 from db import QualityObservation, get_session, init_db
-from helpers import page_setup, render_pi3_docx_download
+from helpers import page_setup, render_ask_pi3_section, render_pi3_docx_download
 
 page_setup("Root-Cause Assistant")
 init_db()
@@ -191,4 +191,22 @@ if ai_assistant.is_enabled_for_plant(session, run.plant_id):
             answer=ai_answer,
             foam_grade_id=grade.id,
         )
+
+st.divider()
+render_ask_pi3_section(
+    session,
+    run.plant_id,
+    default_foam_grade_id=grade.id,
+    page_context=(
+        f"The reviewer is on the Root-Cause Assistant page, investigating "
+        f"'{obs.observation_type}' ({obs.severity}/{obs.frequency}) on run #{run.id} of foam "
+        f"grade '{grade.grade_name}', compared against prior run #{int(prior['run_id'])}."
+    ),
+    sample_questions=[
+        f"What raw material lots were used on run #{run.id} versus run #{int(prior['run_id'])}?",
+        f"Has {obs.observation_type} happened before on {grade.grade_name}, and what was found?",
+        f"Were there any maintenance events or interventions logged around run #{run.id}?",
+    ],
+    key_prefix=f"ask_pi3_freeform_root_cause_{obs.id}",
+)
 
