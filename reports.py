@@ -40,6 +40,7 @@ A fourth, narrower report type lives here too:
 import datetime as dt
 import io
 import os
+import re
 
 import pandas as pd
 from docx import Document
@@ -591,18 +592,71 @@ def build_pi3_qa_report_data(
 
 
 def _docx_heading(doc, text, size=13, color=_HTC_BLUE, space_before=12):
-    """A styled heading paragraph - deliberately not doc.add_heading()'s
-    built-in Heading styles, since those pull from the default Word theme
-    (unpredictable across machines); this way every report's headings look
-    identical regardless of what Word template the opening machine has."""
-    p = doc.add_paragraph()
+    """A styled heading paragraph, built on a real Word "Heading N" style
+    (rather than a bold Normal paragraph) so it behaves like an actual
+    heading: it shows up in Word's Navigation Pane/outline view and in any
+    auto-generated table of contents, and - the practical reason this
+    matters here - `keep_with_next` below stops Word from ever stranding a
+    heading alone at the bottom of a page with its content pushed to the
+    next one.
+
+    Appearance is still fully controlled here via explicit run-level
+    formatting (size/color/bold), same as before, so the look stays
+    identical regardless of what Word template the opening machine has -
+    using a named style doesn't reintroduce that risk, it just makes the
+    style semantically real on top of the same explicit formatting."""
+    level = 2 if size >= 15 else (3 if size >= 12 else 4)
+    p = doc.add_paragraph(style=f"Heading {level}")
     p.paragraph_format.space_before = Pt(space_before)
     p.paragraph_format.space_after = Pt(4)
+    p.paragraph_format.keep_with_next = True
     run = p.add_run(text)
     run.bold = True
     run.font.size = Pt(size)
     run.font.color.rgb = color
     return p
+
+
+# Recognizes the fixed structure PI3's system prompt always produces (see
+# ai_assistant.py's SYSTEM_PROMPT, section "9) Default Response Structure"):
+# short, punctuation-free numbered top-level section titles ("1. Direct
+# Answer"), optional single-letter-lettered sub-sections ("A. Reduced
+# silicone performance"), and "- " prefixed list items. Matching on these
+# turns PI3's plain text into real headings/bullets instead of one flat
+# Normal paragraph per line - deliberately conservative (short line, starts
+# with a capital letter, no internal period, no trailing period) so an
+# ordinary sentence that happens to start with a number or single letter
+# doesn't get misread as a heading.
+_TOP_HEADING_RE = re.compile(r"^\d{1,2}\.\s+[A-Z][^.\n]{2,78}$")
+_SUB_HEADING_RE = re.compile(r"^[A-J]\.\s+[A-Z][^.\n]{2,98}$")
+_BULLET_RE = re.compile(r"^[-•*]\s+(\S.*)$")
+
+
+def _render_ai_answer_body(doc, text):
+    """Render a PI3 answer's plain text into real Word structure: numbered
+    top-level sections and lettered sub-sections become real headings,
+    "- " list items become real bulleted paragraphs, and everything else
+    stays a normal paragraph. Replaces the previous behavior of dumping one
+    flat Normal paragraph per non-blank line, which produced an unreadable
+    wall of text with no headings or bullets and let Word split a heading
+    from its own content across a page break."""
+    for raw_line in (text or "").split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        bullet_match = _BULLET_RE.match(line)
+        if bullet_match:
+            p = doc.add_paragraph(bullet_match.group(1), style="List Bullet")
+            if p.runs:
+                p.runs[0].font.size = Pt(10.5)
+            continue
+        if _TOP_HEADING_RE.match(line):
+            _docx_heading(doc, line, size=13, space_before=14)
+            continue
+        if _SUB_HEADING_RE.match(line):
+            _docx_heading(doc, line, size=11.5, color=_HTC_GREY, space_before=10)
+            continue
+        doc.add_paragraph(line)
 
 
 def _docx_kv_table(doc, pairs):
@@ -687,13 +741,15 @@ def render_pi3_qa_report_docx(data):
     ])
 
     # --- Question / answer ---------------------------------------------
-    _docx_heading(doc, "Question asked")
+    # "Question asked"/"PI3's answer"/"Appendix" are the report's top-level
+    # sections, so all three sit at Heading 2 - that leaves Heading 3 free
+    # for PI3's own numbered sections ("1. Direct Answer") to nest properly
+    # underneath "PI3's answer" instead of sitting as its siblings.
+    _docx_heading(doc, "Question asked", size=15)
     doc.add_paragraph(data["question"] or "—")
 
-    _docx_heading(doc, "PI3's answer")
-    for line in (data["answer"] or "—").split("\n"):
-        if line.strip():
-            doc.add_paragraph(line)
+    _docx_heading(doc, "PI3's answer", size=15)
+    _render_ai_answer_body(doc, data["answer"] or "—")
 
     disclaimer = doc.add_paragraph()
     disclaimer.paragraph_format.space_before = Pt(10)
@@ -713,7 +769,7 @@ def render_pi3_qa_report_docx(data):
         doc.add_paragraph("No tool calls were recorded for this answer.")
     for i, entry in enumerate(tool_log, start=1):
         tool_name = entry.get("tool", "unknown tool")
-        _docx_heading(doc, f"{i}. {tool_name}", size=11.5, color=_HTC_GREY, space_before=14)
+        _docx_heading(doc, f"{i}. {tool_name}", size=13, color=_HTC_GREY, space_before=14)
         if tool_name == "query_plant_data":
             sql_p = doc.add_paragraph()
             sql_run = sql_p.add_run(entry.get("sql", "—"))
