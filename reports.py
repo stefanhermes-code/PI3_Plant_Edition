@@ -631,32 +631,77 @@ _TOP_HEADING_RE = re.compile(r"^\d{1,2}\.\s+[A-Z][^.\n]{2,78}$")
 _SUB_HEADING_RE = re.compile(r"^[A-J]\.\s+[A-Z][^.\n]{2,98}$")
 _BULLET_RE = re.compile(r"^[-•*]\s+(\S.*)$")
 
+# PI3's free-form question-answering prompt (ai_assistant.PLANT_QUERY_SYSTEM_PROMPT,
+# used by the Ask PI3 box) doesn't forbid markdown the way the fixed-prompt
+# one does, so its answers commonly contain **bold** / *italic* / `code`
+# inline. Without this, those markers came through as literal asterisks/
+# backticks in the Word doc instead of real formatting.
+_INLINE_MD_RE = re.compile(r"\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`")
+
+
+def _strip_inline_markdown(text):
+    """Plain-text version of a line with markdown markers removed but their
+    content kept - used for heading lines, which are already bold/colored
+    by their own style, so there's no run-formatting reason to parse
+    **bold**/*italic* there, just to avoid showing the literal markers."""
+    return _INLINE_MD_RE.sub(lambda m: next(g for g in m.groups() if g is not None), text)
+
+
+def _add_runs_with_inline_markdown(paragraph, text, size=None):
+    """Append `text` to `paragraph` as one or more runs, converting
+    **bold**, *italic*, and `code` markdown spans into real run formatting
+    instead of leaving the literal markers in the output."""
+    pos = 0
+    for m in _INLINE_MD_RE.finditer(text):
+        if m.start() > pos:
+            run = paragraph.add_run(text[pos:m.start()])
+            if size:
+                run.font.size = size
+        if m.group(1) is not None:
+            run = paragraph.add_run(m.group(1))
+            run.bold = True
+        elif m.group(2) is not None:
+            run = paragraph.add_run(m.group(2))
+            run.italic = True
+        else:
+            run = paragraph.add_run(m.group(3))
+            run.font.name = "Consolas"
+        if size:
+            run.font.size = size
+        pos = m.end()
+    if pos < len(text):
+        run = paragraph.add_run(text[pos:])
+        if size:
+            run.font.size = size
+
 
 def _render_ai_answer_body(doc, text):
     """Render a PI3 answer's plain text into real Word structure: numbered
     top-level sections and lettered sub-sections become real headings,
-    "- " list items become real bulleted paragraphs, and everything else
-    stays a normal paragraph. Replaces the previous behavior of dumping one
-    flat Normal paragraph per non-blank line, which produced an unreadable
-    wall of text with no headings or bullets and let Word split a heading
-    from its own content across a page break."""
+    "- " list items become real bulleted paragraphs, inline **bold**/
+    *italic*/`code` markdown becomes real run formatting, and everything
+    else stays a normal paragraph. Replaces the previous behavior of
+    dumping one flat Normal paragraph per non-blank line verbatim, which
+    produced an unreadable wall of text with no headings or bullets, left
+    literal markdown markers in place, and let Word split a heading from
+    its own content across a page break."""
     for raw_line in (text or "").split("\n"):
         line = raw_line.strip()
         if not line:
             continue
         bullet_match = _BULLET_RE.match(line)
         if bullet_match:
-            p = doc.add_paragraph(bullet_match.group(1), style="List Bullet")
-            if p.runs:
-                p.runs[0].font.size = Pt(10.5)
+            p = doc.add_paragraph(style="List Bullet")
+            _add_runs_with_inline_markdown(p, bullet_match.group(1), size=Pt(10.5))
             continue
         if _TOP_HEADING_RE.match(line):
-            _docx_heading(doc, line, size=13, space_before=14)
+            _docx_heading(doc, _strip_inline_markdown(line), size=13, space_before=14)
             continue
         if _SUB_HEADING_RE.match(line):
-            _docx_heading(doc, line, size=11.5, color=_HTC_GREY, space_before=10)
+            _docx_heading(doc, _strip_inline_markdown(line), size=11.5, color=_HTC_GREY, space_before=10)
             continue
-        doc.add_paragraph(line)
+        p = doc.add_paragraph()
+        _add_runs_with_inline_markdown(p, line)
 
 
 def _docx_kv_table(doc, pairs):
