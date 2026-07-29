@@ -33,21 +33,25 @@ st.caption(
 )
 session = get_session()
 
-grades = session.query(FoamGrade).all()
+# Only offer a grade here if it actually has quality test results to rank
+# settings against - otherwise picking it just leads to a dead-end message
+# (see Recipe Optimization's identical filter).
+grades = [
+    g for g in session.query(FoamGrade).all()
+    if not property_results_dataframe(session, foam_grade_id=g.id).empty
+]
 if not grades:
-    st.warning("Add a foam grade first.")
+    st.warning(
+        "No foam grade yet has quality test results recorded - add these first before using "
+        "Machine Settings Optimization."
+    )
     st.stop()
 
 c1, c2 = st.columns(2)
 grade = c1.selectbox("Foam grade", grades, format_func=lambda g: g.grade_name)
 
 grade_results_df = property_results_dataframe(session, foam_grade_id=grade.id)
-available_properties = (
-    sorted(grade_results_df["property_name"].dropna().unique()) if not grade_results_df.empty else []
-)
-if not available_properties:
-    st.info("No quality test results recorded yet for this foam grade.")
-    st.stop()
+available_properties = sorted(grade_results_df["property_name"].dropna().unique())
 
 property_name = c2.selectbox("Property", available_properties)
 

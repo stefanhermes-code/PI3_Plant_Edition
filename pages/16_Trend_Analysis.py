@@ -90,17 +90,19 @@ def _line_chart_no_zero(df, value_cols):
     st.altair_chart(chart, use_container_width=True)
 
 
-grades = session.query(FoamGrade).all()
+# Only offer a grade here if it actually has quality test results to trend -
+# otherwise picking it just leads to a dead-end message (see Recipe
+# Optimization's identical filter).
+grades = [
+    g for g in session.query(FoamGrade).all()
+    if not property_results_dataframe(session, foam_grade_id=g.id).empty
+]
 if not grades:
-    st.warning("Add a foam grade first.")
+    st.warning("No foam grade yet has quality test results recorded - add these first before using Trend Analysis.")
     st.stop()
 
 grade = st.selectbox("Foam grade", grades, format_func=lambda g: g.grade_name)
 results_df = property_results_dataframe(session, foam_grade_id=grade.id)
-
-if results_df.empty:
-    st.info("No quality test results recorded yet for this foam grade.")
-    st.stop()
 
 properties = sorted(results_df["property_name"].dropna().unique())
 property_name = st.selectbox("Property", properties)
