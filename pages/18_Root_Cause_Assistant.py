@@ -13,7 +13,7 @@ import ai_assistant
 from analytics import PHASE_SETTING_LABELS, run_settings_dataframe
 from auth import logout_button, require_login
 from db import QualityObservation, get_session, init_db
-from helpers import page_setup
+from helpers import page_setup, render_pi3_docx_download
 
 page_setup("Root-Cause Assistant")
 init_db()
@@ -84,7 +84,7 @@ for field, label in PHASE_SETTING_LABELS.items():
         continue
     pct_change = (cur_val - prev_val) / abs(prev_val)
     if abs(pct_change) >= 0.02:
-        changes.append(f"{label} shifted {pct_change:+.0%}: {prev_val:g} → {cur_val:g}")
+        changes.append(f"{label} shifted {pct_change:+.2%}: {prev_val:g} → {cur_val:g}")
 
 if changes:
     st.write("**What was different:**")
@@ -118,6 +118,51 @@ if ai_assistant.is_enabled_for_plant(session, run.plant_id):
             "phrase your answer as a directive or a definitive cause (e.g. do not say "
             "'increase TDI by X' or 'the cause is Y'). Always phrase it as hypotheses for the "
             "reviewer to investigate and confirm themselves.\n\n"
+            "DISCIPLINE REQUIRED IN YOUR REASONING (a prior answer from this feature was "
+            "reviewed by a formulation expert and found too quick to rank causes without "
+            "enough evidence - follow these rules to avoid repeating that):\n"
+            "1. State any percentage change to at least two decimal places, exactly as given "
+            "below - never round '-3.47%' down to '-3%'.\n"
+            "2. Before proposing any ranking, first ask what is actually known about the "
+            "failure itself: did it collapse while still rising, settle immediately at peak "
+            "rise, or shrink later during cooling? Was it localized or across the whole bun? "
+            "What did the cell structure look like (coarse, ruptured, tight, normal)? If this "
+            "app's data does not capture that, say so explicitly and list it as the first, "
+            "still-open investigation item - do not silently assume a failure mode.\n"
+            "3. Do not call any subset of hypotheses 'leading' or imply a priority ordering "
+            "unless you can point to a specific piece of evidence in the comparison or the "
+            "knowledge base that favors one hypothesis over another. If no such evidence "
+            "exists, present hypotheses as an unranked candidate set and say the ranking "
+            "requires more evidence (morphology, timing, actual-vs-setpoint deliveries).\n"
+            "4. Give equal analytical weight to overall stoichiometry/index and mixing "
+            "factors (water dosage, isocyanate/TDI delivery and index, component "
+            "temperatures, mixing energy or pressure, polyol-blend homogeneity) alongside "
+            "additive-level factors (silicone, catalysts). The fact that air injection is "
+            "the only recorded numeric difference does not mean other factors are less "
+            "likely - it only means this app didn't capture a difference in them for this "
+            "comparison. Do not let one recorded change anchor the whole explanation.\n"
+            "5. When discussing amine catalysts, do not say 'excessive amine' as a blanket "
+            "statement. Amine catalysts vary - some are blow-selective, some gel-selective, "
+            "some balanced. Frame this hypothesis as 'excessive effective blow catalysis "
+            "relative to gel development', and note it could come from over-delivery of a "
+            "blow-selective amine, under-delivery/deactivation of tin, excess water, a low "
+            "index, temperature-driven acceleration, or a wrong catalyst grade/concentration.\n"
+            "6. Keep 'reduced/wrong silicone performance' (wrong grade, degraded, incompatible, "
+            "under- or over-dosed, poor blending) analytically separate from 'foreign-material "
+            "contamination' (mold-release agent, external oil/grease, defoamer, cleaning "
+            "residue, water). Do not describe silicone itself as a contaminant - it is a "
+            "deliberate formulation component. Note that too much silicone/stabilization can "
+            "also cause tight cells and shrinkage, not just too little causing collapse.\n"
+            "7. Comment on whether the comparison run is actually a sound baseline (same "
+            "formulation, comparable density, similar raw-material lots, comparable "
+            "temperatures, same equipment configuration, no intervening maintenance) - if "
+            "that cannot be confirmed from what's given, flag it as a caveat and suggest "
+            "also checking the nearest stable run immediately before and after the flagged "
+            "run, not only this one historical comparison.\n"
+            "8. Close with a short, appropriately hedged synthesis: state plainly what is "
+            "directly known (the recorded change) versus what is inferred, and avoid "
+            "presenting a narrow additive-focused explanation as the most coherent one "
+            "before the failure's timing and morphology are established.\n\n"
             f"Quality issue: {obs.observation_type} on run #{run.id} ({grade.grade_name}), "
             f"{obs.severity}/{obs.frequency}\n"
             + (f"Logged suspected cause: {obs.suspected_cause}\n" if obs.suspected_cause else "")
@@ -137,4 +182,13 @@ if ai_assistant.is_enabled_for_plant(session, run.plant_id):
             "cases. Confirm any hypothesis through your own investigation before acting on it."
         )
         st.write(ai_answer)
+
+        render_pi3_docx_download(
+            session,
+            run.plant_id,
+            key_prefix=f"root_cause_fixed_{obs.id}",
+            question_label=f"PI3 root-cause hypothesis for {obs.observation_type} on run #{run.id} ({grade.grade_name})",
+            answer=ai_answer,
+            foam_grade_id=grade.id,
+        )
 
