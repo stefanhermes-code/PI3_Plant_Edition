@@ -469,8 +469,8 @@ def push_document_to_vector_store(title, text, metadata=None):
             vector_store_id=vector_store_id, file_id=uploaded.id, attributes=(metadata or {})
         )
         return uploaded.id
-    except Exception as exc:
-        st.error(f"Could not push this to PI3: {exc}")
+    except Exception:
+        st.error("Could not push this to PI3 right now. It's still saved - try again in a moment.")
         return None
 
 
@@ -487,8 +487,8 @@ def delete_document_from_vector_store(file_id):
     try:
         client = _client()
         client.files.delete(file_id)
-    except Exception as exc:
-        st.warning(f"Saved, but couldn't remove the old copy from PI3: {exc}")
+    except Exception:
+        st.warning("Saved, but couldn't remove the old copy from PI3. It may still appear in search results.")
 
 
 def ask_assistant(prompt):
@@ -522,7 +522,7 @@ def ask_assistant(prompt):
         )
         return response.output_text or None
     except Exception as exc:
-        st.error(f"Could not reach PI3: {exc}")
+        st.error("Could not reach PI3 right now. Try again in a moment, or contact your administrator if this continues.")
         return None
 
 
@@ -884,7 +884,7 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
 
         return response.output_text or None, tool_log
     except Exception as exc:
-        st.error(f"Could not reach PI3: {exc}")
+        st.error("Could not reach PI3 right now. Try again in a moment, or contact your administrator if this continues.")
         return None, tool_log
 
 
@@ -953,6 +953,6 @@ def extract_raw_material_from_tds(tds_text, sds_text=None):
             "default_supplier": str(data.get("default_supplier") or "").strip(),
             "notes": str(data.get("notes") or "").strip(),
         }
-    except Exception as exc:
-        st.error(f"Could not extract raw material data from this document: {exc}")
+    except Exception:
+        st.error("Could not extract raw material data from this document. Use Manual entry instead.")
         return None

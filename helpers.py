@@ -401,17 +401,6 @@ def render_ask_pi3_section(session, plant_id, default_foam_grade_id, page_contex
         st.caption(f"You asked: {st.session_state.get(f'{key_prefix}_asked', '')}")
         st.write(answer)
         tool_log = st.session_state.get(f"{key_prefix}_tool_log") or []
-        if tool_log:
-            with st.expander("Show PI3's work (exactly what was checked)"):
-                for entry in tool_log:
-                    if entry["tool"] == "query_plant_data":
-                        st.code(entry.get("sql", ""), language="sql")
-                        if "error" in entry:
-                            st.error(entry["error"])
-                        else:
-                            st.caption(f"{entry.get('rows_returned', 0)} row(s) returned.")
-                    elif entry["tool"] == "get_verified_analysis":
-                        st.caption(f"Verified analysis called: {entry.get('args')}")
         st.caption("Confirm through your own investigation before acting on this.")
 
         render_pi3_docx_download(
