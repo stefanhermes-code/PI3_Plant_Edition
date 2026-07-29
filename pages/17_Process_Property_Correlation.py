@@ -20,7 +20,13 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, render_ask_pi3_section, render_data_table, render_pi3_docx_download
+from helpers import (
+    page_setup,
+    render_ask_pi3_section,
+    render_data_table,
+    render_pi3_docx_download,
+    render_save_to_expert_notes_button,
+)
 
 page_setup("Process-Property Correlation")
 init_db()
@@ -137,6 +143,7 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             answer = ai_assistant.ask_assistant(prompt)
         if answer:
             st.session_state[f"correlation_ai_answer_{grade.id}_{property_name}"] = answer
+            st.session_state.pop(f"correlation_fixed_{grade.id}_{property_name}_saved_note_id", None)
 
     ai_answer = st.session_state.get(f"correlation_ai_answer_{grade.id}_{property_name}")
     if ai_answer:
@@ -146,14 +153,26 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "historical cases. Confirm through your own investigation before acting on it."
         )
         st.write(ai_answer)
-        render_pi3_docx_download(
-            session,
-            plant_id,
-            key_prefix=f"correlation_fixed_{grade.id}_{property_name}",
-            question_label=f"PI3 interpretation of process-setting correlation for {property_name}, {grade.grade_name}",
-            answer=ai_answer,
-            foam_grade_id=grade.id,
-        )
+        corr_question_label = f"PI3 interpretation of process-setting correlation for {property_name}, {grade.grade_name}"
+        corr_dl_col, corr_save_col = st.columns([1, 1])
+        with corr_dl_col:
+            render_pi3_docx_download(
+                session,
+                plant_id,
+                key_prefix=f"correlation_fixed_{grade.id}_{property_name}",
+                question_label=corr_question_label,
+                answer=ai_answer,
+                foam_grade_id=grade.id,
+            )
+        with corr_save_col:
+            render_save_to_expert_notes_button(
+                session,
+                key_prefix=f"correlation_fixed_{grade.id}_{property_name}",
+                answer=ai_answer,
+                question_label=corr_question_label,
+                link_type="foam_grade",
+                entity_id=grade.id,
+            )
 elif ai_assistant.availability_status(session, plant_id) == "not_configured":
     st.caption(
         "PI3 isn't configured for this deployment yet (missing API credentials) - contact "

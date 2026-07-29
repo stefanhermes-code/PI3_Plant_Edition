@@ -7,14 +7,31 @@ foam grade. This is the raw material PI3 needs: when PI3 connectivity is
 enabled for the relevant plant, saving a note here also feeds it into
 PI3 so future Similar Case Retrieval searches and Root-Cause Assistant
 reasoning can retrieve it.
+
+Also shows PI3-sourced notes - insights a reviewer explicitly chose to
+keep via a "Save to Expert Notes" button on Recipe Optimization, Trend
+Analysis, Process-Property Correlation, or Root-Cause Assistant (both
+their fixed-prompt sections and free-form Ask PI3 boxes). These are
+tagged with their originating question and can be re-exported as the
+same Word report the reviewer originally saw.
 """
+
+import json
 
 import streamlit as st
 
 import ai_assistant
+import reports
 from auth import current_user, logout_button, require_login
 from db import CONFIDENCE_LEVELS, ExpertNote, FoamGrade, ProductionRun, TrialRecord, get_session, init_db
-from helpers import clickable_table, delete_with_confirm, page_setup
+from helpers import (
+    clickable_table,
+    delete_with_confirm,
+    expert_note_foam_grade_id_for_link,
+    expert_note_link_label,
+    expert_note_plant_id_for_link,
+    page_setup,
+)
 
 page_setup("Expert Notes")
 init_db()
@@ -37,32 +54,6 @@ LINK_TYPES = {
     "Trial / Experiment": "trial_record",
     "Foam Grade": "foam_grade",
 }
-
-
-def _plant_id_for_link(entity_type, entity_id, session):
-    if entity_type == "production_run":
-        r = session.get(ProductionRun, entity_id)
-        return r.plant_id if r else None
-    if entity_type == "trial_record":
-        t = session.get(TrialRecord, entity_id)
-        return t.production_run.plant_id if t else None
-    if entity_type == "foam_grade":
-        g = session.get(FoamGrade, entity_id)
-        return g.product_family.plant_id if g else None
-    return None
-
-
-def _link_label(entity_type, entity_id, session):
-    if entity_type == "production_run":
-        r = session.get(ProductionRun, entity_id)
-        return f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}" if r else f"Run #{entity_id} (deleted)"
-    if entity_type == "trial_record":
-        t = session.get(TrialRecord, entity_id)
-        return f"Trial #{t.id} — {t.production_run.foam_grade.grade_name}" if t else f"Trial #{entity_id} (deleted)"
-    if entity_type == "foam_grade":
-        g = session.get(FoamGrade, entity_id)
-        return f"Foam Grade: {g.grade_name}" if g else f"Foam Grade #{entity_id} (deleted)"
-    return f"{entity_type} #{entity_id}"
 
 
 runs = session.query(ProductionRun).order_by(ProductionRun.created_at.desc()).all()
@@ -107,10 +98,11 @@ with st.form("add_expert_note"):
                 note_text=note_text.strip(),
                 confidence_level=confidence_level,
                 author=author,
+                source="Manual",
             )
-            plant_id = _plant_id_for_link(entity_type, entity.id, session)
+            plant_id = expert_note_plant_id_for_link(entity_type, entity.id, session)
             if ai_assistant.is_enabled_for_plant(session, plant_id):
-                link_label = _link_label(entity_type, entity.id, session)
+                link_label = expert_note_link_label(entity_type, entity.id, session)
                 doc_text = (
                     f"Expert note on {link_label}\n"
                     f"Confidence: {confidence_level}\nAuthor: {author or '—'}\n\n{note_text.strip()}"
@@ -132,8 +124,9 @@ if not notes:
 else:
     note_rows = [
         {
-            "Linked to": _link_label(n.linked_entity_type, n.linked_entity_id, session),
+            "Linked to": expert_note_link_label(n.linked_entity_type, n.linked_entity_id, session),
             "Note": (n.note_text[:120] + "…") if len(n.note_text) > 120 else n.note_text,
+            "Source": n.source or "Manual",
             "Confidence": n.confidence_level,
             "Author": n.author or "",
             "Created": n.created_at,
@@ -153,8 +146,29 @@ else:
 
     if selected:
         st.markdown(
-            f"**Edit note on {_link_label(selected.linked_entity_type, selected.linked_entity_id, session)}**"
+            f"**Edit note on {expert_note_link_label(selected.linked_entity_type, selected.linked_entity_id, session)}**"
         )
+        if selected.source == "PI3":
+            st.caption(f"Source: PI3, from the question “{selected.pi3_question or '—'}”")
+            grade_id = expert_note_foam_grade_id_for_link(selected.linked_entity_type, selected.linked_entity_id, session)
+            grade = session.get(FoamGrade, grade_id) if grade_id else None
+            plant_id = expert_note_plant_id_for_link(selected.linked_entity_type, selected.linked_entity_id, session)
+            report_data = reports.build_pi3_qa_report_data(
+                question=selected.pi3_question,
+                answer=selected.note_text,
+                tool_log=json.loads(selected.pi3_tool_log_json) if selected.pi3_tool_log_json else [],
+                plant_name=reports.plant_label(session, plant_id),
+                foam_grade_name=grade.grade_name if grade else None,
+                asked_by=selected.author,
+                asked_at=selected.created_at,
+            )
+            st.download_button(
+                "Download as Word (.docx)",
+                data=reports.render_pi3_qa_report_docx(report_data),
+                file_name=f"pi3_report_expert_note_{selected.id}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key=f"expert_note_{selected.id}_download_docx",
+            )
         with st.form(f"edit_note_{selected.id}"):
             e_text = st.text_area("Note *", value=selected.note_text, key=f"edit_note_text_{selected.id}")
             e_confidence = st.selectbox(
@@ -167,11 +181,11 @@ else:
                 if not e_text.strip():
                     st.error("Note text is required.")
                 else:
-                    plant_id = _plant_id_for_link(selected.linked_entity_type, selected.linked_entity_id, session)
+                    plant_id = expert_note_plant_id_for_link(selected.linked_entity_type, selected.linked_entity_id, session)
                     if ai_assistant.is_enabled_for_plant(session, plant_id):
                         if selected.vector_store_file_id:
                             ai_assistant.delete_document_from_vector_store(selected.vector_store_file_id)
-                        link_label = _link_label(selected.linked_entity_type, selected.linked_entity_id, session)
+                        link_label = expert_note_link_label(selected.linked_entity_type, selected.linked_entity_id, session)
                         doc_text = (
                             f"Expert note on {link_label}\n"
                             f"Confidence: {e_confidence}\nAuthor: {e_author or '—'}\n\n{e_text.strip()}"

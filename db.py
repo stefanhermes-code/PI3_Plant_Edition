@@ -776,6 +776,17 @@ class ExpertNote(Base):
     vector_store_file_id = Column(String(200))
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
+    # Provenance fields for notes captured via a "Save to Expert Notes"
+    # button on a PI3 answer (see helpers.render_save_to_expert_notes_button)
+    # rather than typed by hand. Kept on the same table/model as manual notes
+    # - deliberately, since both are meant to be searchable side by side and
+    # both get pushed into PI3's vector store the same way - but tagged so
+    # the Expert Notes screen can show where each one came from and, for
+    # PI3-sourced notes, regenerate the original Word report on demand.
+    source = Column(String(20), default="Manual")  # "Manual" or "PI3"
+    pi3_question = Column(Text)  # the question/label PI3 was answering, null for manual notes
+    pi3_tool_log_json = Column(Text)  # JSON-serialized tool_log (free-form Ask PI3 only), null otherwise
+
 
 # ---------------------------------------------------------------------------
 # 14. similar_case_links

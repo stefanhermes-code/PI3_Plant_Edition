@@ -1,6 +1,7 @@
 """Shared UI helpers for PI3 Plant Edition pages."""
 
 import datetime as dt
+import json
 
 import pandas as pd
 import streamlit as st
@@ -8,7 +9,55 @@ import streamlit as st
 import ai_assistant
 import reports
 from auth import current_user
-from db import FoamGrade, RecipeVersion, get_session
+from db import ExpertNote, FoamGrade, ProductionRun, RecipeVersion, TrialRecord, get_session
+
+
+def expert_note_plant_id_for_link(entity_type, entity_id, session):
+    """Which plant a given Expert Note "link to" target belongs to, for the
+    is_enabled_for_plant() check before pushing to PI3's vector store.
+    Shared by pages/20_Expert_Notes.py and render_save_to_expert_notes_button
+    below, so both resolve a link the same way."""
+    if entity_type == "production_run":
+        r = session.get(ProductionRun, entity_id)
+        return r.plant_id if r else None
+    if entity_type == "trial_record":
+        t = session.get(TrialRecord, entity_id)
+        return t.production_run.plant_id if t else None
+    if entity_type == "foam_grade":
+        g = session.get(FoamGrade, entity_id)
+        return g.product_family.plant_id if g else None
+    return None
+
+
+def expert_note_link_label(entity_type, entity_id, session):
+    """Human-readable label for a given Expert Note "link to" target, used
+    both on the Expert Notes screen and as the document title when a note
+    is pushed into PI3's vector store."""
+    if entity_type == "production_run":
+        r = session.get(ProductionRun, entity_id)
+        return f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}" if r else f"Run #{entity_id} (deleted)"
+    if entity_type == "trial_record":
+        t = session.get(TrialRecord, entity_id)
+        return f"Trial #{t.id} — {t.production_run.foam_grade.grade_name}" if t else f"Trial #{entity_id} (deleted)"
+    if entity_type == "foam_grade":
+        g = session.get(FoamGrade, entity_id)
+        return f"Foam Grade: {g.grade_name}" if g else f"Foam Grade #{entity_id} (deleted)"
+    return f"{entity_type} #{entity_id}"
+
+
+def expert_note_foam_grade_id_for_link(entity_type, entity_id, session):
+    """Which foam grade (if any) a given Expert Note "link to" target
+    belongs to - used to populate the "Foam grade" field when regenerating
+    a PI3-sourced note's Word report on demand."""
+    if entity_type == "foam_grade":
+        return entity_id
+    if entity_type == "production_run":
+        r = session.get(ProductionRun, entity_id)
+        return r.foam_grade_id if r else None
+    if entity_type == "trial_record":
+        t = session.get(TrialRecord, entity_id)
+        return t.production_run.foam_grade_id if t else None
+    return None
 
 
 def page_setup(title: str):
@@ -324,7 +373,60 @@ def render_pi3_docx_download(
     )
 
 
-def render_ask_pi3_section(session, plant_id, default_foam_grade_id, page_context, sample_questions, key_prefix):
+def render_save_to_expert_notes_button(session, key_prefix, answer, question_label, link_type, entity_id, tool_log=None):
+    """Shared 'Save to Expert Notes' button for any PI3-generated answer -
+    lets the reviewer explicitly keep an answer worth remembering, rather
+    than every PI3 interaction being saved automatically (which would fill
+    Expert Notes with one-off/throwaway questions no one wants to see
+    again). Saved notes are tagged source="PI3" and, same as a manually-
+    typed expert note, pushed into PI3's own vector store if PI3 is enabled
+    for the relevant plant - so a genuinely useful PI3 insight can surface
+    again in future Similar Case Retrieval / Root-Cause Assistant searches,
+    same as human-authored knowledge.
+
+    `link_type` is one of the Expert Notes "link to" types ("foam_grade",
+    "production_run", "trial_record"), `entity_id` the id of that record.
+
+    Guards against saving the same answer twice: once saved, the button is
+    replaced with a confirmation until a new answer replaces this one -
+    callers must pop f"{key_prefix}_saved_note_id" from session_state
+    whenever they store a new answer under f"{key_prefix}_answer" (or the
+    page's equivalent), or this will keep showing "already saved" for an
+    answer that was never actually saved."""
+    if entity_id is None:
+        return
+    saved_id = st.session_state.get(f"{key_prefix}_saved_note_id")
+    if saved_id:
+        st.caption("✓ Saved to Expert Notes.")
+        return
+    if st.button("Save to Expert Notes", key=f"{key_prefix}_save_note_btn"):
+        plant_id = expert_note_plant_id_for_link(link_type, entity_id, session)
+        note = ExpertNote(
+            linked_entity_type=link_type,
+            linked_entity_id=entity_id,
+            note_text=answer,
+            confidence_level="Unconfirmed",
+            author=current_user().get("display_name"),
+            source="PI3",
+            pi3_question=question_label,
+            pi3_tool_log_json=json.dumps(tool_log) if tool_log else None,
+        )
+        if ai_assistant.is_enabled_for_plant(session, plant_id):
+            link_label = expert_note_link_label(link_type, entity_id, session)
+            doc_text = f"PI3 insight on {link_label}\nQuestion: {question_label}\n\n{answer}"
+            note.vector_store_file_id = ai_assistant.push_document_to_vector_store(
+                link_label, doc_text, metadata={"plant_id": plant_id} if plant_id else None
+            )
+        session.add(note)
+        session.commit()
+        st.session_state[f"{key_prefix}_saved_note_id"] = note.id
+        st.rerun()
+
+
+def render_ask_pi3_section(
+    session, plant_id, default_foam_grade_id, page_context, sample_questions, key_prefix,
+    note_link_type="foam_grade", note_entity_id=None,
+):
     """Free-form 'ask PI3 anything about this plant's data' box, shared by
     Recipe Optimization, Process-Property Correlation, and Trend Analysis -
     this is the same spot on each page that already had a fixed, single-
@@ -395,6 +497,7 @@ def render_ask_pi3_section(session, plant_id, default_foam_grade_id, page_contex
             st.session_state[f"{key_prefix}_answer"] = answer
             st.session_state[f"{key_prefix}_tool_log"] = tool_log
             st.session_state[f"{key_prefix}_asked"] = question
+            st.session_state.pop(f"{key_prefix}_saved_note_id", None)
 
     answer = st.session_state.get(f"{key_prefix}_answer")
     if answer:
@@ -403,13 +506,25 @@ def render_ask_pi3_section(session, plant_id, default_foam_grade_id, page_contex
         tool_log = st.session_state.get(f"{key_prefix}_tool_log") or []
         st.caption("Confirm through your own investigation before acting on this.")
 
-        render_pi3_docx_download(
-            session,
-            plant_id,
-            key_prefix=key_prefix,
-            question_label=st.session_state.get(f"{key_prefix}_asked", ""),
-            answer=answer,
-            tool_log=tool_log,
-            page_context=page_context,
-            foam_grade_id=default_foam_grade_id,
-        )
+        dl_col, save_col = st.columns([1, 1])
+        with dl_col:
+            render_pi3_docx_download(
+                session,
+                plant_id,
+                key_prefix=key_prefix,
+                question_label=st.session_state.get(f"{key_prefix}_asked", ""),
+                answer=answer,
+                tool_log=tool_log,
+                page_context=page_context,
+                foam_grade_id=default_foam_grade_id,
+            )
+        with save_col:
+            render_save_to_expert_notes_button(
+                session,
+                key_prefix=key_prefix,
+                answer=answer,
+                question_label=st.session_state.get(f"{key_prefix}_asked", ""),
+                link_type=note_link_type,
+                entity_id=note_entity_id if note_entity_id is not None else default_foam_grade_id,
+                tool_log=tool_log,
+            )

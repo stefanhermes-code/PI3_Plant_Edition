@@ -13,7 +13,7 @@ import ai_assistant
 from analytics import PHASE_SETTING_LABELS, run_settings_dataframe
 from auth import logout_button, require_login
 from db import QualityObservation, get_session, init_db
-from helpers import page_setup, render_ask_pi3_section, render_pi3_docx_download
+from helpers import page_setup, render_ask_pi3_section, render_pi3_docx_download, render_save_to_expert_notes_button
 
 page_setup("Root-Cause Assistant")
 init_db()
@@ -173,6 +173,7 @@ if ai_assistant.is_enabled_for_plant(session, run.plant_id):
             answer = ai_assistant.ask_assistant(prompt)
         if answer:
             st.session_state[f"root_cause_ai_answer_{obs.id}"] = answer
+            st.session_state.pop(f"root_cause_fixed_{obs.id}_saved_note_id", None)
 
     ai_answer = st.session_state.get(f"root_cause_ai_answer_{obs.id}")
     if ai_answer:
@@ -183,14 +184,26 @@ if ai_assistant.is_enabled_for_plant(session, run.plant_id):
         )
         st.write(ai_answer)
 
-        render_pi3_docx_download(
-            session,
-            run.plant_id,
-            key_prefix=f"root_cause_fixed_{obs.id}",
-            question_label=f"PI3 root-cause hypothesis for {obs.observation_type} on run #{run.id} ({grade.grade_name})",
-            answer=ai_answer,
-            foam_grade_id=grade.id,
-        )
+        rc_question_label = f"PI3 root-cause hypothesis for {obs.observation_type} on run #{run.id} ({grade.grade_name})"
+        rc_dl_col, rc_save_col = st.columns([1, 1])
+        with rc_dl_col:
+            render_pi3_docx_download(
+                session,
+                run.plant_id,
+                key_prefix=f"root_cause_fixed_{obs.id}",
+                question_label=rc_question_label,
+                answer=ai_answer,
+                foam_grade_id=grade.id,
+            )
+        with rc_save_col:
+            render_save_to_expert_notes_button(
+                session,
+                key_prefix=f"root_cause_fixed_{obs.id}",
+                answer=ai_answer,
+                question_label=rc_question_label,
+                link_type="production_run",
+                entity_id=run.id,
+            )
 
 st.divider()
 render_ask_pi3_section(
@@ -208,5 +221,7 @@ render_ask_pi3_section(
         f"Were there any maintenance events or interventions logged around run #{run.id}?",
     ],
     key_prefix=f"ask_pi3_freeform_root_cause_{obs.id}",
+    note_link_type="production_run",
+    note_entity_id=run.id,
 )
 
