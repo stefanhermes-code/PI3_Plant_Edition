@@ -52,6 +52,17 @@ st.markdown(
     div[data-testid="stContainer"] {
         border-radius: 10px;
     }
+    /* st.caption() defaults to small, low-contrast grey text everywhere in
+       the app (page descriptions, disclaimers, table captions, ...) - hard
+       to read for plant-floor reviewers. Force it to normal body size and
+       full black instead, app-wide, since this file's global style block
+       runs first on every page under st.navigation. */
+    [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] * {
+        font-size: 1rem !important;
+        color: #000000 !important;
+        opacity: 1 !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
