@@ -2,17 +2,18 @@
 
 Captures qualitative expert knowledge - the kind of thing that lives in a
 technical person's head or a stray email, not a structured measurement -
-linked to a trial or foam grade. This is the raw material PI3 needs: when
-PI3 connectivity is enabled for the relevant plant, saving a note here
-also feeds it into PI3 so future Similar Case Retrieval searches and
-Root-Cause Assistant reasoning can retrieve it.
+linked to a production run (the common case), a trial/experiment, or a
+foam grade. This is the raw material PI3 needs: when PI3 connectivity is
+enabled for the relevant plant, saving a note here also feeds it into
+PI3 so future Similar Case Retrieval searches and Root-Cause Assistant
+reasoning can retrieve it.
 """
 
 import streamlit as st
 
 import ai_assistant
 from auth import current_user, logout_button, require_login
-from db import CONFIDENCE_LEVELS, ExpertNote, FoamGrade, TrialRecord, get_session, init_db
+from db import CONFIDENCE_LEVELS, ExpertNote, FoamGrade, ProductionRun, TrialRecord, get_session, init_db
 from helpers import clickable_table, delete_with_confirm, page_setup
 
 page_setup("Expert Notes")
@@ -23,18 +24,25 @@ logout_button()
 st.title("Expert Notes")
 st.caption(
     "Qualitative knowledge that doesn't fit a structured field - a hunch about why a "
-    "batch behaved oddly, a supplier quirk, a process tip. Linked to a trial or foam "
-    "grade. When PI3 connectivity is enabled for the relevant plant, saving a note "
-    "here also feeds PI3 so Similar Case Retrieval and the Root-Cause Assistant can "
-    "find it later."
+    "batch behaved oddly, a supplier quirk, a process tip. Linked to a production run, "
+    "a trial/experiment, or a foam grade. When PI3 connectivity is enabled for the "
+    "relevant plant, saving a note here also feeds PI3 so Similar Case Retrieval and "
+    "the Root-Cause Assistant can find it later."
 )
 session = get_session()
 user = current_user()
 
-LINK_TYPES = {"Trial / Experiment": "trial_record", "Foam Grade": "foam_grade"}
+LINK_TYPES = {
+    "Production Run": "production_run",
+    "Trial / Experiment": "trial_record",
+    "Foam Grade": "foam_grade",
+}
 
 
 def _plant_id_for_link(entity_type, entity_id, session):
+    if entity_type == "production_run":
+        r = session.get(ProductionRun, entity_id)
+        return r.plant_id if r else None
     if entity_type == "trial_record":
         t = session.get(TrialRecord, entity_id)
         return t.production_run.plant_id if t else None
@@ -45,6 +53,9 @@ def _plant_id_for_link(entity_type, entity_id, session):
 
 
 def _link_label(entity_type, entity_id, session):
+    if entity_type == "production_run":
+        r = session.get(ProductionRun, entity_id)
+        return f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}" if r else f"Run #{entity_id} (deleted)"
     if entity_type == "trial_record":
         t = session.get(TrialRecord, entity_id)
         return f"Trial #{t.id} — {t.production_run.foam_grade.grade_name}" if t else f"Trial #{entity_id} (deleted)"
@@ -54,6 +65,7 @@ def _link_label(entity_type, entity_id, session):
     return f"{entity_type} #{entity_id}"
 
 
+runs = session.query(ProductionRun).order_by(ProductionRun.created_at.desc()).all()
 trials = session.query(TrialRecord).order_by(TrialRecord.created_at.desc()).all()
 grades = session.query(FoamGrade).order_by(FoamGrade.grade_name).all()
 
@@ -61,7 +73,14 @@ st.subheader("Add an expert note")
 with st.form("add_expert_note"):
     link_type_choice = st.selectbox("Link to *", list(LINK_TYPES.keys()))
     entity_type = LINK_TYPES[link_type_choice]
-    if entity_type == "trial_record":
+    if entity_type == "production_run":
+        if not runs:
+            st.warning("No production runs yet - create one on the Production Run page first.")
+        entity = st.selectbox(
+            "Production run *", runs,
+            format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
+        )
+    elif entity_type == "trial_record":
         if not trials:
             st.warning("No trials yet - create one on the Trial / Experiment page first.")
         entity = st.selectbox(
