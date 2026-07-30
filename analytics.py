@@ -8,8 +8,7 @@ production_run_id. Every Industrial Intelligence function (Recipe
 Optimization, Trend Analysis, Machine Settings vs Physical Properties
 Correlation, Root-Cause Assistant, Machine Settings Optimization) starts
 from that same join, so it is built once here rather than five
-slightly-different copies of the
-same query living in each page.
+slightly-different copies of the same query living in each page.
 
 Note: ProductionRun deliberately has no back-populated .phases/.results
 collections (see the comment on ProductionRun in db.py - it avoids a
@@ -28,7 +27,6 @@ from db import (
     ProductionPhase,
     ProductionRun,
     RawMaterial,
-    RecipeVersion,
 )
 
 # Machine/process settings captured per phase (see ProductionPhase in
@@ -177,8 +175,8 @@ def rank_setting_correlations(session, foam_grade_id, property_name):
         rows.append({"field": field, "label": PHASE_SETTING_LABELS.get(field, field), "n": n, "correlation": corr})
     ranked = pd.DataFrame(rows)
     # Every field is appended above regardless of whether a correlation could
-    # be computed (unlike rank_component_correlations etc., which skip
-    # uncomputable rows entirely) - so if every setting has too few points,
+    # be computed (unlike rank_component_actual_correlations etc., which
+    # skip uncomputable rows entirely) - so if every setting has too few points,
     # "correlation" ends up an all-None object-dtype column, and pandas'
     # .abs() raises TypeError on that (bad operand type for abs(): 'NoneType')
     # rather than treating it as NaN. pd.to_numeric coerces None/object-None
@@ -373,70 +371,24 @@ def recipe_version_diff(version_a, version_b):
     return df
 
 
-def rank_component_correlations(session, foam_grade_id, property_name, min_versions=3):
-    """For every raw material used anywhere in this grade's recipe
-    versions, correlate its php against that version's mean outcome for
-    the chosen property, across all of the grade's recipe versions. Ranked
-    by |correlation| descending.
-
-    Needs real variation to say anything: a raw material must appear (with
-    a recorded php) in at least `min_versions` versions, and those versions
-    must have quality results, or it's excluded rather than shown as a
-    misleading single-point "correlation". Returns an empty DataFrame if
-    nothing qualifies - callers should treat that as "not enough recipe
-    version history yet", not as "no relationship found"."""
-    versions = session.query(RecipeVersion).filter(RecipeVersion.foam_grade_id == foam_grade_id).all()
-    if len(versions) < min_versions:
-        return pd.DataFrame()
-
-    results_df = property_results_dataframe(session, foam_grade_id=foam_grade_id, property_name=property_name)
-    if results_df.empty:
-        return pd.DataFrame()
-    per_version_result = results_df.groupby("recipe_version_id")["actual_value"].mean()
-
-    php_by_material = {}  # name -> {version_id: php}
-    for v in versions:
-        outcome = per_version_result.get(v.id)
-        if outcome is None or pd.isna(outcome):
-            continue
-        for c in v.components:
-            if c.php is None:
-                continue
-            php_by_material.setdefault(c.raw_material_name, {})[v.id] = c.php
-
-    rows = []
-    for material, php_map in php_by_material.items():
-        if len(php_map) < min_versions:
-            continue
-        php_series = pd.Series(php_map)
-        outcome_series = per_version_result.reindex(php_series.index)
-        corr = php_series.corr(outcome_series)
-        if pd.isna(corr):
-            continue
-        rows.append({"raw_material_name": material, "n_versions": len(php_map), "correlation": round(corr, 3)})
-
-    ranked = pd.DataFrame(rows)
-    if not ranked.empty:
-        ranked["_abs"] = ranked["correlation"].abs()
-        ranked = ranked.sort_values("_abs", ascending=False).drop(columns=["_abs"]).reset_index(drop=True)
-    return ranked
-
-
 # ---------------------------------------------------------------------------
-# Actual (metered) usage vs. outcome - the per-run counterpart to
-# rank_component_correlations above.
+# Actual (metered) usage vs. outcome.
 # ---------------------------------------------------------------------------
 # A recipe version's php is a target, not a measurement: the same recipe
 # version, run a hundred times, does not meter out the exact same dosage of
 # every material every time - that is what the flow meters on
-# ComponentStreamReading exist to capture. rank_component_correlations only
-# asks "does changing the PLANNED formulation matter" and needs several
-# recipe versions to say anything at all. The functions below ask the
-# question a plant running one settled recipe actually needs answered:
-# "does this run's ACTUAL metered dosage of each material line up with this
-# run's actual outcome" - with n = number of production runs, not number of
-# recipe versions, so it works even for a grade with a single recipe version
-# that has simply been run (and metered, and tested) many times.
+# ComponentStreamReading exist to capture. Correlating a raw material's
+# PLANNED php across recipe versions against outcomes was tried here and
+# deliberately removed - the reviewer for this app judged it not a
+# meaningful analysis (recipe versions replace each other rather than
+# forming a comparable series, so "does changing the planned formulation
+# matter" isn't a question worth ranking materials by). The functions below
+# ask the question a plant running one settled recipe actually needs
+# answered instead: "does this run's ACTUAL metered dosage of each material
+# line up with this run's actual outcome" - with n = number of production
+# runs, not number of recipe versions, so it works even for a grade with a
+# single recipe version that has simply been run (and metered, and tested)
+# many times.
 
 
 def actual_usage_dataframe(session, foam_grade_id=None):

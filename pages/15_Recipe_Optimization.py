@@ -24,7 +24,6 @@ from analytics import (
     pass_rate,
     property_results_dataframe,
     rank_component_actual_correlations,
-    rank_component_correlations,
     recipe_version_cost,
     recipe_version_diff,
 )
@@ -51,21 +50,22 @@ render_function_action_intro(
         "grade: its full raw-material list with php dosage and role (base polyol, isocyanate, "
         "surfactant, catalyst, crosslinker, and so on), its cost per kg, and how its quality-test "
         "results compare to this grade's target density, hardness (IFD), tensile strength, "
-        "elongation, compression set and resilience. It also ranks which raw material's dosage - "
-        "either the actual metered flow-meter reading per production run, or the planned php on "
-        "the recipe card - correlates most strongly with a chosen result, so you can see which "
-        "ingredient is actually moving an outcome instead of reading it off the ingredient list. "
-        "Older recipe versions, cost history, and a side-by-side version diff are kept under "
-        "'Version history' at the bottom for audit purposes."
+        "elongation, compression set and resilience. It then answers two questions per property, "
+        "using only this recipe's own actual production history: given the current recipe, do the "
+        "results we actually get line up with what's required; and where a property is missing "
+        "target, does the actual metered dosage of a raw material explain why. Older recipe "
+        "versions, cost history, and a side-by-side version diff are kept under 'Version history' "
+        "at the bottom for audit purposes."
     ),
     action_text=(
         "Select the foam grade you want to review, then check the current formulation's cost per "
         "kg and ingredient list against the quality-outcome table below to spot any drift from "
-        "target. Pick a property under 'Which ingredient drives each outcome' to see which raw "
-        "material's dosage correlates most strongly with that result before adjusting any dosage "
-        "on the floor. If the current formulation isn't meeting target, confirm the target "
-        "properties further down and request a PI3 recommendation, then take that proposal to "
-        "your technical team to trial and confirm before releasing it as a new recipe version."
+        "target. Check 'Does the current recipe meet target?' for a straight achieved/not-achieved "
+        "answer per property, then pick a property there to see which raw material's actual "
+        "dosage correlates most strongly with a miss before adjusting anything on the floor. If "
+        "the current formulation isn't meeting target, confirm the target properties further down "
+        "and request a PI3 recommendation, then take that proposal to your technical team to trial "
+        "and confirm before releasing it as a new recipe version."
     ),
 )
 session = get_session()
@@ -224,27 +224,105 @@ st.caption(
 )
 
 # ---------------------------------------------------------------------------
-# Which ingredient actually drives the outcome
+# Does the current recipe meet target, and if not, why?
 # ---------------------------------------------------------------------------
 st.divider()
-st.subheader("Which ingredient drives each outcome")
+st.subheader("Does the current recipe meet target?")
 st.caption(
-    "Ranks each raw material by how strongly its dosage lines up with the selected property, two "
-    "ways: by ACTUAL metered dosage per production run (from Finalized-phase flow-meter readings), "
-    "which reflects normal batch-to-batch metering variance in the current recipe; and by PLANNED "
-    "php on each recipe version, which reflects what happens when the target formulation itself "
-    "changes. These can rank differently, since one tracks metering drift and the other tracks "
-    "formulation change - use the actual-dosage ranking for day-to-day process troubleshooting, "
-    "and the planned-version ranking when evaluating a formulation change."
+    "Two questions, answered per property, using only production runs made under the CURRENT "
+    "recipe (not older versions - which version was running earlier doesn't matter here): did we "
+    "achieve the required property, and if not, does the actual metered dosage of a raw material "
+    "explain why."
 )
+
+current_version_results = results_df[results_df["recipe_version_id"] == current_version.id]
+
+if current_version_results.empty:
+    st.info(
+        f"No quality test results recorded yet for production runs made under the current recipe "
+        f"({current_version.version_label}) - nothing to check against target yet."
+    )
+    expectation_summary = pd.DataFrame()
+else:
+    expectation_summary = (
+        current_version_results.groupby("property_name")
+        .agg(
+            avg_actual=("actual_value", "mean"),
+            avg_target=("target_value", "mean"),
+            unit=("unit", "first"),
+            pass_rate=("pass_fail", pass_rate),
+            n=("result_id", "count"),
+        )
+        .reset_index()
+    )
+    expectation_summary["avg_actual"] = expectation_summary["avg_actual"].round(2)
+    expectation_summary["avg_target"] = expectation_summary["avg_target"].round(2)
+    expectation_summary["achieved"] = expectation_summary["pass_rate"].apply(
+        lambda p: "Yes" if pd.notna(p) and p >= 1.0 else ("No" if pd.notna(p) else "—")
+    )
+
+    display_expectation = expectation_summary.copy()
+    display_expectation["Pass rate"] = display_expectation["pass_rate"].apply(
+        lambda p: f"{p:.0%}" if pd.notna(p) else "—"
+    )
+    display_expectation = display_expectation.rename(
+        columns={
+            "property_name": "Property",
+            "avg_actual": "Avg actual (current recipe)",
+            "avg_target": "Required (target)",
+            "unit": "UOM",
+            "achieved": "Achieved?",
+            "n": "Runs",
+        }
+    )
+    render_data_table(
+        display_expectation[
+            [
+                "Property",
+                "Avg actual (current recipe)",
+                "Required (target)",
+                "UOM",
+                "Pass rate",
+                "Achieved?",
+                "Runs",
+            ]
+        ]
+    )
+
+st.markdown("**If a property is missing target, does actual dosage explain it?**")
 if not available_properties:
-    st.info("No quality test results recorded yet - nothing to correlate ingredient dosage against.")
+    st.info("No quality test results recorded yet - nothing to check.")
 else:
     corr_property = st.selectbox(
         "Property", available_properties, key=f"corr_property_{grade.id}"
     )
 
-    st.markdown("**By actual metered dosage (per production run)**")
+    prop_row = (
+        expectation_summary[expectation_summary["property_name"] == corr_property]
+        if not expectation_summary.empty
+        else pd.DataFrame()
+    )
+    if prop_row.empty:
+        st.info(
+            f"No quality test results recorded yet for {corr_property} under the current recipe "
+            f"({current_version.version_label})."
+        )
+    else:
+        achieved = prop_row.iloc[0]["achieved"]
+        pass_rate_text = (
+            f"{prop_row.iloc[0]['pass_rate']:.0%}" if pd.notna(prop_row.iloc[0]["pass_rate"]) else "—"
+        )
+        if achieved == "Yes":
+            st.success(
+                f"Achieved: every {corr_property} result under the current recipe met target "
+                f"({pass_rate_text} pass rate)."
+            )
+        else:
+            st.warning(
+                f"Not achieved: only {pass_rate_text} of {corr_property} results under the current "
+                "recipe met target."
+            )
+
     actual_ranked = rank_component_actual_correlations(session, grade.id, corr_property)
     if actual_ranked.empty:
         st.info(
@@ -266,42 +344,10 @@ else:
         st.caption(
             f"Strongest association for {corr_property}: **{top_actual['raw_material_name']}** "
             f"(correlation {top_actual['correlation']:+.3f} across "
-            f"{int(top_actual['n_runs'])} production runs' metered dosage). Review applicability "
-            "against current raw materials and process conditions before adjusting dosage."
+            f"{int(top_actual['n_runs'])} production runs' metered dosage). A lead to investigate "
+            "on the floor, not a confirmed cause - review against current raw materials and "
+            "process conditions before adjusting dosage."
         )
-
-    st.markdown("**By planned recipe version**")
-    if len(versions) < 3:
-        st.info(
-            f"This foam grade currently has {len(versions)} recipe version(s). Correlating the "
-            "PLANNED php against outcomes needs at least 3 versions with varying php and "
-            "recorded results - not enough version history yet to say whether changing the "
-            "target formulation matters."
-        )
-    else:
-        component_ranked = rank_component_correlations(session, grade.id, corr_property)
-        if component_ranked.empty:
-            st.info(
-                f"No raw material appears (with a recorded php) across enough versions with "
-                f"{corr_property} results to compute a correlation yet."
-            )
-        else:
-            render_data_table(
-                component_ranked.rename(
-                    columns={
-                        "raw_material_name": "Raw material",
-                        "n_versions": "Versions compared",
-                        "correlation": "Correlation with outcome",
-                    }
-                )
-            )
-            top_component = component_ranked.iloc[0]
-            st.caption(
-                f"Strongest association for {corr_property}: **{top_component['raw_material_name']}** "
-                f"(correlation {top_component['correlation']:+.3f} across "
-                f"{int(top_component['n_versions'])} versions). Review applicability against current "
-                "raw materials and process conditions before adjusting dosage."
-            )
 
 # ---------------------------------------------------------------------------
 # PI3 recommendation, grounded in cost / diff / correlation data above
@@ -397,26 +443,6 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "actual per-run dosage with outcomes."
         )
 
-        planned_correlation_lines = []
-        if len(versions) >= 3:
-            for prop in available_properties:
-                ranked = rank_component_correlations(session, grade.id, prop)
-                if ranked.empty:
-                    continue
-                top3 = ranked.head(3)
-                planned_correlation_lines.append(
-                    f"{prop}: "
-                    + "; ".join(
-                        f"{r['raw_material_name']} (r={r['correlation']:+.3f}, n={int(r['n_versions'])} versions)"
-                        for _, r in top3.iterrows()
-                    )
-                )
-        planned_correlation_summary = (
-            "\n".join(planned_correlation_lines)
-            if planned_correlation_lines
-            else "Not enough recipe version history yet to correlate the planned formulation with outcomes."
-        )
-
         outcome_lines = []
         for prop, summary in property_summaries.items():
             for _, row in summary.iterrows():
@@ -429,20 +455,27 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
                 )
         outcome_summary = "\n".join(outcome_lines) or "No quality test results recorded yet."
 
+        if not expectation_summary.empty:
+            achieved_lines = [
+                f"{row['property_name']}: avg actual {row['avg_actual']}, required {row['avg_target']}, "
+                f"achieved={row['achieved']}, n={int(row['n'])} runs under this recipe"
+                for _, row in expectation_summary.iterrows()
+            ]
+            achieved_summary = "\n".join(achieved_lines)
+        else:
+            achieved_summary = "No quality test results recorded yet under the current recipe."
+
         prompt = (
             "You are helping a technical reviewer at a flexible slabstock foam manufacturer "
             f"select a formulation direction for {grade.grade_name}. Below is this foam grade's "
             "recipe version history: formulation composition, formulation cost, the most recent "
-            "version-to-version change, which ingredient's ACTUAL metered per-run dosage is "
-            "statistically associated with each quality outcome, which ingredient's PLANNED "
-            "recipe-version php is separately associated with each outcome, and quality test "
-            "outcomes by version. The actual-dosage correlations reflect real batch-to-batch "
-            "metering variance under the current recipe and are the stronger signal for "
-            "day-to-day process guidance; the planned-version correlations only speak to what "
-            "happens when the target formulation itself changes. Use this quantified data - not "
-            "just the ingredient list - as the basis of your reasoning, plus any relevant expert "
-            "notes or historical cases in the connected knowledge base, to propose a formulation "
-            "that could meet the target properties given.\n\n"
+            "version-to-version change, whether the CURRENT recipe achieves each required property "
+            "(based only on production runs made under this recipe), which ingredient's ACTUAL "
+            "metered per-run dosage is statistically associated with each quality outcome, and "
+            "quality test outcomes by version. Use this quantified data - not just the ingredient "
+            "list - as the basis of your reasoning, plus any relevant expert notes or historical "
+            "cases in the connected knowledge base, to propose a formulation that could meet the "
+            "target properties given.\n\n"
             "Phrase this as a recommendation for the reviewer to evaluate and confirm through "
             "their own trial process, addressed directly to the target properties requested. "
             "Where you rely on a specific cost, diff, or correlation figure below, refer to it "
@@ -451,10 +484,10 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             f"Recipe versions and composition:\n{composition_summary}\n\n"
             f"Formulation cost by version:\n{cost_summary}\n\n"
             f"Most recent formulation change:\n{diff_summary}\n\n"
+            f"Does the current recipe achieve each required property (this recipe's own "
+            f"production runs only):\n{achieved_summary}\n\n"
             f"Actual metered dosage vs. outcome correlations (top 3 per property, per production "
             f"run):\n{actual_correlation_summary}\n\n"
-            f"Planned recipe-version php vs. outcome correlations (top 3 per property, where "
-            f"enough version history exists):\n{planned_correlation_summary}\n\n"
             f"Quality test outcomes by version:\n{outcome_summary}\n\n"
             f"Target properties requested:\n{target_properties.strip()}\n"
         )

@@ -562,7 +562,7 @@ Hard scope rule: every answer must stay within this one plant's data. You have n
 
 You have three tools:
 
-1. get_verified_analysis - use this FIRST whenever the question matches one of its analysis_type values: "trend" (control chart, process capability/Cpk, CUSUM drift, and a trend significance test for one property), "ingredient_correlation" (which raw material's actual metered dosage, and separately its planned recipe php, correlates with a property outcome), "recipe_cost" (formulation cost per recipe version), or "setting_correlation" (which machine/process setting correlates with a property outcome). These reuse the exact same tested calculations already shown on this app's Trend Analysis, Recipe Optimization, and Machine Settings vs Physical Properties Correlation pages - prefer this tool over writing your own SQL whenever a question fits one of these four shapes.
+1. get_verified_analysis - use this FIRST whenever the question matches one of its analysis_type values: "trend" (control chart, process capability/Cpk, CUSUM drift, and a trend significance test for one property), "ingredient_correlation" (which raw material's actual metered dosage correlates with a property outcome), "recipe_cost" (formulation cost per recipe version), or "setting_correlation" (which machine/process setting correlates with a property outcome). These reuse the exact same tested calculations already shown on this app's Trend Analysis, Recipe Optimization, and Machine Settings vs Physical Properties Correlation pages - prefer this tool over writing your own SQL whenever a question fits one of these four shapes.
 
 2. query_plant_data - a read-only SQL tool for anything the four analyses above don't cover. You may write a single SELECT statement against ONLY these views: v_pi3_production_runs, v_pi3_property_results, v_pi3_recipe_composition, v_pi3_stream_readings, v_pi3_quality_issues (columns are listed in the tool description). Your SELECT list must include plant_id (or use SELECT *) - it will be used to scope results. No other tables are reachable, and no INSERT/UPDATE/DELETE/DDL is possible - if you write one, the tool will reject it and tell you why so you can correct it.
 
@@ -621,8 +621,7 @@ _GET_VERIFIED_ANALYSIS_TOOL = {
         "capability/Cpk, CUSUM drift detection, and a trend significance test for one property "
         "over this grade's production runs.\n"
         "'ingredient_correlation' (requires property_name) - which raw material's ACTUAL metered "
-        "per-run dosage, and separately its PLANNED recipe php across versions, correlates with "
-        "this property's outcome.\n"
+        "per-run dosage correlates with this property's outcome.\n"
         "'recipe_cost' - formulation cost per recipe version for this grade.\n"
         "'setting_correlation' (requires property_name) - which machine/process setting "
         "correlates with this property's outcome across this grade's runs."
@@ -760,11 +759,9 @@ def _run_verified_analysis(session, plant_id, analysis_type, foam_grade_id, prop
 
     if analysis_type == "ingredient_correlation":
         actual = analytics.rank_component_actual_correlations(session, foam_grade_id, property_name)
-        planned = analytics.rank_component_correlations(session, foam_grade_id, property_name)
         return _to_jsonable(
             {
                 "actual_usage_correlation": actual.to_dict(orient="records") if not actual.empty else [],
-                "planned_recipe_correlation": planned.to_dict(orient="records") if not planned.empty else [],
             }
         )
 
