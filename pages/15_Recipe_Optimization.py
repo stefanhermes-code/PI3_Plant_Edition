@@ -34,6 +34,7 @@ from helpers import (
     page_setup,
     render_ask_pi3_section,
     render_data_table,
+    render_function_action_intro,
     render_pi3_docx_download,
     render_save_to_expert_notes_button,
 )
@@ -44,10 +45,28 @@ require_login()
 logout_button()
 
 st.title("Recipe Optimization")
-st.caption(
-    "The current formulation's cost and quality-outcome history, plus which raw material's "
-    "dosage is actually associated with each result - ranked and quantified, not eyeballed. "
-    "Older recipe versions are kept for reference under 'Version history' at the bottom."
+render_function_action_intro(
+    function_text=(
+        "This page shows the formulation currently running in production for the selected foam "
+        "grade: its full raw-material list with php dosage and role (base polyol, isocyanate, "
+        "surfactant, catalyst, crosslinker, and so on), its cost per kg, and how its quality-test "
+        "results compare to this grade's target density, hardness (IFD), tensile strength, "
+        "elongation, compression set and resilience. It also ranks which raw material's dosage - "
+        "either the actual metered flow-meter reading per production run, or the planned php on "
+        "the recipe card - correlates most strongly with a chosen result, so you can see which "
+        "ingredient is actually moving an outcome instead of reading it off the ingredient list. "
+        "Older recipe versions, cost history, and a side-by-side version diff are kept under "
+        "'Version history' at the bottom for audit purposes."
+    ),
+    action_text=(
+        "Select the foam grade you want to review, then check the current formulation's cost per "
+        "kg and ingredient list against the quality-outcome table below to spot any drift from "
+        "target. Pick a property under 'Which ingredient drives each outcome' to see which raw "
+        "material's dosage correlates most strongly with that result before adjusting any dosage "
+        "on the floor. If the current formulation isn't meeting target, confirm the target "
+        "properties further down and request a PI3 recommendation, then take that proposal to "
+        "your technical team to trial and confirm before releasing it as a new recipe version."
+    ),
 )
 session = get_session()
 
@@ -90,7 +109,7 @@ available_properties = sorted(results_df["property_name"].dropna().unique()) if 
 if results_df.empty:
     st.info("No quality test results recorded yet for this foam grade's production runs.")
 else:
-    st.subheader("Property outcomes")
+    st.subheader("Physical properties")
     overall_summary = (
         results_df.groupby("property_name")
         .agg(
@@ -108,13 +127,6 @@ else:
     )
     overall_summary = overall_summary[["Property", "Avg target", "Avg actual", "Pass rate"]]
     render_data_table(overall_summary)
-    n_runs = results_df["run_id"].nunique()
-    st.caption(
-        f"Based on {n_runs} production run(s) with quality test results for {grade.grade_name}, "
-        "combined across all recipe versions on record. Review against current raw materials and "
-        "process conditions before reusing - see 'Version history' further down for the "
-        "version-to-version breakdown."
-    )
 
 # Per-property, per-version summary tables - not shown on screen (see the
 # consolidated table above), but kept keyed by property name so the PI3
@@ -136,6 +148,16 @@ for prop in available_properties:
     summary["avg_actual"] = summary["avg_actual"].round(2)
     summary["avg_target"] = summary["avg_target"].round(2)
     property_summaries[prop] = summary
+
+def _cost_per_kg(cost: dict):
+    """Converts recipe_version_cost()'s php-based total (cost for the mix
+    represented by total_php parts - the standard costing basis in this
+    industry) into a straightforward cost per kg, treating 1 php part as
+    1 kg once a recipe is scaled up to an actual production batch."""
+    if cost["total_cost"] is None or not cost["total_php"]:
+        return None
+    return round(cost["total_cost"] / cost["total_php"], 3)
+
 
 # ---------------------------------------------------------------------------
 # Current formulation - the one version actually in production use
@@ -167,11 +189,12 @@ if current_version.components:
         round((current_cost["priced_php"] / current_cost["total_php"]) * 100, 0)
         if current_cost["total_php"] else None
     )
-    if current_cost["total_cost"] is not None:
+    current_cost_per_kg = _cost_per_kg(current_cost)
+    if current_cost_per_kg is not None:
         st.write(
-            f"**Cost per 100 parts: {current_cost['total_cost']:.3f}** "
+            f"**Cost per kg: {current_cost_per_kg:.3f}** "
             f"(coverage {coverage_pct:.0f}%)" if coverage_pct is not None else
-            f"**Cost per 100 parts: {current_cost['total_cost']:.3f}**"
+            f"**Cost per kg: {current_cost_per_kg:.3f}**"
         )
     else:
         st.caption("No cost data recorded for any material in this version yet.")
@@ -197,12 +220,13 @@ st.caption(
 st.divider()
 st.subheader("Which ingredient drives each outcome")
 st.caption(
-    "Two different questions, both worth asking: does this run's ACTUAL metered dosage of a "
-    "material line up with this run's actual outcome (the batch-to-batch metering variance a "
-    "settled recipe will always have), and separately, does changing the PLANNED recipe from "
-    "one version to the next line up with a shift in outcome. The first uses flow-meter "
-    "readings per production run; the second uses the target php recorded on each recipe "
-    "version - they can and often will point to different answers."
+    "Ranks each raw material by how strongly its dosage lines up with the selected property, two "
+    "ways: by ACTUAL metered dosage per production run (from Finalized-phase flow-meter readings), "
+    "which reflects normal batch-to-batch metering variance in the current recipe; and by PLANNED "
+    "php on each recipe version, which reflects what happens when the target formulation itself "
+    "changes. These can rank differently, since one tracks metering drift and the other tracks "
+    "formulation change - use the actual-dosage ranking for day-to-day process troubleshooting, "
+    "and the planned-version ranking when evaluating a formulation change."
 )
 if not available_properties:
     st.info("No quality test results recorded yet - nothing to correlate ingredient dosage against.")
@@ -280,11 +304,10 @@ plant_id = grade.product_family.plant_id if grade.product_family else None
 
 if ai_assistant.is_enabled_for_plant(session, plant_id):
     st.caption(
-        "PI3 reviews this foam grade's formulation cost, version-to-version differences, "
-        "ingredient-outcome correlations, and quality-test history against the target "
-        "properties below, and proposes a formulation for your technical team to evaluate and "
-        "confirm. Prefilled from this foam grade's stored specification - add any other targets "
-        "(resilience, tensile strength, ...) before asking."
+        "Asks PI3 to propose a reformulation direction, using the cost, version-diff, and "
+        "correlation data above as its basis rather than just the ingredient list. Target "
+        "properties below are prefilled from this grade's stored specification - edit or add to "
+        "them (resilience, tensile strength, ...) before requesting a recommendation."
     )
     default_targets = []
     if grade.target_density is not None:
@@ -319,9 +342,10 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
         cost_lines = []
         for v in versions:
             c = cost_by_version[v.id]
-            if c["total_cost"] is not None:
+            v_cost_per_kg = _cost_per_kg(c)
+            if v_cost_per_kg is not None:
                 note = "" if c["complete"] else f" (partial - missing cost for {', '.join(c['missing'])})"
-                cost_lines.append(f"Version {v.version_label}: {c['total_cost']:.3f} per 100 parts{note}")
+                cost_lines.append(f"Version {v.version_label}: {v_cost_per_kg:.3f} per kg{note}")
             else:
                 cost_lines.append(f"Version {v.version_label}: no cost data recorded")
         cost_summary = "\n".join(cost_lines)
@@ -481,7 +505,7 @@ render_ask_pi3_section(
         f"'{grade.grade_name}' (id {grade.id})."
     ),
     sample_questions=[
-        f"What does {grade.grade_name}'s current recipe cost per 100 parts?",
+        f"What does {grade.grade_name}'s current recipe cost per kg?",
         f"Which ingredient's actual dosage correlates most with density for {grade.grade_name}?",
         f"What changed between the last two recipe versions of {grade.grade_name}?",
         f"Have there been any quality issues reported for {grade.grade_name} recently?",
@@ -513,7 +537,7 @@ with st.expander("Formulation cost by version"):
                 "Version": v.version_label,
                 "Active": "Yes" if v.is_active else "No",
                 "Status": v.approval_status,
-                "Cost per 100 parts": c["total_cost"],
+                "Cost per kg": _cost_per_kg(c),
                 "Cost coverage": f"{coverage_pct:.0f}%" if coverage_pct is not None else "—",
                 "Materials missing cost": ", ".join(c["missing"]) if c["missing"] else "—",
             }

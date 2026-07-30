@@ -69,6 +69,17 @@ def page_setup(title: str):
     pass
 
 
+def render_function_action_intro(function_text: str, action_text: str):
+    """Renders a page's opening explanation as a bordered 'Function / Action'
+    box instead of a single caption line: Function is what this page lets
+    you do, Action is what you actually need to do on it here, so both are
+    stated explicitly instead of blended into one paragraph. Call this
+    right after st.title(), in place of a plain st.caption() intro."""
+    with st.container(border=True):
+        st.markdown(f"**Function:** {function_text}")
+        st.markdown(f"**Action:** {action_text}")
+
+
 def activate_recipe_version(session, foam_grade_id, new_version):
     """Marks new_version as the active recipe for its foam grade, and
     deactivates whatever was active before it. Recipe versions don't
