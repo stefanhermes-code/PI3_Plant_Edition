@@ -115,17 +115,26 @@ else:
         .agg(
             avg_target=("target_value", "mean"),
             avg_actual=("actual_value", "mean"),
+            unit=("unit", "first"),
             pass_rate=("pass_fail", pass_rate),
         )
         .reset_index()
-        .rename(columns={"property_name": "Property", "avg_target": "Avg target", "avg_actual": "Avg actual"})
+        .rename(
+            columns={
+                "property_name": "Property",
+                "avg_target": "Avg target",
+                "avg_actual": "Avg actual",
+                "unit": "UOM",
+            }
+        )
     )
     overall_summary["Avg target"] = overall_summary["Avg target"].round(2)
     overall_summary["Avg actual"] = overall_summary["Avg actual"].round(2)
+    overall_summary["UOM"] = overall_summary["UOM"].fillna("—")
     overall_summary["Pass rate"] = overall_summary["pass_rate"].apply(
         lambda p: f"{p:.0%}" if pd.notna(p) else "—"
     )
-    overall_summary = overall_summary[["Property", "Avg target", "Avg actual", "Pass rate"]]
+    overall_summary = overall_summary[["Property", "Avg target", "Avg actual", "UOM", "Pass rate"]]
     render_data_table(overall_summary)
 
 # Per-property, per-version summary tables - not shown on screen (see the
@@ -156,7 +165,7 @@ def _cost_per_kg(cost: dict):
     1 kg once a recipe is scaled up to an actual production batch."""
     if cost["total_cost"] is None or not cost["total_php"]:
         return None
-    return round(cost["total_cost"] / cost["total_php"], 3)
+    return round(cost["total_cost"] / cost["total_php"], 2)
 
 
 # ---------------------------------------------------------------------------
@@ -192,9 +201,9 @@ if current_version.components:
     current_cost_per_kg = _cost_per_kg(current_cost)
     if current_cost_per_kg is not None:
         st.write(
-            f"**Cost per kg: {current_cost_per_kg:.3f}** "
+            f"**Cost per kg: {current_cost_per_kg:.2f} USD** "
             f"(coverage {coverage_pct:.0f}%)" if coverage_pct is not None else
-            f"**Cost per kg: {current_cost_per_kg:.3f}**"
+            f"**Cost per kg: {current_cost_per_kg:.2f} USD**"
         )
     else:
         st.caption("No cost data recorded for any material in this version yet.")
@@ -345,7 +354,7 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             v_cost_per_kg = _cost_per_kg(c)
             if v_cost_per_kg is not None:
                 note = "" if c["complete"] else f" (partial - missing cost for {', '.join(c['missing'])})"
-                cost_lines.append(f"Version {v.version_label}: {v_cost_per_kg:.3f} per kg{note}")
+                cost_lines.append(f"Version {v.version_label}: {v_cost_per_kg:.2f} USD per kg{note}")
             else:
                 cost_lines.append(f"Version {v.version_label}: no cost data recorded")
         cost_summary = "\n".join(cost_lines)
@@ -537,7 +546,7 @@ with st.expander("Formulation cost by version"):
                 "Version": v.version_label,
                 "Active": "Yes" if v.is_active else "No",
                 "Status": v.approval_status,
-                "Cost per kg": _cost_per_kg(c),
+                "Cost per kg (USD)": _cost_per_kg(c),
                 "Cost coverage": f"{coverage_pct:.0f}%" if coverage_pct is not None else "—",
                 "Materials missing cost": ", ".join(c["missing"]) if c["missing"] else "—",
             }
