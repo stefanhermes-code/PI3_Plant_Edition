@@ -72,7 +72,7 @@ def _database_url() -> str:
     return "sqlite:///pi3_local.db"
 
 
-ENGINE = create_engine(_database_url(), pool_pre_ping=True)
+ENGINE = create_engine(_database_url(), pool_pre_ping=True, pool_recycle=280)
 # expire_on_commit=False: keep already-loaded attributes readable after a
 # commit, since the session below is reused across Streamlit reruns rather
 # than recreated each time.
@@ -942,4 +942,19 @@ def close_out_session():
     try:
         session.commit()
     except Exception:
-        session.rollback()
+        # If the underlying connection itself has gone bad (e.g. the server
+        # killed it - idle-in-transaction timeout, a restart, ...), rollback()
+        # can also fail. In that case don't leave this same broken Session
+        # cached in st.session_state: every future rerun of this browser tab
+        # would keep reusing it and keep failing the same way until the user
+        # did a full page reload. Discard it instead so the next
+        # get_session() call builds a fresh Session (and checks out a fresh,
+        # pool_pre_ping-verified connection) on the very next rerun.
+        try:
+            session.rollback()
+        except Exception:
+            try:
+                session.close()
+            except Exception:
+                pass
+            st.session_state.pop("_sa_session", None)
