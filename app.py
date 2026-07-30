@@ -224,7 +224,11 @@ experiment_pages = [
 industrial_intelligence_pages = [
     st.Page("pages/15_Recipe_Optimization.py", title="Recipe Optimization", icon="🧪"),
     st.Page("pages/16_Trend_Analysis.py", title="Trend Analysis", icon="📈"),
-    st.Page("pages/17_Process_Property_Correlation.py", title="Process-Property Correlation", icon="🔗"),
+    st.Page(
+        "pages/17_Process_Property_Correlation.py",
+        title="Machine Settings vs Physical Properties Correlation",
+        icon="🔗",
+    ),
     st.Page("pages/18_Root_Cause_Assistant.py", title="Root-Cause Assistant", icon="🩺"),
     st.Page("pages/19_Machine_Settings_Optimization.py", title="Machine Settings Optimization", icon="⚙️"),
     st.Page("pages/9_Similar_Case_Retrieval.py", title="Similar Case Retrieval", icon="🧭"),

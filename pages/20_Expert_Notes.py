@@ -10,7 +10,8 @@ reasoning can retrieve it.
 
 Also shows PI3-sourced notes - insights a reviewer explicitly chose to
 keep via a "Save to Expert Notes" button on Recipe Optimization, Trend
-Analysis, Process-Property Correlation, or Root-Cause Assistant (both
+Analysis, Machine Settings vs Physical Properties Correlation, or
+Root-Cause Assistant (both
 their fixed-prompt sections and free-form Ask PI3 boxes). These are
 tagged with their originating question and can be re-exported as the
 same Word report the reviewer originally saw.

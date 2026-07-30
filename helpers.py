@@ -3,6 +3,7 @@
 import datetime as dt
 import json
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -78,6 +79,33 @@ def render_function_action_intro(function_text: str, action_text: str):
     with st.container(border=True):
         st.markdown(f"**Function:** {function_text}")
         st.markdown(f"**Action:** {action_text}")
+
+
+CHART_ZOOM_HINT = "Tip: scroll to zoom in/out, click-and-drag to pan."
+
+
+def render_scatter_chart_no_zero(df, x, y, color=None):
+    """Same idea as st.scatter_chart(df, x=x, y=y), but with both axes
+    scaled to the data's own min/max instead of always anchored at zero.
+    Process settings and physical properties usually sit in a narrow band
+    (e.g. an IFD/hardness result clustered around 170) - a zero-anchored
+    axis squeezes that real spread into a thin sliver at the top of the
+    chart, making points that are actually meaningfully different look
+    identical. See _line_chart_no_zero on the Trend Analysis page for the
+    same fix applied to a line chart.
+
+    .interactive() keeps the same scroll-to-zoom / click-drag-to-pan
+    behaviour the native st.scatter_chart already has, so swapping to this
+    helper doesn't lose that."""
+    encode_kwargs = {
+        "x": alt.X(f"{x}:Q", scale=alt.Scale(zero=False)),
+        "y": alt.Y(f"{y}:Q", scale=alt.Scale(zero=False)),
+    }
+    if color:
+        encode_kwargs["color"] = alt.Color(f"{color}:N", title=color)
+    chart = alt.Chart(df).mark_circle(size=90).encode(**encode_kwargs).interactive()
+    st.altair_chart(chart, use_container_width=True)
+    st.caption(CHART_ZOOM_HINT)
 
 
 def activate_recipe_version(session, foam_grade_id, new_version):
@@ -439,7 +467,8 @@ def render_ask_pi3_section(
     note_link_type="foam_grade", note_entity_id=None,
 ):
     """Free-form 'ask PI3 anything about this plant's data' box, shared by
-    Recipe Optimization, Process-Property Correlation, and Trend Analysis -
+    Recipe Optimization, Machine Settings vs Physical Properties
+    Correlation, and Trend Analysis -
     this is the same spot on each page that already had a fixed, single-
     purpose PI3 prompt; this section sits alongside that one rather than
     replacing it, so the existing tested recommendation/interpretation

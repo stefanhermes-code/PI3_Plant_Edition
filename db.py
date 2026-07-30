@@ -912,8 +912,9 @@ def close_out_session():
     browser tab across every rerun (see its docstring), and every read
     (.query()/.get()/...) under SQLAlchemy's default autocommit=False opens
     a transaction. Pages that only display data - Trend Analysis, Recipe
-    Optimization, Root-Cause Assistant, Process-Property Correlation,
-    Machine Settings Optimization, Demo Data Admin, and any read-only view
+    Optimization, Root-Cause Assistant, Machine Settings vs Physical
+    Properties Correlation, Machine Settings Optimization, Demo Data
+    Admin, and any read-only view
     of a page that also supports editing - never call session.commit()
     themselves, since they have nothing to save. Without this function,
     that transaction would sit "idle in transaction" - holding read locks

@@ -33,6 +33,7 @@ from analytics import (
 from auth import logout_button, require_login
 from db import FoamGrade, QualityObservation, get_session, init_db
 from helpers import (
+    CHART_ZOOM_HINT,
     page_setup,
     render_ask_pi3_section,
     render_data_table,
@@ -96,7 +97,10 @@ def _line_chart_no_zero(df, value_cols):
     below - a zero-anchored axis squeezes all of that real variation into
     a thin sliver at the top of the chart, making it hard to actually see
     whether a line is moving. df's index is used as the X-axis (must be
-    named or reset first)."""
+    named or reset first). .interactive() adds the same scroll-to-zoom /
+    click-drag-to-pan behaviour as the native st.line_chart, and the
+    caption below the chart calls that out since it isn't otherwise
+    obvious."""
     long_df = df.reset_index().melt(
         id_vars=df.index.name or "index", value_vars=value_cols, var_name="series", value_name="value"
     )
@@ -108,8 +112,10 @@ def _line_chart_no_zero(df, value_cols):
             y=alt.Y("value:Q", title=None, scale=alt.Scale(zero=False)),
             color=alt.Color("series:N", title=None),
         )
+        .interactive()
     )
     st.altair_chart(chart, use_container_width=True)
+    st.caption(CHART_ZOOM_HINT)
 
 
 # Only offer a grade here if it actually has quality test results to trend -

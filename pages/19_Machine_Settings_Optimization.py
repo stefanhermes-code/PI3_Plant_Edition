@@ -18,7 +18,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, render_data_table, render_function_action_intro
+from helpers import page_setup, render_data_table, render_function_action_intro, render_scatter_chart_no_zero
 
 page_setup("Machine Settings Optimization")
 init_db()
@@ -173,7 +173,7 @@ else:
             "process conditions before adjusting settings."
         )
 
-    st.scatter_chart(
+    render_scatter_chart_no_zero(
         merged.rename(columns={setting_field: PHASE_SETTING_LABELS.get(setting_field, setting_field)}),
         x=PHASE_SETTING_LABELS.get(setting_field, setting_field),
         y="actual_value",

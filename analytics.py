@@ -5,9 +5,10 @@ schema: a production run carries a recipe (version + components), a
 machine, its Finalized-phase process settings, and the physical property
 results / quality observations it produced - all keyed to the same
 production_run_id. Every Industrial Intelligence function (Recipe
-Optimization, Trend Analysis, Process-Property Correlation, Root-Cause
-Assistant, Machine Settings Optimization) starts from that same join, so
-it is built once here rather than five slightly-different copies of the
+Optimization, Trend Analysis, Machine Settings vs Physical Properties
+Correlation, Root-Cause Assistant, Machine Settings Optimization) starts
+from that same join, so it is built once here rather than five
+slightly-different copies of the
 same query living in each page.
 
 Note: ProductionRun deliberately has no back-populated .phases/.results
@@ -139,8 +140,9 @@ def pass_rate(series) -> float | None:
 def merged_run_property_dataframe(session, foam_grade_id, property_name):
     """One row per production run for a given grade/property: process
     settings joined to that run's mean result for the chosen property.
-    Used by Process-Property Correlation and Machine Settings Optimization,
-    which both need "one settings snapshot" per "one quality outcome"."""
+    Used by Machine Settings vs Physical Properties Correlation and
+    Machine Settings Optimization, which both need "one settings snapshot"
+    per "one quality outcome"."""
     settings_df = run_settings_dataframe(session, foam_grade_id=foam_grade_id)
     results_df = property_results_dataframe(session, foam_grade_id=foam_grade_id, property_name=property_name)
     if settings_df.empty or results_df.empty:

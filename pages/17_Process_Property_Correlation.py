@@ -1,4 +1,4 @@
-"""Industrial Intelligence: Process-Property Correlation
+"""Industrial Intelligence: Machine Settings vs Physical Properties Correlation
 
 Cross-references every machine/process setting (Finalized-phase mixer rpm,
 ratio/index, air pressure, ...) against a physical property outcome for
@@ -27,14 +27,15 @@ from helpers import (
     render_function_action_intro,
     render_pi3_docx_download,
     render_save_to_expert_notes_button,
+    render_scatter_chart_no_zero,
 )
 
-page_setup("Process-Property Correlation")
+page_setup("Machine Settings vs Physical Properties Correlation")
 init_db()
 require_login()
 logout_button()
 
-st.title("Process-Property Correlation")
+st.title("Machine Settings vs Physical Properties Correlation")
 render_function_action_intro(
     function_text=(
         "Cross-references every Finalized-phase machine/process setting (mixer rpm, ratio/index, "
@@ -65,7 +66,7 @@ grades = [
 if not grades:
     st.warning(
         "No foam grade yet has quality test results recorded - add these first before using "
-        "Process-Property Correlation."
+        "Machine Settings vs Physical Properties Correlation."
     )
     st.stop()
 
@@ -105,7 +106,7 @@ st.caption(
 )
 
 st.divider()
-st.subheader("Drill into one setting")
+st.subheader("Detailed correlation graph")
 setting_field = st.selectbox(
     "Process setting",
     ranked["field"].tolist(),
@@ -124,7 +125,7 @@ else:
     chart_df = merged[[setting_field, "actual_value"]].rename(
         columns={setting_field: PHASE_SETTING_LABELS.get(setting_field, setting_field), "actual_value": property_name}
     )
-    st.scatter_chart(chart_df, x=PHASE_SETTING_LABELS.get(setting_field, setting_field), y=property_name)
+    render_scatter_chart_no_zero(chart_df, x=PHASE_SETTING_LABELS.get(setting_field, setting_field), y=property_name)
     render_data_table(
         merged[["run_id", "run_date", "machine", setting_field, "actual_value", "target_value"]],
         max_height="400px",
@@ -204,7 +205,8 @@ render_ask_pi3_section(
     plant_id,
     default_foam_grade_id=grade.id,
     page_context=(
-        f"The reviewer is on the Process-Property Correlation page, looking at '{property_name}' "
+        f"The reviewer is on the Machine Settings vs Physical Properties Correlation page, looking "
+        f"at '{property_name}' "
         f"for foam grade '{grade.grade_name}' (id {grade.id})."
     ),
     sample_questions=[
