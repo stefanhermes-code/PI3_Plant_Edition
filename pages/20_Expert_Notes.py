@@ -61,9 +61,16 @@ trials = session.query(TrialRecord).order_by(TrialRecord.created_at.desc()).all(
 grades = session.query(FoamGrade).order_by(FoamGrade.grade_name).all()
 
 st.subheader("Add an expert note")
+# The "Link to" selector lives outside the form on purpose: widgets inside
+# an st.form don't trigger a rerun until the form is submitted, so with it
+# inside the form, switching from "Production Run" to "Trial / Experiment"
+# would leave the wrong entity dropdown (still "Production run") showing
+# until the reviewer hit Save - by then it's too late to pick a trial.
+# Keeping it outside means the entity dropdown below updates immediately.
+link_type_choice = st.selectbox("Link to *", list(LINK_TYPES.keys()), key="new_note_link_type")
+entity_type = LINK_TYPES[link_type_choice]
+
 with st.form("add_expert_note"):
-    link_type_choice = st.selectbox("Link to *", list(LINK_TYPES.keys()))
-    entity_type = LINK_TYPES[link_type_choice]
     if entity_type == "production_run":
         if not runs:
             st.warning("No production runs yet - create one on the Production Run page first.")
