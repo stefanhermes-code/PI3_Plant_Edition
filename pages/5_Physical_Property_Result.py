@@ -42,6 +42,7 @@ from helpers import (
     page_setup,
     parse_dt,
     render_data_table,
+    render_function_action_intro,
     set_pending_banner,
     show_pending_banner,
 )
@@ -61,6 +62,22 @@ require_login()
 logout_button()
 
 st.title("Quality Test Result")
+render_function_action_intro(
+    function_text=(
+        "Records the lab results that prove out (or flag) a batch: where in the block each sample "
+        "was cut and its cure age, what conditioning it went through before testing (e.g. Standard "
+        "23°C/50%RH, 24h), and the test result itself against the property/method/unit master "
+        "list - density, 40% IFD/hardness, tensile strength, elongation, compression set, "
+        "resilience, and so on - each compared to a target value and marked pass or fail."
+    ),
+    action_text=(
+        "For a production run, add its sample(s) first (block zone and cure age at extraction), "
+        "then log any conditioning it went through before testing, then record the quality test "
+        "result itself - pick the property, test method, and unit from the master list and link "
+        "it back to the sample if one applies. Use the CSV/Excel import tab to bulk-load a batch "
+        "of results at once instead of entering them one by one."
+    ),
+)
 session = get_session()
 
 runs = session.query(ProductionRun).order_by(ProductionRun.created_at.desc()).all()

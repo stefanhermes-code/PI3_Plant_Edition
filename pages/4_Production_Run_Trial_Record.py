@@ -64,6 +64,7 @@ from helpers import (
     page_setup,
     parse_dt,
     render_data_table,
+    render_function_action_intro,
     set_pending_banner,
     show_pending_banner,
 )
@@ -194,9 +195,28 @@ require_login()
 logout_button()
 
 st.title("Production Run")
-st.caption(
-    "Every batch made goes here: recipe used, machine parameters, and quality results. For a "
-    "deliberate trial or change investigation, flag this run as one on the Trial / Experiment page."
+render_function_action_intro(
+    function_text=(
+        "This is the primary record of everything that happens on a batch: which recipe and "
+        "machine it ran on, its Setup and Finalized process-phase settings (mixer rpm, conveyor "
+        "speed, air injection, ratio/index, and so on), the per-material flow-meter readings for "
+        "that batch, any production events logged against it (alarms, interventions, grade "
+        "changes), and ambient/line-speed runtime data. Quality test results and issues are "
+        "captured on separate pages but always key back to the run created here. A run doesn't "
+        "need to be framed as an experiment - that's optional and lives on the Trial / Experiment "
+        "page for runs that are a deliberate change investigation."
+    ),
+    action_text=(
+        "Start on the Production Runs tab to create the batch record (foam grade, recipe version, "
+        "machine, run date - the batch reference is generated automatically). Then work through "
+        "the other tabs for that same run: log its Setup and Finalized phase settings under "
+        "Process Phases, its metered material flows under Component Stream Readings (readings "
+        "always attach to the Finalized phase), any alarms or interventions under Production "
+        "Events, and ambient/line-speed conditions under Runtime Data. Every tab other than "
+        "Production Runs opens with the same run selector, so pick the run once and work through "
+        "its tabs in turn - manual entry and CSV/Excel bulk import are both available wherever "
+        "heavy data entry is expected."
+    ),
 )
 session = get_session()
 

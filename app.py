@@ -28,7 +28,7 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import page_setup, render_data_table
+from helpers import page_setup, render_data_table, render_function_action_intro
 from version import APP_VERSION
 
 LOGO_PATH = "assets/htc_global_logo_blue_steel.png"
@@ -87,6 +87,21 @@ def render_overview():
             "Product Dashboard | Flexible slabstock foam expert system | "
             "HTC Global Co. Ltd"
         )
+    render_function_action_intro(
+        function_text=(
+            "This is the landing dashboard: a snapshot of production run count, recurring "
+            "quality issues, quality test pass rate, and active trials/experiments across "
+            "whichever plant, product family, and foam grade you filter to, plus a table of the "
+            "most recently logged quality issues. The quick-action links below jump straight "
+            "into logging a new run, quality test result, or quality issue, or into Similar Case "
+            "Retrieval."
+        ),
+        action_text=(
+            "Filter by plant, product family, foam grade, and date range to scope the KPIs and "
+            "the recent-issues table to what you're reviewing. Use the quick-action links to jump "
+            "directly into common data-entry tasks instead of navigating the sidebar."
+        ),
+    )
 
     session = get_session()
 

@@ -24,6 +24,7 @@ from helpers import (
     page_setup,
     render_ask_pi3_section,
     render_data_table,
+    render_function_action_intro,
     render_pi3_docx_download,
     render_save_to_expert_notes_button,
 )
@@ -34,10 +35,23 @@ require_login()
 logout_button()
 
 st.title("Process-Property Correlation")
-st.caption(
-    "Ranks every recorded machine/process setting by how strongly it's associated with a "
-    "physical property outcome across this grade's production runs, so the settings worth "
-    "investigating surface first."
+render_function_action_intro(
+    function_text=(
+        "Cross-references every Finalized-phase machine/process setting (mixer rpm, ratio/index, "
+        "air pressure, conveyor speed, and so on) against a chosen physical property outcome, "
+        "across the same production runs at once, ranked by correlation strength - so you see "
+        "which settings actually move that property's outcome without checking each one "
+        "individually against a scatter plot. PI3 can then synthesize the ranked pattern into a "
+        "plain-language read for the technical team."
+    ),
+    action_text=(
+        "Pick the foam grade and the property you want to explain, then read down the ranked "
+        "table - the setting at the top has the strongest statistical association with that "
+        "outcome across this grade's recorded runs. Treat it as a lead to investigate, not a "
+        "cause on its own: review it against current raw materials and process conditions before "
+        "treating it as causal. Use 'Ask PI3' if you want the ranked pattern turned into a "
+        "plain-language interpretation."
+    ),
 )
 session = get_session()
 

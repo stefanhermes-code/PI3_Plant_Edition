@@ -12,7 +12,7 @@ import streamlit as st
 
 from db import APPROVAL_STATUSES, ApprovalRecord, TrialRecord, get_session, init_db
 from auth import current_user, logout_button, require_login
-from helpers import clickable_table, delete_with_confirm, page_setup
+from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
 
 page_setup("Approval & Review")
 init_db()
@@ -20,6 +20,20 @@ require_login()
 logout_button()
 
 st.title("Approval and Review")
+render_function_action_intro(
+    function_text=(
+        "This is the only screen where a trial can be moved to 'Closed' - it enforces that a "
+        "trial cannot close until its conclusion, reuse recommendation, reviewed-by, approved-by, "
+        "and date-closed are all on record, so a formal sign-off always exists before a trial's "
+        "findings are treated as final."
+    ),
+    action_text=(
+        "Select a trial that's Open or Pending Closure, check its objective, conclusion, and "
+        "reuse recommendation (written on the Adjustment & Conclusion page), and record the "
+        "reviewer and approver names to close it. If any closeout field is still missing, finish "
+        "it there first - this screen will keep the trial open until every field is complete."
+    ),
+)
 session = get_session()
 user = current_user()
 

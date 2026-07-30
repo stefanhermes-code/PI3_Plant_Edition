@@ -35,6 +35,7 @@ from helpers import (
     next_version_label,
     page_setup,
     render_data_table,
+    render_function_action_intro,
     set_pending_banner,
     show_pending_banner,
 )
@@ -51,11 +52,25 @@ require_login()
 logout_button()
 
 st.title("Recipe Version Record")
-st.caption(
-    "Each foam grade has one active recipe at a time. Use 'Create Recipe' to start a brand new "
-    "formulation, or 'Edit Recipe' to revise the current one - saving automatically records it "
-    "as a new version and retires the one it replaces, so the full formulation history stays "
-    "intact without you having to manage versions by hand."
+render_function_action_intro(
+    function_text=(
+        "Maintains the formulation history for each foam grade: the raw-material list with php "
+        "dosage, supplier, and role for the currently active recipe, plus every retired version "
+        "before it with who approved it and when. A foam grade has exactly one active recipe in "
+        "production at a time - a new version replaces it rather than running alongside it - so "
+        "this is the single source of truth Recipe Optimization, cost, and correlation pages all "
+        "read from."
+    ),
+    action_text=(
+        "Use 'Create Recipe' to start a brand-new formulation for a foam grade that doesn't have "
+        "one yet, or 'Edit Recipe' to revise the currently active one - saving automatically "
+        "records it as a new version and retires the one it replaces, so you don't have to manage "
+        "version numbers or active flags by hand. Add raw materials to a recipe by name (typing a "
+        "new one creates it in Raw Materials automatically) with its php and role in the "
+        "formulation, or import a full component list via CSV/Excel for bulk loading. Older "
+        "versions, their ingredient lists, and approval status stay available further down for "
+        "audit."
+    ),
 )
 session = get_session()
 

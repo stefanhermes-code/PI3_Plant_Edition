@@ -31,6 +31,7 @@ from helpers import (
     expert_note_link_label,
     expert_note_plant_id_for_link,
     page_setup,
+    render_function_action_intro,
 )
 
 page_setup("Expert Notes")
@@ -39,12 +40,24 @@ require_login()
 logout_button()
 
 st.title("Expert Notes")
-st.caption(
-    "Qualitative knowledge that doesn't fit a structured field - a hunch about why a "
-    "batch behaved oddly, a supplier quirk, a process tip. Linked to a production run, "
-    "a trial/experiment, or a foam grade. When PI3 connectivity is enabled for the "
-    "relevant plant, saving a note here also feeds PI3 so Similar Case Retrieval and "
-    "the Root-Cause Assistant can find it later."
+render_function_action_intro(
+    function_text=(
+        "Captures qualitative expert knowledge that doesn't fit a structured field - a hunch "
+        "about why a batch behaved oddly, a supplier quirk, a process tip - linked to a "
+        "production run, a trial/experiment, or a foam grade. It also shows the PI3-sourced notes "
+        "a reviewer chose to keep from Recipe Optimization, Trend Analysis, Process-Property "
+        "Correlation, or Root-Cause Assistant, each tagged with its originating question and "
+        "re-exportable as the same Word report the reviewer originally saw. When PI3 connectivity "
+        "is enabled for the relevant plant, a note saved here also feeds PI3 so future Similar "
+        "Case Retrieval searches and Root-Cause Assistant comparisons can retrieve it."
+    ),
+    action_text=(
+        "Pick what the note is about (a production run, trial, or foam grade), write it, set a "
+        "confidence level, and save - there's no other structured field to fill in, so use this "
+        "for anything worth remembering that the rest of the app has no place for. Click a "
+        "PI3-sourced note to re-download its original Word report, or edit/delete any note the "
+        "same way as elsewhere in the app."
+    ),
 )
 session = get_session()
 user = current_user()

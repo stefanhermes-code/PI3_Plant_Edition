@@ -12,7 +12,7 @@ import streamlit as st
 
 from db import INSTALLATION_TYPES, MaintenanceLicenseRecord, Plant, get_session, init_db
 from auth import logout_button, require_login, require_role
-from helpers import clickable_table, delete_with_confirm, page_setup
+from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
 
 page_setup("Maintenance & License Admin")
 init_db()
@@ -21,6 +21,20 @@ logout_button()
 require_role("admin")
 
 st.title("Maintenance & License Admin")
+render_function_action_intro(
+    function_text=(
+        "Tracks each plant's commercial licensing record - deployment tier, license/setup value, "
+        "annual maintenance percentage (18% by default) and its computed value, and renewal date "
+        "- so license and maintenance status per installation is on record here rather than "
+        "scattered across contracts and inboxes."
+    ),
+    action_text=(
+        "Add or update a plant's commercial record with its deployment tier, license value, and "
+        "maintenance percentage - edit the 18% default if this plant's contract differs; the "
+        "annual maintenance value is calculated for you. Click a row to edit or delete a record, "
+        "and track the renewal dates here ahead of upcoming license conversations."
+    ),
+)
 session = get_session()
 
 plants = session.query(Plant).all()

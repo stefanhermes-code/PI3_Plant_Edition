@@ -19,6 +19,7 @@ from helpers import (
     page_setup,
     parse_bool,
     render_data_table,
+    render_function_action_intro,
     set_pending_banner,
     show_pending_banner,
 )
@@ -95,10 +96,22 @@ require_login()
 logout_button()
 
 st.title("Raw Materials")
-st.caption(
-    "Master list of raw materials used across recipes (polyols, isocyanates, catalysts, "
-    "surfactants, additives, ...). Recipe components pick from this list, or add a new "
-    "material inline if it isn't here yet."
+render_function_action_intro(
+    function_text=(
+        "Maintains the master list of raw materials used across every recipe - polyols, "
+        "isocyanates, catalysts, surfactants, additives, and so on - each with its category, "
+        "default supplier, and cost per kg. Recipe components pick from this list rather than "
+        "free-typing the same material name and supplier into every recipe, and the cost per kg "
+        "recorded here is what Recipe Optimization uses to price out a formulation."
+    ),
+    action_text=(
+        "Add a material manually, or upload a supplier's technical data sheet (TDS) under 'Add "
+        "from TDS' to prefill its fields instead of retyping them - an SDS is optional and only "
+        "adds handling/hazard notes. Use CSV/Excel import to bulk-load a material list from an "
+        "ERP or supplier export. Set cost per kg on each material so Recipe Optimization can "
+        "price formulations completely, and keep the Suppliers tab curated so the same supplier "
+        "doesn't end up entered twice under slightly different spellings."
+    ),
 )
 session = get_session()
 

@@ -11,7 +11,13 @@ import streamlit as st
 
 from db import CONFIDENCE_LEVELS, AdjustmentConclusion, TrialRecord, get_session, init_db
 from auth import logout_button, require_login
-from helpers import clickable_table, confidence_badge, delete_with_confirm, page_setup
+from helpers import (
+    clickable_table,
+    confidence_badge,
+    delete_with_confirm,
+    page_setup,
+    render_function_action_intro,
+)
 
 page_setup("Adjustment & Conclusion")
 init_db()
@@ -19,6 +25,23 @@ require_login()
 logout_button()
 
 st.title("Adjustment and Conclusion History")
+render_function_action_intro(
+    function_text=(
+        "Captures the working history of an open trial: each individual adjustment tried (process "
+        "parameter, formulation or material change, its result, and a reuse recommendation), plus "
+        "the trial's overall closeout narrative - result against target, physical-property "
+        "outcome, conclusion, and a reuse recommendation for the trial as a whole. Completing the "
+        "closeout narrative moves the trial to 'Pending Closure'; it does not close the trial by "
+        "itself."
+    ),
+    action_text=(
+        "Select the open trial you're working, and log each adjustment as you try it - what was "
+        "changed, what happened, and whether it needs follow-up. Once the trial has run its "
+        "course, fill in the mandatory closeout narrative fields and save them; that moves the "
+        "trial to 'Pending Closure' only - final closure still needs review and approval on the "
+        "Approval & Review page."
+    ),
+)
 session = get_session()
 
 trials = session.query(TrialRecord).filter(TrialRecord.status != "Closed").order_by(TrialRecord.created_at.desc()).all()

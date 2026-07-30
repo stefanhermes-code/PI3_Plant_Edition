@@ -5,7 +5,7 @@ import streamlit as st
 from auth import current_user, logout_button, require_login
 from cascades import delete_plant_cascade, plant_dependency_counts
 from db import MACHINE_OEMS, Machine, Plant, ProductionRun, get_session, init_db
-from helpers import clickable_table, delete_with_confirm, page_setup
+from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
 
 page_setup("Plant & Foam Equipment Overview")
 init_db()
@@ -13,6 +13,23 @@ require_login()
 logout_button()
 
 st.title("Plant & Foam Equipment Overview")
+render_function_action_intro(
+    function_text=(
+        "This is where you set up and maintain the plants and foaming lines that every recipe, "
+        "production run, and quality result in the system is ultimately traced back to. It "
+        "records each plant's name, code, and location, and each machine's OEM, model, and "
+        "active status, and shows at a glance how many product families and machines sit under "
+        "each plant."
+    ),
+    action_text=(
+        "Add a plant before adding anything else under it, since product families, recipes, and "
+        "production runs all key off it eventually. Then add each foaming line/machine at that "
+        "plant with its OEM and model so it can be selected when a production run is logged. "
+        "Click a row in either table to edit or delete it - deleting a plant permanently removes "
+        "everything recorded under it (the count is shown before you confirm), while deleting a "
+        "machine only unlinks it from any production runs that reference it."
+    ),
+)
 session = get_session()
 user = current_user()
 

@@ -36,6 +36,7 @@ from helpers import (
     page_setup,
     render_ask_pi3_section,
     render_data_table,
+    render_function_action_intro,
     render_pi3_docx_download,
     render_save_to_expert_notes_button,
 )
@@ -46,11 +47,26 @@ require_login()
 logout_button()
 
 st.title("Trend Analysis")
-st.caption(
-    "A deeper look at one quality property over a foam grade's production history than a plain "
-    "line chart: automatically flags sudden changes, checks how much margin there is to spec, "
-    "catches a slow drift building up over time, and tests whether an apparent trend is real or "
-    "just normal run-to-run variation."
+render_function_action_intro(
+    function_text=(
+        "Runs the standard SPC toolkit against one quality property's history for a foam grade: "
+        "an individuals control chart with real control limits (catches a sudden shift), process "
+        "capability (Cpk) against that property's own tolerance band (catches 'in control but too "
+        "close to spec'), a CUSUM chart (catches a slow drift a control chart is bad at catching "
+        "early - pump wear, catalyst degradation, an off-spec raw-material lot), and a formal "
+        "trend test (replaces an eyeballed first-half-vs-second-half comparison with an actual "
+        "significance test). PI3 is used only after these numbers exist, to help interpret a real "
+        "flag against recipe changes, machine changes, and quality-issue history - never to guess "
+        "whether a trend exists in the first place."
+    ),
+    action_text=(
+        "Pick the foam grade and the property you want to track (density, hardness/IFD, tensile, "
+        "and so on). Read the control chart first for sudden shifts, then capability for how much "
+        "margin there is to spec, then CUSUM for a slower drift the control chart might miss, and "
+        "the trend test to confirm whether an apparent trend is statistically real. If something "
+        "flags, use 'Ask PI3' to get it interpreted against this grade's recipe changes, machine "
+        "changes, and quality-issue history before acting on it."
+    ),
 )
 session = get_session()
 

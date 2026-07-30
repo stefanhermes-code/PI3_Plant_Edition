@@ -13,7 +13,13 @@ import ai_assistant
 from analytics import PHASE_SETTING_LABELS, run_settings_dataframe
 from auth import logout_button, require_login
 from db import QualityObservation, get_session, init_db
-from helpers import page_setup, render_ask_pi3_section, render_pi3_docx_download, render_save_to_expert_notes_button
+from helpers import (
+    page_setup,
+    render_ask_pi3_section,
+    render_function_action_intro,
+    render_pi3_docx_download,
+    render_save_to_expert_notes_button,
+)
 
 page_setup("Root-Cause Assistant")
 init_db()
@@ -21,10 +27,20 @@ require_login()
 logout_button()
 
 st.title("Root-Cause Assistant")
-st.caption(
-    "Compares the flagged run against the most recent prior run of the same foam grade, and "
-    "lists what was different - recipe version, machine, or process settings - as a starting "
-    "point for the reviewer's own investigation."
+render_function_action_intro(
+    function_text=(
+        "Given a logged quality issue, compares that run against the most recent prior run of the "
+        "same foam grade and lists what was different - recipe version, machine, or Finalized-"
+        "phase process settings (mixer rpm, ratio/index, air pressure, and so on) - as a starting "
+        "point for your own investigation, not a diagnosis. PI3 can then help interpret that diff "
+        "against expert notes and similar past cases."
+    ),
+    action_text=(
+        "Select the quality issue you're investigating, review the run-vs-prior-run diff shown, "
+        "and check whether any of the flagged differences line up with a plausible cause. Use "
+        "'Ask PI3' if you want that diff interpreted alongside historical expert notes and "
+        "similar past cases before you commit to a root cause."
+    ),
 )
 session = get_session()
 

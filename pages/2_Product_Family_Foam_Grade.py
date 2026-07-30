@@ -18,6 +18,7 @@ from helpers import (
     delete_with_confirm,
     page_setup,
     render_data_table,
+    render_function_action_intro,
     set_pending_banner,
     show_pending_banner,
 )
@@ -31,6 +32,24 @@ require_login()
 logout_button()
 
 st.title("Product Family & Foam Grade Profile")
+render_function_action_intro(
+    function_text=(
+        "This page organizes your product catalog on two levels: product families (a market "
+        "segment or application grouping under a plant, e.g. mattress comfort layer) and the "
+        "individual foam grades within each family, each carrying its own target density, target "
+        "hardness, and quality specification. Every recipe version, production run, and quality "
+        "result recorded downstream is tied to one of these foam grades, so this is where a new "
+        "grade starts its life in the system."
+    ),
+    action_text=(
+        "Add a product family under the right plant first, then add each foam grade under it one "
+        "at a time, or bring in a batch through the CSV/Excel import tab if you're loading many "
+        "grades at once. Set target density and hardness on each grade so the Industrial "
+        "Intelligence pages have a target to compare actual results against. Click a row in "
+        "either table to edit or delete it - deleting a product family or foam grade cascades to "
+        "everything recorded under it, with the count shown before you confirm."
+    ),
+)
 session = get_session()
 
 plants = session.query(Plant).all()

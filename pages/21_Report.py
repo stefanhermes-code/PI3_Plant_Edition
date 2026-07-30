@@ -19,7 +19,7 @@ import streamlit as st
 
 from auth import logout_button, require_login
 from db import FoamGrade, Plant, ProductFamily, ProductionRun, TrialRecord, get_session, init_db
-from helpers import page_setup, render_data_table
+from helpers import page_setup, render_data_table, render_function_action_intro
 import reports
 
 page_setup("Report")
@@ -28,9 +28,20 @@ require_login()
 logout_button()
 
 st.title("Report")
-st.caption(
-    "Generate a report for a single production run, a plant/period summary, or a closed "
-    "trial's formal writeup. Preview it here, then download as PDF or Excel."
+render_function_action_intro(
+    function_text=(
+        "Generates three standard report types - a single production run's full record, a "
+        "plant/period summary, or a closed trial's formal writeup - each with an in-app preview "
+        "plus PDF and Excel download. Every logged-in user can generate these; it's not gated "
+        "behind PI3 connectivity."
+    ),
+    action_text=(
+        "Pick the tab for the report you need, select the run, plant/period, or trial it should "
+        "cover, and preview it before downloading. Use the Production Run Report to hand a "
+        "single batch's full record to someone outside the app, the Plant/Period Summary for a "
+        "broader review across a date range, and the Trial Closeout Report once a trial is "
+        "formally closed."
+    ),
 )
 session = get_session()
 

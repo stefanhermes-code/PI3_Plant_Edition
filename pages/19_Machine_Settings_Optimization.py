@@ -18,7 +18,7 @@ from analytics import (
 )
 from auth import logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, render_data_table
+from helpers import page_setup, render_data_table, render_function_action_intro
 
 page_setup("Machine Settings Optimization")
 init_db()
@@ -26,10 +26,20 @@ require_login()
 logout_button()
 
 st.title("Machine Settings Optimization")
-st.caption(
-    "Ranks every process setting by how clearly its low/medium/high ranges separate outcomes "
-    "closest to target from outcomes furthest from it, across a foam grade's production runs - "
-    "a starting point for your team to review, not an automatic setpoint change."
+render_function_action_intro(
+    function_text=(
+        "Ranks every Finalized-phase process setting (mixer rpm, ratio/index, air pressure, "
+        "conveyor speed, and so on) by how clearly its low/medium/high ranges separate outcomes "
+        "closest to target from outcomes furthest from it, across a foam grade's production runs "
+        "- a starting point for your team to review, not an automatic setpoint change. PI3 can "
+        "then turn the ranked pattern into a plain-language read."
+    ),
+    action_text=(
+        "Pick the foam grade and property you want to optimize toward, then read the ranked "
+        "table - the setting at the top separates good from bad outcomes most clearly and is the "
+        "one most worth reviewing on the floor. Use the PI3 synthesis further down for a "
+        "plain-language interpretation before proposing any setpoint change to your team."
+    ),
 )
 session = get_session()
 

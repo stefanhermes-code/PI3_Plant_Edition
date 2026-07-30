@@ -23,6 +23,7 @@ from helpers import (
     delete_with_confirm,
     page_setup,
     render_data_table,
+    render_function_action_intro,
     set_pending_banner,
     show_pending_banner,
 )
@@ -39,9 +40,22 @@ require_login()
 logout_button()
 
 st.title("Quality Issue")
-st.caption(
-    "Captures what was observed on a production run, building a factual, confidence-rated "
-    "history of quality issues."
+render_function_action_intro(
+    function_text=(
+        "Captures what went wrong (or was noticed) on a batch - the issue type, severity, "
+        "frequency, where in the block it showed up, suspected cause, and how confident the "
+        "report is - building a factual, confidence-rated history of quality issues per foam "
+        "grade instead of word-of-mouth. It links primarily to the production run, since routine "
+        "batches get issues logged too, not only formal trials; linking to a trial is optional, "
+        "for when the issue was found during a deliberate investigation."
+    ),
+    action_text=(
+        "Select the production run the issue was observed on, then log the issue type, severity, "
+        "frequency, location in the block, suspected cause, and your confidence level in that "
+        "assessment. Use the CSV/Excel import tab to bulk-load a batch of issues instead of "
+        "entering them one by one. Link to a trial only if this issue surfaced during a formal "
+        "trial/experiment."
+    ),
 )
 session = get_session()
 

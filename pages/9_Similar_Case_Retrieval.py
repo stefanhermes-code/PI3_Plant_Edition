@@ -23,7 +23,7 @@ from db import (
     init_db,
 )
 from auth import logout_button, require_login
-from helpers import confidence_badge, page_setup
+from helpers import confidence_badge, page_setup, render_function_action_intro
 
 page_setup("Similar Case Retrieval")
 init_db()
@@ -31,6 +31,22 @@ require_login()
 logout_button()
 
 st.title("Similar Case Retrieval — Use PI3")
+render_function_action_intro(
+    function_text=(
+        "Searches your own historical trial, quality-issue, and expert-note records for cases "
+        "similar to a current problem - by product family, foam grade, keyword, or, optionally, "
+        "PI3's semantic search over expert notes and closed-case history - so you can see what "
+        "was tried and concluded before instead of starting from scratch."
+    ),
+    action_text=(
+        "Narrow by product family and/or foam grade, type a keyword describing the issue (e.g. "
+        "shrinkage, hardness drift), and set which confidence levels to include. Turn on 'Also "
+        "use PI3' if you want semantic matches beyond exact keyword hits - it only searches "
+        "plants with PI3 connectivity enabled. Review the cases it returns against your current "
+        "raw materials, process conditions, and target properties before applying anything from "
+        "them."
+    ),
+)
 st.info(
     "This retrieves comparable historical records for your own technical review. "
     "Decisions remain with your technical team."

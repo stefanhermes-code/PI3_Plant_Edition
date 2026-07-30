@@ -25,7 +25,7 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import clickable_table, delete_with_confirm, page_setup
+from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
 
 page_setup("Trial / Experiment")
 init_db()
@@ -33,9 +33,20 @@ require_login()
 logout_button()
 
 st.title("Trial / Experiment (optional)")
-st.caption(
-    "Flag a production run as a deliberate trial or change investigation. Optional — use it "
-    "when there's a real hypothesis and a closeout/approval requirement."
+render_function_action_intro(
+    function_text=(
+        "Marks a production run as a deliberate trial or change investigation - one with a real "
+        "hypothesis, a formal closeout narrative, and a review/approval requirement - rather than "
+        "treating every batch as an experiment. Most production runs never need this; it's an "
+        "optional annotation on top of the run, not a replacement for it."
+    ),
+    action_text=(
+        "Pick the production run you're formally investigating and flag it here with its "
+        "objective and hypothesis. Once flagged, log adjustments and the closeout narrative on "
+        "the Adjustment & Conclusion page, then route it through Approval & Review to close it - "
+        "a run that isn't flagged as a trial still carries its own recipe, process settings, and "
+        "quality results without any of that."
+    ),
 )
 session = get_session()
 

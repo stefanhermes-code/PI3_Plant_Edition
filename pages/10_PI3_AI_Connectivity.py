@@ -24,7 +24,7 @@ import ai_assistant
 import pi3_query_tool
 from db import Plant, PI3AIConnectionSetting, get_session, init_db
 from auth import current_user, logout_button, require_login, require_role
-from helpers import page_setup, render_data_table
+from helpers import page_setup, render_data_table, render_function_action_intro
 
 page_setup("PI3 Connectivity")
 init_db()
@@ -32,6 +32,23 @@ require_login()
 logout_button()
 
 st.title("PI3 Connectivity")
+render_function_action_intro(
+    function_text=(
+        "Turns PI3's connected AI features - assisted interpretation, question answering, "
+        "advisory comparison, and search over your company's own historical trial and expert-note "
+        "knowledge - on or off per plant, and reports whether this deployment's credentials are "
+        "actually configured. Everything else in the app (search, compare, retrieve, structure, "
+        "report, review and approval) works without this; PI3 connectivity is a separately "
+        "billed, opt-in add-on, off by default."
+    ),
+    action_text=(
+        "If something elsewhere in the app claims PI3 isn't configured, check 'Deployment "
+        "diagnostics' first to confirm the API key and vector-store credentials are actually "
+        "visible to this deployment. Then, per plant, turn PI3 connectivity on or off using the "
+        "toggle further down - only admins can change this setting, and even with it on, every "
+        "PI3 output still requires human review before acting on it."
+    ),
+)
 st.info(
     "Standard PI3 Plant Edition (search, compare, retrieve, structure, report, review "
     "and approval) is fully available without this add-on. PI3 connectivity is "
