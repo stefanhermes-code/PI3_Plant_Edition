@@ -15,7 +15,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-from auth import logout_button, require_login
+from auth import current_user, logout_button, require_login
 from cascades import delete_recipe_version_cascade, recipe_version_dependency_counts
 from db import (
     APPROVAL_STATUSES,
@@ -73,6 +73,7 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+own_company_id = current_user()["company_id"]
 
 grades = session.query(FoamGrade).all()
 if not grades:
@@ -84,18 +85,24 @@ def _match_or_create_raw_material(name, supplier=None):
     """Look up a RawMaterial by name (case-insensitive); create one if it
     doesn't exist yet, so anything typed as a "new" material during recipe
     entry becomes available in the master list (and future dropdowns)
-    immediately, not just a one-off string on this one component."""
+    immediately, not just a one-off string on this one component.
+
+    Scoped to the current user's own company - without this, a case-
+    insensitive name match could silently link a recipe component to a
+    different company's raw material row (and its cost_per_kg), which
+    would leak proprietary data across the tenant boundary."""
     name = (name or "").strip()
     if not name:
         return None
-    match = (
-        session.query(RawMaterial)
-        .filter(RawMaterial.name.ilike(name))
-        .first()
-    )
+    match_query = session.query(RawMaterial).filter(RawMaterial.name.ilike(name))
+    if own_company_id is not None:
+        match_query = match_query.filter(RawMaterial.company_id == own_company_id)
+    match = match_query.first()
     if match:
         return match
-    new_rm = RawMaterial(name=name, category="Other", default_supplier=supplier or "", active=True)
+    new_rm = RawMaterial(
+        company_id=own_company_id, name=name, category="Other", default_supplier=supplier or "", active=True
+    )
     session.add(new_rm)
     session.flush()
     return new_rm

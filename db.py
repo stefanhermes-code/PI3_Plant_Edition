@@ -26,6 +26,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
@@ -146,12 +147,109 @@ ZONE_LABELS = ["Top", "Middle", "Bottom"]
 
 
 # ---------------------------------------------------------------------------
+# 0. subscription_types / companies / roles / role_page_permissions / users
+#
+# Multi-tenant access control. A Company is the tenant boundary: it owns a
+# subscription (which caps user/plant counts and gates whole feature areas)
+# and its own users. Data isolation is "shared database, company_id column"
+# rather than one database per customer - plants, raw_materials, and
+# suppliers each carry a company_id (everything else already hangs off
+# plant_id through the existing hierarchy, so scoping the plant list per
+# company scopes everything under it).
+#
+# Roles are a real table, not a hardcoded list, so a company can define its
+# own custom roles beyond the three built-in ones (admin/technical/viewer,
+# company_id NULL - available to every company, protected from deletion via
+# is_builtin). Per-role page visibility is a DENY list, not an allow list:
+# a role with no RolePagePermission rows sees every page (matches today's
+# behavior for the three built-in roles without needing to seed hundreds of
+# rows) - add an explicit can_view=False row to hide a specific page from a
+# role. This does not yet control add/edit/delete ability within a page
+# beyond what the three built-in role names already imply via
+# require_role() calls - that finer-grained enforcement is a later phase.
+# ---------------------------------------------------------------------------
+class SubscriptionType(Base):
+    __tablename__ = "subscription_types"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False, unique=True)
+    max_users = Column(Integer)  # NULL = unlimited
+    max_plants = Column(Integer)  # NULL = unlimited
+    industrial_intelligence_enabled = Column(Boolean, default=True)  # Recipe Optimization, Trend Analysis, ...
+    pi3_ai_enabled = Column(Boolean, default=True)  # PI3 Connectivity page + PI3/AI features app-wide
+    reports_enabled = Column(Boolean, default=True)  # Report page
+    price_note = Column(String(200))  # free text (e.g. "$500/mo") - no payment processing wired up
+    active = Column(Boolean, default=True)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+
+class Company(Base):
+    __tablename__ = "companies"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    subscription_type_id = Column(Integer, ForeignKey("subscription_types.id"))
+    # True only for HTC itself: grants cross-company superadmin scope (see
+    # every company, manage subscription types/companies, unrestricted by
+    # any single company's plant/user limits).
+    is_platform_owner = Column(Boolean, default=False)
+    contact_name = Column(String(200))
+    contact_email = Column(String(200))
+    active = Column(Boolean, default=True)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    subscription_type = relationship("SubscriptionType")
+
+
+class Role(Base):
+    __tablename__ = "roles"
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id"))  # NULL = built-in, available to every company
+    name = Column(String(100), nullable=False)
+    description = Column(Text)
+    is_builtin = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+
+class RolePagePermission(Base):
+    __tablename__ = "role_page_permissions"
+
+    id = Column(Integer, primary_key=True)
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
+    page_key = Column(String(100), nullable=False)  # see access_control.PAGE_CATALOG
+    can_view = Column(Boolean, default=False)  # a row only ever exists to DENY; see module docstring above
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    username = Column(String(100), nullable=False, unique=True)
+    password_hash = Column(String(255), nullable=False)
+    display_name = Column(String(200))
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
+    active = Column(Boolean, default=True)
+    valid_from = Column(Date)  # NULL = no start restriction
+    valid_until = Column(Date)  # NULL = indefinite
+    last_login_at = Column(DateTime)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    company = relationship("Company")
+    role = relationship("Role")
+
+
+# ---------------------------------------------------------------------------
 # 1. plants
 # ---------------------------------------------------------------------------
 class Plant(Base):
     __tablename__ = "plants"
 
     id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id"))
     name = Column(String(200), nullable=False)
     plant_code = Column(String(50))
     location = Column(String(200))
@@ -159,6 +257,7 @@ class Plant(Base):
     notes = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
+    company = relationship("Company")
     product_families = relationship("ProductFamily", back_populates="plant")
     maintenance_records = relationship("MaintenanceLicenseRecord", back_populates="plant")
     pi3_ai_settings = relationship("PI3AIConnectionSetting", back_populates="plant")
@@ -305,12 +404,18 @@ class RecipeVersion(Base):
 # ---------------------------------------------------------------------------
 class Supplier(Base):
     __tablename__ = "suppliers"
+    # Uniqueness is scoped per company, not global - two different customer
+    # companies can each have their own "BASF" entry without colliding.
+    __table_args__ = (UniqueConstraint("company_id", "name", name="uq_supplier_company_name"),)
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(200), nullable=False, unique=True)
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    name = Column(String(200), nullable=False)
     notes = Column(Text)
     active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    company = relationship("Company")
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +437,7 @@ class RawMaterial(Base):
     __tablename__ = "raw_materials"
 
     id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id"))
     name = Column(String(200), nullable=False)
     category = Column(String(100))
     default_supplier = Column(String(200))
@@ -339,6 +445,8 @@ class RawMaterial(Base):
     notes = Column(Text)
     active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    company = relationship("Company")
 
 
 # ---------------------------------------------------------------------------

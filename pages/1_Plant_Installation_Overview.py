@@ -4,7 +4,7 @@ import streamlit as st
 
 from auth import current_user, logout_button, require_login
 from cascades import delete_plant_cascade, plant_dependency_counts
-from db import MACHINE_OEMS, Machine, Plant, ProductionRun, get_session, init_db
+from db import MACHINE_OEMS, Company, Machine, Plant, ProductionRun, get_session, init_db
 from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
 
 page_setup("Plant & Foam Equipment Overview")
@@ -32,19 +32,67 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+is_platform_owner = user["is_platform_owner"]
+own_company_id = user["company_id"]
+
+all_companies = session.query(Company).order_by(Company.name).all()
+if is_platform_owner:
+    company_options = [None] + all_companies
+    company_filter = st.selectbox(
+        "Company", company_options,
+        format_func=lambda c: "All companies" if c is None else c.name,
+        key="plant_company_filter",
+    )
+else:
+    company_filter = next((c for c in all_companies if c.id == own_company_id), None)
+    if not company_filter:
+        st.warning("Your account isn't linked to a company yet - contact the platform administrator.")
+        st.stop()
+
+subscription = company_filter.subscription_type if company_filter else None
+max_plants = subscription.max_plants if subscription else None
+plant_count_for_company = (
+    session.query(Plant).filter(Plant.company_id == company_filter.id).count() if company_filter else None
+)
+limit_reached = (
+    company_filter is not None and max_plants is not None and plant_count_for_company >= max_plants
+)
 
 with st.expander("Add plant", expanded=False):
+    if limit_reached:
+        st.warning(
+            f"{company_filter.name} is at its subscription's plant limit ({max_plants} plants). "
+            "Upgrade the subscription or remove an unused plant before adding another."
+        )
     with st.form("add_plant"):
+        if is_platform_owner:
+            plant_company = st.selectbox(
+                "Company *", all_companies, format_func=lambda c: c.name,
+                index=(all_companies.index(company_filter) if company_filter in all_companies else 0),
+            )
+        else:
+            plant_company = company_filter
+            st.caption(f"Company: {plant_company.name if plant_company else '—'}")
         name = st.text_input("Plant name *")
         plant_code = st.text_input("Plant code")
         location = st.text_input("Location")
         notes = st.text_area("Notes")
-        submitted = st.form_submit_button("Save plant")
+        submitted = st.form_submit_button("Save plant", disabled=limit_reached and not is_platform_owner)
         if submitted:
             if not name:
                 st.error("Plant name is required.")
+            elif not plant_company:
+                st.error("A company is required.")
             else:
-                session.add(Plant(name=name, plant_code=plant_code, location=location, notes=notes))
+                session.add(
+                    Plant(
+                        company_id=plant_company.id,
+                        name=name,
+                        plant_code=plant_code,
+                        location=location,
+                        notes=notes,
+                    )
+                )
                 session.commit()
                 st.success(f"Plant '{name}' added.")
                 st.rerun()
@@ -52,12 +100,16 @@ with st.expander("Add plant", expanded=False):
 st.divider()
 st.subheader("Plants")
 
-plants = session.query(Plant).all()
+plants_query = session.query(Plant)
+if company_filter is not None:
+    plants_query = plants_query.filter(Plant.company_id == company_filter.id)
+plants = plants_query.all()
 if not plants:
     st.info("No plants recorded yet.")
 else:
     plant_rows = [
         {
+            **({"Company": plant.company.name if plant.company else "—"} if is_platform_owner else {}),
             "Name": plant.name,
             "Code": plant.plant_code or "—",
             "Location": plant.location or "—",
@@ -80,6 +132,14 @@ else:
     if selected_plant:
         st.markdown(f"**Edit plant: {selected_plant.name}**")
         with st.form(f"edit_plant_{selected_plant.id}"):
+            if is_platform_owner:
+                e_company = st.selectbox(
+                    "Company *", all_companies,
+                    index=next((i for i, c in enumerate(all_companies) if c.id == selected_plant.company_id), 0),
+                    format_func=lambda c: c.name, key=f"edit_plant_company_{selected_plant.id}",
+                )
+            else:
+                e_company = company_filter
             e_name = st.text_input("Plant name *", value=selected_plant.name, key=f"edit_plant_name_{selected_plant.id}")
             e_code = st.text_input("Plant code", value=selected_plant.plant_code or "", key=f"edit_plant_code_{selected_plant.id}")
             e_location = st.text_input("Location", value=selected_plant.location or "", key=f"edit_plant_loc_{selected_plant.id}")
@@ -88,6 +148,7 @@ else:
                 if not e_name.strip():
                     st.error("Plant name is required.")
                 else:
+                    selected_plant.company_id = e_company.id if e_company else selected_plant.company_id
                     selected_plant.name = e_name.strip()
                     selected_plant.plant_code = e_code
                     selected_plant.location = e_location

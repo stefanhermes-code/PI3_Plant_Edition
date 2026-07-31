@@ -15,8 +15,10 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
+from access_control import denied_page_keys, page_visible
 from auth import current_user, logout_button, require_login
 from db import (
+    Company,
     FoamGrade,
     PhysicalPropertyResult,
     Plant,
@@ -188,33 +190,43 @@ def render_overview():
     st.divider()
 
     # --- Action buttons ------------------------------------------------------
+    # Each quick action links to a page that can itself be hidden by a role's
+    # page permissions or a subscription's feature flags (see access_control's
+    # _visible(), computed at module level once nav is built below) -
+    # st.page_link() raises if the target isn't among the pages passed to
+    # st.navigation(), so only show a quick action when its page is visible.
     st.subheader("Quick actions")
-    a1, a2, a3, a4 = st.columns(4)
-    a1.page_link("pages/4_Production_Run_Trial_Record.py", label="Add a production run", icon="➕")
-    a2.page_link("pages/5_Physical_Property_Result.py", label="Record a quality test result", icon="📏")
-    a3.page_link("pages/6_Quality_Observation.py", label="Add a quality issue", icon="📋")
-    a4.page_link("pages/9_Similar_Case_Retrieval.py", label="Find similar historical cases", icon="🔎")
+    quick_actions = [
+        ("pages/4_Production_Run_Trial_Record.py", "Add a production run", "➕", "production_run"),
+        ("pages/5_Physical_Property_Result.py", "Record a quality test result", "📏", "quality_test_result"),
+        ("pages/6_Quality_Observation.py", "Add a quality issue", "📋", "quality_issue"),
+        ("pages/9_Similar_Case_Retrieval.py", "Find similar historical cases", "🔎", "similar_case_retrieval"),
+    ]
+    visible_actions = [a for a in quick_actions if _visible(a[3])]
+    if visible_actions:
+        for col, (page_path, label, icon, _key) in zip(st.columns(len(visible_actions)), visible_actions):
+            col.page_link(page_path, label=label, icon=icon)
 
 overview_page = st.Page(render_overview, title="Overview", icon="🏠", default=True)
 report_page = st.Page("pages/21_Report.py", title="Report", icon="🖨️")
 
 setup_pages = [
-    st.Page("pages/1_Plant_Installation_Overview.py", title="Plant & Foam Equipment Overview", icon="🏭"),
-    st.Page("pages/2_Product_Family_Foam_Grade.py", title="Product Family & Foam Grade", icon="🧬"),
-    st.Page("pages/14_Raw_Materials.py", title="Raw Materials", icon="🧴"),
-    st.Page("pages/3_Recipe_Version_Record.py", title="Recipes", icon="📋"),
+    ("plant_overview", st.Page("pages/1_Plant_Installation_Overview.py", title="Plant & Foam Equipment Overview", icon="🏭")),
+    ("product_family_foam_grade", st.Page("pages/2_Product_Family_Foam_Grade.py", title="Product Family & Foam Grade", icon="🧬")),
+    ("raw_materials", st.Page("pages/14_Raw_Materials.py", title="Raw Materials", icon="🧴")),
+    ("recipes", st.Page("pages/3_Recipe_Version_Record.py", title="Recipes", icon="📋")),
 ]
 
 production_pages = [
-    st.Page("pages/4_Production_Run_Trial_Record.py", title="Production Run", icon="⚙️"),
-    st.Page("pages/5_Physical_Property_Result.py", title="Quality Test Result", icon="📏"),
-    st.Page("pages/6_Quality_Observation.py", title="Quality Issue", icon="🔍"),
+    ("production_run", st.Page("pages/4_Production_Run_Trial_Record.py", title="Production Run", icon="⚙️")),
+    ("quality_test_result", st.Page("pages/5_Physical_Property_Result.py", title="Quality Test Result", icon="📏")),
+    ("quality_issue", st.Page("pages/6_Quality_Observation.py", title="Quality Issue", icon="🔍")),
 ]
 
 experiment_pages = [
-    st.Page("pages/13_Trial_Experiment.py", title="Trial / Experiment", icon="🧫"),
-    st.Page("pages/7_Adjustment_Conclusion.py", title="Adjustment & Conclusion", icon="🛠️"),
-    st.Page("pages/8_Approval_Review.py", title="Approval & Review", icon="✅"),
+    ("trial_experiment", st.Page("pages/13_Trial_Experiment.py", title="Trial / Experiment", icon="🧫")),
+    ("adjustment_conclusion", st.Page("pages/7_Adjustment_Conclusion.py", title="Adjustment & Conclusion", icon="🛠️")),
+    ("approval_review", st.Page("pages/8_Approval_Review.py", title="Approval & Review", icon="✅")),
 ]
 
 # The value of PI3 Plant Edition is the join that already exists in the
@@ -222,32 +234,79 @@ experiment_pages = [
 # results all keyed to the same production run. These pages are that join
 # put to work - named after what they actually do, not branded as "AI".
 industrial_intelligence_pages = [
-    st.Page("pages/15_Recipe_Optimization.py", title="Recipe Optimization", icon="🧪"),
-    st.Page("pages/16_Trend_Analysis.py", title="Trend Analysis", icon="📈"),
-    st.Page(
-        "pages/17_Process_Property_Correlation.py",
-        title="Machine Settings vs Physical Properties Correlation",
-        icon="🔗",
+    ("recipe_optimization", st.Page("pages/15_Recipe_Optimization.py", title="Recipe Optimization", icon="🧪")),
+    ("trend_analysis", st.Page("pages/16_Trend_Analysis.py", title="Trend Analysis", icon="📈")),
+    (
+        "machine_settings_correlation",
+        st.Page(
+            "pages/17_Process_Property_Correlation.py",
+            title="Machine Settings vs Physical Properties Correlation",
+            icon="🔗",
+        ),
     ),
-    st.Page("pages/18_Root_Cause_Assistant.py", title="Root-Cause Assistant", icon="🩺"),
-    st.Page("pages/19_Machine_Settings_Optimization.py", title="Machine Settings Optimization", icon="⚙️"),
-    st.Page("pages/9_Similar_Case_Retrieval.py", title="Similar Case Retrieval", icon="🧭"),
-    st.Page("pages/20_Expert_Notes.py", title="Expert Notes", icon="🧠"),
+    ("root_cause_assistant", st.Page("pages/18_Root_Cause_Assistant.py", title="Root-Cause Assistant", icon="🩺")),
+    ("machine_settings_optimization", st.Page("pages/19_Machine_Settings_Optimization.py", title="Machine Settings Optimization", icon="⚙️")),
+    ("similar_case_retrieval", st.Page("pages/9_Similar_Case_Retrieval.py", title="Similar Case Retrieval", icon="🧭")),
+    ("expert_notes", st.Page("pages/20_Expert_Notes.py", title="Expert Notes", icon="🧠")),
 ]
 
 admin_pages = [
-    st.Page("pages/11_Maintenance_License_Admin.py", title="Maintenance & License Admin", icon="💳"),
-    st.Page("pages/12_Demo_Data_Admin.py", title="Demo Data Admin", icon="🗂️"),
-    st.Page("pages/10_PI3_AI_Connectivity.py", title="PI3 Connectivity", icon="🤖"),
+    ("maintenance_license_admin", st.Page("pages/11_Maintenance_License_Admin.py", title="Maintenance & License Admin", icon="💳")),
+    ("demo_data_admin", st.Page("pages/12_Demo_Data_Admin.py", title="Demo Data Admin", icon="🗂️")),
+    ("pi3_ai_connectivity", st.Page("pages/10_PI3_AI_Connectivity.py", title="PI3 Connectivity", icon="🤖")),
 ]
 
-nav_sections = {
+platform_admin_pages = [
+    ("user_accounts_admin", st.Page("pages/25_User_Accounts.py", title="User Accounts", icon="👤")),
+    ("user_roles_admin", st.Page("pages/24_User_Roles.py", title="User Roles", icon="🔑")),
+    ("companies_admin", st.Page("pages/23_Companies.py", title="Companies", icon="🏢")),
+    ("subscription_types_admin", st.Page("pages/22_Subscription_Types.py", title="Subscription Types", icon="🎟️")),
+]
+
+nav_sections_with_keys = {
     "Setup": setup_pages,
     "Production": production_pages,
     "Experiments (optional)": experiment_pages,
     "Industrial Intelligence": industrial_intelligence_pages,
     "Admin": admin_pages,
+    "Platform Admin": platform_admin_pages,
 }
+
+# Nav visibility: a fresh, unauthenticated script run has no role/company in
+# session_state yet (require_login() only populates it once a page actually
+# runs, further down) - show everything unfiltered in that case, since every
+# page still gates its own content behind require_login()/require_role().
+# Once logged in, narrow by the user's role (page_key deny-list) and their
+# company's subscription (feature flags) - see access_control.py.
+init_db()
+_nav_session = get_session()
+_is_authenticated = bool(st.session_state.get("authenticated"))
+_is_platform_owner = bool(st.session_state.get("is_platform_owner", False)) if _is_authenticated else True
+_denied_keys = denied_page_keys(_nav_session, st.session_state.get("role_id")) if _is_authenticated else set()
+_company_id = st.session_state.get("company_id") if _is_authenticated else None
+_subscription = None
+if _company_id:
+    _company = _nav_session.get(Company, _company_id)
+    _subscription = _company.subscription_type if _company else None
+
+def _visible(key):
+    return page_visible(
+        key, is_platform_owner=_is_platform_owner, subscription=_subscription, denied_keys=_denied_keys
+    )
+
+
+nav_sections = {
+    section_name: [page for key, page in pages if _visible(key)]
+    for section_name, pages in nav_sections_with_keys.items()
+}
+nav_sections = {name: pages for name, pages in nav_sections.items() if pages}
+
+# Overview is the landing dashboard, not a gated feature - always shown once
+# logged in. Report is a subscription-gated feature (reports_enabled), so it
+# goes through the same page_visible() check as everything else.
+top_pages = [overview_page]
+if _visible("report"):
+    top_pages.append(report_page)
 
 # position="hidden" turns off Streamlit's built-in nav widget so we can draw
 # our own sidebar from scratch below. This is the only reliable way to get
@@ -255,7 +314,7 @@ nav_sections = {
 # always renders its automatic nav menu first, before any other sidebar
 # content, regardless of where in the script that content is written.
 pg = st.navigation(
-    {"PI3 Plant Edition": [overview_page, report_page], **nav_sections},
+    {"PI3 Plant Edition": top_pages, **nav_sections},
     position="hidden",
 )
 
@@ -267,8 +326,8 @@ with st.sidebar:
         st.caption(f"v{APP_VERSION}")
     st.divider()
 
-    st.page_link(overview_page)
-    st.page_link(report_page)
+    for page in top_pages:
+        st.page_link(page)
     for section_name, pages in nav_sections.items():
         st.caption(section_name)
         for page in pages:

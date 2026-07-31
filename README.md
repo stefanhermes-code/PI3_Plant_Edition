@@ -14,8 +14,14 @@ autonomous formulation optimization.
 
 - `app.py` — Dashboard (Screen 1, entry point)
 - `pages/` — the remaining 11 screens (see below)
-- `db.py` — SQLAlchemy models for the 16 v0.1 entities
-- `auth.py` — simple role-gated login (admin / technical / viewer)
+- `db.py` — SQLAlchemy models for the 16 v0.1 entities, plus the multi-
+  tenant layer (`Company`, `SubscriptionType`, `Role`, `RolePagePermission`,
+  `User`)
+- `auth.py` — database-backed login (hashed passwords, per-user validity
+  window), falling back to `secrets.toml` only on a fresh/unmigrated
+  deployment with no `users` rows yet
+- `access_control.py` — shared page-visibility rules: which pages a role
+  can see, and which a company's subscription gates
 - `helpers.py` — shared UI helpers, advisory disclaimer text
 - `demo_data.py` — seeds the internal demonstration case (no real client data)
 
@@ -34,6 +40,10 @@ autonomous formulation optimization.
 11. PI3/AI Connectivity (placeholder, disabled by default)
 12. Maintenance & License Admin
 13. Demo Data Admin (utility, not one of the 12 core screens)
+14. User Accounts (platform admin: manage a company's users)
+15. User Roles (platform admin: built-in + custom roles, page-visibility)
+16. Companies (platform-owner only: the tenant boundary)
+17. Subscription Types (platform-owner only: commercial tiers, limits/features)
 
 ## The one rule that can't be bypassed
 
@@ -82,12 +92,23 @@ git push -u origin main
 3. Deploy. The app will create all tables automatically on first load
    (`init_db()` runs on every page).
 
-### 4. Users and roles
+### 4. Users, companies, and subscriptions
 
-Edit the `[users.<name>]` blocks in Secrets to set real usernames,
-passwords, and roles (`admin`, `technical`, or `viewer`). This is a simple
-internal login, not full SSO/identity management — adequate for a small
-technical team prototype, not for a public-facing deployment.
+User accounts are database-backed (hashed passwords, optional validity
+window), not config-file entries. On a fresh deployment with no rows yet in
+the `users` table, the `[users.<name>]` blocks in Secrets still work as a
+bootstrap fallback so you can log in once and create real accounts.
+
+To set up a new customer company: log in as the platform owner (HTC) and
+use **Companies** to add the tenant, **Subscription Types** to assign it a
+commercial tier (user/plant limits, feature flags), and **User Accounts**
+to create its first admin user. That company's own admin can then manage
+their own users and any custom roles (**User Roles**) without seeing other
+companies' data — plants, raw materials, and suppliers are scoped by
+`company_id`; recipe/production/quality data inherits that scoping through
+the plant it's keyed to. This is still not full SSO/identity management —
+adequate for direct commercial deployment to a handful of customers, not
+for enterprise identity federation.
 
 ### 5. Load demo data
 
@@ -150,7 +171,15 @@ stale-process scenario versus an actual code bug.
 ## What v0.1 deliberately does not do
 
 No ERP integration, no live machine connection, no autonomous formulation
-optimization, no full multi-tenant SaaS, no complex billing engine, no
-customer complaint platform. "Similar Case Retrieval" never issues
+optimization, no complex billing engine (subscription tiers enforce
+user/plant limits and feature flags, but there's no payment processing),
+no customer complaint platform. "Similar Case Retrieval" never issues
 formulation instructions — it surfaces historical records for human
 review only.
+
+Multi-tenancy is "shared database, `company_id` column," not a database
+per customer. Plants, raw materials, and suppliers are scoped by company
+today; the remaining operational pages (production runs, quality results,
+recipes, etc.) inherit that scoping through the plant/recipe hierarchy
+they're keyed to, but don't yet filter independently by company - a
+retrofit pass for those is tracked as future work.

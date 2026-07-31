@@ -10,8 +10,8 @@ import pandas as pd
 import streamlit as st
 
 import ai_assistant
-from auth import logout_button, require_login
-from db import RAW_MATERIAL_CATEGORIES, RawMaterial, RecipeComponent, Supplier, get_session, init_db
+from auth import current_user, logout_button, require_login
+from db import RAW_MATERIAL_CATEGORIES, Company, RawMaterial, RecipeComponent, Supplier, get_session, init_db
 from helpers import (
     clickable_table,
     csv_excel_uploader,
@@ -41,14 +41,16 @@ def _extract_pdf_text(uploaded_file):
 _ADD_NEW_SUPPLIER = "+ Add new supplier..."
 
 
-def _supplier_names(session, include_inactive=False):
+def _supplier_names(session, company_id, include_inactive=False):
     q = session.query(Supplier)
+    if company_id is not None:
+        q = q.filter(Supplier.company_id == company_id)
     if not include_inactive:
         q = q.filter(Supplier.active == True)  # noqa: E712
     return [s.name for s in q.order_by(Supplier.name).all()]
 
 
-def _supplier_picker(session, key_prefix, current_value=None):
+def _supplier_picker(session, company_id, key_prefix, current_value=None):
     """Dropdown-with-type-new-fallback for a raw material's default supplier,
     mirroring the same pattern used elsewhere in the app for raw materials
     themselves. Deliberately rendered OUTSIDE any st.form (like the Edit
@@ -63,7 +65,7 @@ def _supplier_picker(session, key_prefix, current_value=None):
     _ensure_supplier_exists), not here, so browsing the dropdown without
     saving never creates orphan supplier rows.
     """
-    names = _supplier_names(session)
+    names = _supplier_names(session, company_id)
     options = [""] + names + [_ADD_NEW_SUPPLIER]
     if current_value and current_value not in names and current_value != "":
         # Existing free-text value that isn't in the master list yet (legacy
@@ -77,14 +79,18 @@ def _supplier_picker(session, key_prefix, current_value=None):
     return choice
 
 
-def _ensure_supplier_exists(session, name):
-    """Register a supplier name into the master list if it's new. Safe to
-    call with a blank name (no-op) or a name that already exists (no-op)."""
+def _ensure_supplier_exists(session, company_id, name):
+    """Register a supplier name into the master list (for the given company)
+    if it's new. Safe to call with a blank name (no-op) or a name that
+    already exists for that company (no-op)."""
     name = (name or "").strip()
     if not name:
         return
-    if not session.query(Supplier).filter(Supplier.name == name).first():
-        session.add(Supplier(name=name))
+    q = session.query(Supplier).filter(Supplier.name == name)
+    if company_id is not None:
+        q = q.filter(Supplier.company_id == company_id)
+    if not q.first():
+        session.add(Supplier(company_id=company_id, name=name))
 
 
 RAW_MATERIAL_REQUIRED_COLUMNS = ["name"]
@@ -114,13 +120,46 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
+is_platform_owner = user["is_platform_owner"]
+own_company_id = user["company_id"]
+
+all_companies = session.query(Company).order_by(Company.name).all()
+if is_platform_owner:
+    company_filter = st.selectbox(
+        "Company", [None] + all_companies,
+        format_func=lambda c: "All companies" if c is None else c.name,
+        key="rawmat_company_filter",
+    )
+else:
+    company_filter = next((c for c in all_companies if c.id == own_company_id), None)
+    if not company_filter:
+        st.warning("Your account isn't linked to a company yet - contact the platform administrator.")
+        st.stop()
+
+
+def _target_company(key):
+    """Company a new raw material/supplier should be created under. Locked
+    to the user's own company for non-platform-owners; for the platform
+    owner, uses the current company filter if one is picked, otherwise asks
+    which company this new record belongs to (required when viewing 'All
+    companies')."""
+    if not is_platform_owner:
+        return company_filter
+    if company_filter is not None:
+        return company_filter
+    return st.selectbox("Company *", all_companies, format_func=lambda c: c.name, key=key)
+
 
 tab_manual, tab_tds, tab_import, tab_suppliers = st.tabs(
     ["Manual entry", "Add from TDS", "CSV / Excel import", "Suppliers"]
 )
 
 with tab_manual:
-    add_supplier_choice = _supplier_picker(session, key_prefix="add_rawmat")
+    manual_target_company = _target_company("add_rawmat_company")
+    add_supplier_choice = _supplier_picker(
+        session, manual_target_company.id if manual_target_company else None, key_prefix="add_rawmat"
+    )
     with st.form("add_raw_material"):
         name = st.text_input("Raw material name *")
         c1, c3 = st.columns(2)
@@ -139,10 +178,13 @@ with tab_manual:
         if submitted:
             if not name.strip():
                 st.error("Raw material name is required.")
+            elif not manual_target_company:
+                st.error("Pick a company for this raw material.")
             else:
-                _ensure_supplier_exists(session, add_supplier_choice)
+                _ensure_supplier_exists(session, manual_target_company.id, add_supplier_choice)
                 session.add(
                     RawMaterial(
+                        company_id=manual_target_company.id,
                         name=name.strip(),
                         category=category,
                         default_supplier=add_supplier_choice,
@@ -193,7 +235,11 @@ with tab_tds:
                 )
 
     tds_extracted = st.session_state.get("tds_extracted", {})
-    t_supplier = _supplier_picker(session, key_prefix="tds_rawmat", current_value=tds_extracted.get("default_supplier", ""))
+    tds_target_company = _target_company("tds_rawmat_company")
+    t_supplier = _supplier_picker(
+        session, tds_target_company.id if tds_target_company else None,
+        key_prefix="tds_rawmat", current_value=tds_extracted.get("default_supplier", ""),
+    )
     with st.form("add_raw_material_from_tds"):
         t_name = st.text_input("Raw material name *", value=tds_extracted.get("name", ""))
         tds_category = tds_extracted.get("category", "")
@@ -214,10 +260,13 @@ with tab_tds:
         if st.form_submit_button("Save raw material (from TDS)"):
             if not t_name.strip():
                 st.error("Raw material name is required.")
+            elif not tds_target_company:
+                st.error("Pick a company for this raw material.")
             else:
-                _ensure_supplier_exists(session, t_supplier)
+                _ensure_supplier_exists(session, tds_target_company.id, t_supplier)
                 session.add(
                     RawMaterial(
+                        company_id=tds_target_company.id,
                         name=t_name.strip(),
                         category=t_category,
                         default_supplier=t_supplier,
@@ -232,10 +281,14 @@ with tab_tds:
                 st.rerun()
 
 with tab_import:
+    import_target_company = _target_company("import_rawmat_company")
     show_pending_banner("rawmat_import_msg")
     df, filename = csv_excel_uploader(RAW_MATERIAL_REQUIRED_COLUMNS, RAW_MATERIAL_OPTIONAL_COLUMNS, key="rawmat_upload")
-    if df is not None:
-        existing_names = {m.name.strip().lower() for m in session.query(RawMaterial).all()}
+    if df is not None and not import_target_company:
+        st.error("Pick a company above before importing.")
+    elif df is not None:
+        existing_query = session.query(RawMaterial).filter(RawMaterial.company_id == import_target_company.id)
+        existing_names = {m.name.strip().lower() for m in existing_query.all()}
         good_rows, dup_rows = [], []
         for _, row in df.iterrows():
             name_val = str(row.get("name", "") or "").strip()
@@ -257,9 +310,10 @@ with tab_import:
                 cat = str(row.get("category", "") or "").strip()
                 cost_val = row.get("cost_per_kg")
                 supplier_val = str(row.get("default_supplier", "") or "").strip()
-                _ensure_supplier_exists(session, supplier_val)
+                _ensure_supplier_exists(session, import_target_company.id, supplier_val)
                 session.add(
                     RawMaterial(
+                        company_id=import_target_company.id,
                         name=str(row["name"]).strip(),
                         category=cat if cat in RAW_MATERIAL_CATEGORIES else (cat or "Other"),
                         default_supplier=supplier_val,
@@ -277,27 +331,51 @@ with tab_suppliers:
         "Master list of suppliers offered in the 'Default supplier' dropdown above. Keeping this list "
         "curated avoids near-duplicate entries (e.g. 'Jiahua' vs a mistyped 'Yiahua') across raw materials."
     )
+    supplier_target_company = _target_company("add_supplier_company")
     with st.form("add_supplier"):
         new_supplier_name = st.text_input("Supplier name *")
         new_supplier_notes = st.text_area("Notes", help="Optional - e.g. the actual distributor purchases go through.")
         if st.form_submit_button("Add supplier"):
             if not new_supplier_name.strip():
                 st.error("Supplier name is required.")
-            elif session.query(Supplier).filter(Supplier.name == new_supplier_name.strip()).first():
+            elif not supplier_target_company:
+                st.error("Pick a company for this supplier.")
+            elif (
+                session.query(Supplier)
+                .filter(Supplier.name == new_supplier_name.strip(), Supplier.company_id == supplier_target_company.id)
+                .first()
+            ):
                 st.error(f"'{new_supplier_name.strip()}' is already in the list.")
             else:
-                session.add(Supplier(name=new_supplier_name.strip(), notes=new_supplier_notes))
+                session.add(
+                    Supplier(
+                        company_id=supplier_target_company.id,
+                        name=new_supplier_name.strip(),
+                        notes=new_supplier_notes,
+                    )
+                )
                 session.commit()
                 st.success(f"Supplier '{new_supplier_name}' added.")
                 st.rerun()
 
     st.divider()
-    suppliers = session.query(Supplier).order_by(Supplier.name).all()
+    suppliers_query = session.query(Supplier)
+    if company_filter is not None:
+        suppliers_query = suppliers_query.filter(Supplier.company_id == company_filter.id)
+    suppliers = suppliers_query.order_by(Supplier.name).all()
     if not suppliers:
         st.info("No suppliers recorded yet.")
     else:
         supplier_df = pd.DataFrame(
-            [{"Name": s.name, "Notes": s.notes or "", "Active": s.active} for s in suppliers]
+            [
+                {
+                    **({"Company": s.company.name if s.company else "—"} if is_platform_owner else {}),
+                    "Name": s.name,
+                    "Notes": s.notes or "",
+                    "Active": s.active,
+                }
+                for s in suppliers
+            ]
         )
         st.caption(f"{len(suppliers)} supplier(s). Click a row to edit or delete.")
         sidx = clickable_table(supplier_df.to_dict("records"), key="supplier_table")
@@ -312,6 +390,14 @@ with tab_suppliers:
         if sel_supplier:
             st.subheader(f"Edit: {sel_supplier.name}")
             with st.form(f"edit_supplier_{sel_supplier.id}"):
+                if is_platform_owner:
+                    es_company = st.selectbox(
+                        "Company *", all_companies,
+                        index=next((i for i, c in enumerate(all_companies) if c.id == sel_supplier.company_id), 0),
+                        format_func=lambda c: c.name, key=f"edit_supplier_company_{sel_supplier.id}",
+                    )
+                else:
+                    es_company = company_filter
                 es_name = st.text_input("Supplier name *", value=sel_supplier.name, key=f"edit_supplier_name_{sel_supplier.id}")
                 es_notes = st.text_area("Notes", value=sel_supplier.notes or "", key=f"edit_supplier_notes_{sel_supplier.id}")
                 es_active = st.checkbox("Active", value=sel_supplier.active, key=f"edit_supplier_active_{sel_supplier.id}")
@@ -320,21 +406,31 @@ with tab_suppliers:
                         st.error("Supplier name is required.")
                     else:
                         old_name = sel_supplier.name
+                        old_company_id = sel_supplier.company_id
+                        sel_supplier.company_id = es_company.id if es_company else sel_supplier.company_id
                         sel_supplier.name = es_name.strip()
                         sel_supplier.notes = es_notes
                         sel_supplier.active = es_active
                         if old_name != sel_supplier.name:
-                            # Keep existing raw materials pointed at this
-                            # supplier consistent with the rename, since
+                            # Keep existing raw materials (same company) pointed
+                            # at this supplier consistent with the rename, since
                             # default_supplier is a text snapshot, not an FK.
-                            session.query(RawMaterial).filter(RawMaterial.default_supplier == old_name).update(
-                                {"default_supplier": sel_supplier.name}, synchronize_session="fetch"
-                            )
+                            session.query(RawMaterial).filter(
+                                RawMaterial.default_supplier == old_name,
+                                RawMaterial.company_id == old_company_id,
+                            ).update({"default_supplier": sel_supplier.name}, synchronize_session="fetch")
                         session.commit()
                         st.success("Supplier updated.")
                         st.rerun()
 
-            linked_rawmats = session.query(RawMaterial).filter(RawMaterial.default_supplier == sel_supplier.name).count()
+            linked_rawmats = (
+                session.query(RawMaterial)
+                .filter(
+                    RawMaterial.default_supplier == sel_supplier.name,
+                    RawMaterial.company_id == sel_supplier.company_id,
+                )
+                .count()
+            )
             if linked_rawmats:
                 warning = (
                     f"{linked_rawmats} raw material(s) currently list this as their default supplier. "
@@ -360,13 +456,17 @@ with tab_suppliers:
 st.divider()
 st.subheader("Raw materials")
 
-materials = session.query(RawMaterial).order_by(RawMaterial.name).all()
+materials_query = session.query(RawMaterial)
+if company_filter is not None:
+    materials_query = materials_query.filter(RawMaterial.company_id == company_filter.id)
+materials = materials_query.order_by(RawMaterial.name).all()
 if not materials:
     st.info("No raw materials recorded yet.")
 else:
     df = pd.DataFrame(
         [
             {
+                **({"Company": m.company.name if m.company else "—"} if is_platform_owner else {}),
                 "Name": m.name,
                 "Category": m.category or "—",
                 "Default supplier": m.default_supplier or "",
@@ -422,9 +522,18 @@ else:
         st.divider()
         st.subheader(f"Edit: {selected.name}")
         e_supplier = _supplier_picker(
-            session, key_prefix=f"edit_rawmat_{selected.id}", current_value=selected.default_supplier or ""
+            session, selected.company_id, key_prefix=f"edit_rawmat_{selected.id}",
+            current_value=selected.default_supplier or "",
         )
         with st.form(f"edit_rawmat_{selected.id}"):
+            if is_platform_owner:
+                e_company = st.selectbox(
+                    "Company *", all_companies,
+                    index=next((i for i, c in enumerate(all_companies) if c.id == selected.company_id), 0),
+                    format_func=lambda c: c.name, key=f"edit_rawmat_company_{selected.id}",
+                )
+            else:
+                e_company = company_filter
             e_name = st.text_input("Raw material name *", value=selected.name, key=f"edit_rawmat_name_{selected.id}")
             ec1, ec2 = st.columns(2)
             e_category = ec1.selectbox(
@@ -443,7 +552,9 @@ else:
                 if not e_name.strip():
                     st.error("Raw material name is required.")
                 else:
-                    _ensure_supplier_exists(session, e_supplier)
+                    target_company_id = e_company.id if e_company else selected.company_id
+                    _ensure_supplier_exists(session, target_company_id, e_supplier)
+                    selected.company_id = target_company_id
                     selected.name = e_name.strip()
                     selected.category = e_category
                     selected.default_supplier = e_supplier

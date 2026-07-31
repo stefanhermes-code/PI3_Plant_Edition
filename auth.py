@@ -1,40 +1,48 @@
 """
 PI3 Plant Edition
-Simple role-gated login.
+Multi-tenant, database-backed login.
 
-This is an internal tool for a small technical team, so authentication is
-deliberately simple: named users with a role, defined in st.secrets. This
-is NOT a full identity/SSO system - that remains out of scope for now.
+Users live in the `users` table (see db.py), not in st.secrets - this is
+what makes real customer accounts possible: hashed passwords, a per-account
+validity window (valid_from/valid_until), and company/role scoping. A
+"company" is the tenant boundary (see db.py Company); a user's role can be
+one of three built-in roles shared by every company (admin, technical,
+viewer - same semantics as before) or a custom role a company's own admin
+defines on the User Roles page.
+
+Legacy fallback: if the `users` table has zero rows at all (a deployment
+that hasn't been through the new User Accounts admin page yet), login
+falls back to the old st.secrets [users.<name>] blocks so an existing
+deployment isn't locked out mid-migration. The moment at least one real DB
+user exists, secrets.toml-based login is ignored entirely - there is no
+way to have both active at once, to avoid two disagreeing sources of truth
+for who's allowed in.
 
 Roles: admin, technical, viewer
-- admin:     full access, including Maintenance/License Admin and PI3 connectivity toggle
+- admin:     full access, including Maintenance/License Admin and PI3 connectivity toggle.
+             A company's own admin manages that company's users/custom roles; only a
+             platform-owner admin (HTC) can manage Companies or Subscription Types.
 - technical: can create/edit records, cannot approve their own trial closures
              or change commercial/admin settings
 - viewer:    read-only access to all screens
 
-Expected st.secrets structure (see .streamlit/secrets.toml.example):
+Expected st.secrets structure for the legacy fallback only (see
+.streamlit/secrets.toml.example):
 
 [users.jane]
 password = "changeme"
 display_name = "Jane Doe"
 role = "admin"
-
-[users.tom]
-password = "changeme2"
-display_name = "Tom Smith"
-role = "technical"
 """
 
+import datetime as dt
+
+import bcrypt
 import streamlit as st
 
+from db import User, get_session
+
 ROLES = ["admin", "technical", "viewer"]
-
-
-def _users_from_secrets():
-    try:
-        return dict(st.secrets.get("users", {}))
-    except Exception:
-        return {}
 
 
 def _auth_disabled():
@@ -44,37 +52,109 @@ def _auth_disabled():
         return False
 
 
+def _legacy_users_from_secrets():
+    try:
+        return dict(st.secrets.get("users", {}))
+    except Exception:
+        return {}
+
+
+def hash_password(plain_password):
+    return bcrypt.hashpw(plain_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(plain_password, password_hash):
+    try:
+        return bcrypt.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def _db_has_any_users(session):
+    return session.query(User).first() is not None
+
+
+def _check_db_login(session, username, password):
+    """Returns (User, None) on success, or (None, error message) on failure."""
+    user = session.query(User).filter(User.username == username).first()
+    if not user or not verify_password(password, user.password_hash):
+        return None, "Invalid username or password."
+    if not user.active:
+        return None, "This account has been deactivated. Contact your administrator."
+    today = dt.date.today()
+    if user.valid_from and today < user.valid_from:
+        return None, f"This account isn't active yet (valid from {user.valid_from})."
+    if user.valid_until and today > user.valid_until:
+        return None, f"This account's access window ended on {user.valid_until}. Contact your administrator."
+    return user, None
+
+
+def _start_db_session(session, user):
+    st.session_state["authenticated"] = True
+    st.session_state["auth_source"] = "db"
+    st.session_state["user_id"] = user.id
+    st.session_state["username"] = user.username
+    st.session_state["display_name"] = user.display_name or user.username
+    st.session_state["role_id"] = user.role_id
+    st.session_state["role"] = user.role.name if user.role else "viewer"
+    st.session_state["company_id"] = user.company_id
+    st.session_state["is_platform_owner"] = bool(user.company and user.company.is_platform_owner)
+    user.last_login_at = dt.datetime.utcnow()
+    session.commit()
+
+
+def _start_legacy_session(username, user_record):
+    st.session_state["authenticated"] = True
+    st.session_state["auth_source"] = "legacy"
+    st.session_state["username"] = username
+    st.session_state["display_name"] = user_record.get("display_name", username)
+    st.session_state["role"] = user_record.get("role", "viewer")
+    st.session_state["role_id"] = None
+    st.session_state["company_id"] = None
+    # Legacy secrets.toml users predate multi-tenancy entirely - treat them
+    # as platform-owner scope so nothing they previously had access to
+    # disappears out from under them.
+    st.session_state["is_platform_owner"] = True
+
+
 def require_login():
     """Render a login form if the user is not authenticated. Stops execution
     of the calling page until login succeeds.
 
     Development-only bypass: if AUTH_DISABLED = true is set in secrets, this
-    skips the login form entirely and logs in as a synthetic admin user, so
-    the whole app is reachable without credentials. Meant for a UAT/dev
-    deployment only - remove or set to false before anyone relies on this
-    deployment being access-controlled, since with it on, anyone with the
-    app's URL sees everything with full admin rights, no login needed."""
+    skips the login form entirely and logs in as a synthetic platform-owner
+    admin user, so the whole app is reachable without credentials. Meant for
+    a UAT/dev deployment only - remove or set to false before anyone relies
+    on this deployment being access-controlled, since with it on, anyone
+    with the app's URL sees everything with full admin rights, no login
+    needed."""
 
     if _auth_disabled():
         st.session_state["authenticated"] = True
+        st.session_state.setdefault("auth_source", "dev")
         st.session_state.setdefault("username", "dev")
         st.session_state.setdefault("display_name", "Dev (auth disabled)")
         st.session_state.setdefault("role", "admin")
+        st.session_state.setdefault("role_id", None)
+        st.session_state.setdefault("company_id", None)
+        st.session_state.setdefault("is_platform_owner", True)
         return
 
     if st.session_state.get("authenticated"):
         return
 
-    users = _users_from_secrets()
+    session = get_session()
+    db_has_users = _db_has_any_users(session)
+    legacy_users = {} if db_has_users else _legacy_users_from_secrets()
 
     st.title("PI3 Plant Edition")
     st.caption("Flexible slabstock foam expert system")
 
-    if not users:
+    if not db_has_users and not legacy_users:
         st.warning(
-            "No users configured yet. Add a [users.<name>] block to "
-            "`.streamlit/secrets.toml` (see secrets.toml.example) before "
-            "using this app."
+            "No user accounts configured yet. Ask your administrator to create one on the "
+            "User Accounts page, or (fresh install only) add a [users.<name>] block to "
+            "`.streamlit/secrets.toml`."
         )
         st.stop()
 
@@ -84,15 +164,20 @@ def require_login():
         submitted = st.form_submit_button("Log in")
 
     if submitted:
-        user_record = users.get(username)
-        if user_record and password == user_record.get("password"):
-            st.session_state["authenticated"] = True
-            st.session_state["username"] = username
-            st.session_state["display_name"] = user_record.get("display_name", username)
-            st.session_state["role"] = user_record.get("role", "viewer")
-            st.rerun()
+        if db_has_users:
+            user, error = _check_db_login(session, username, password)
+            if error:
+                st.error(error)
+            else:
+                _start_db_session(session, user)
+                st.rerun()
         else:
-            st.error("Invalid username or password.")
+            user_record = legacy_users.get(username)
+            if user_record and password == user_record.get("password"):
+                _start_legacy_session(username, user_record)
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
 
     st.stop()
 
@@ -102,6 +187,9 @@ def current_user():
         "username": st.session_state.get("username"),
         "display_name": st.session_state.get("display_name"),
         "role": st.session_state.get("role", "viewer"),
+        "role_id": st.session_state.get("role_id"),
+        "company_id": st.session_state.get("company_id"),
+        "is_platform_owner": st.session_state.get("is_platform_owner", False),
     }
 
 
@@ -116,11 +204,24 @@ def require_role(*allowed_roles):
         st.stop()
 
 
+def require_platform_owner():
+    """Call at the top of a page reserved for the platform owner (HTC) only
+    - Companies and Subscription Types - regardless of the visiting user's
+    role name, since even another company's own 'admin' must not manage
+    other companies or the global subscription catalog."""
+    if not st.session_state.get("is_platform_owner", False):
+        st.error("This screen is only available to the platform administrator.")
+        st.stop()
+
+
 def logout_button():
     with st.sidebar:
         user = current_user()
         st.markdown(f"**{user['display_name']}**  \nRole: `{user['role']}`")
         if st.button("Log out"):
-            for key in ("authenticated", "username", "display_name", "role"):
+            for key in (
+                "authenticated", "auth_source", "user_id", "username", "display_name",
+                "role", "role_id", "company_id", "is_platform_owner",
+            ):
                 st.session_state.pop(key, None)
             st.rerun()
