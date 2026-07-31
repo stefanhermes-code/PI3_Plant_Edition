@@ -175,10 +175,6 @@ st.divider()
 st.subheader("Current formulation")
 cost_by_version = {v.id: recipe_version_cost(session, v) for v in versions}
 current_cost = cost_by_version[current_version.id]
-label_bits = [current_version.version_label, current_version.approval_status]
-if current_version.change_note:
-    label_bits.append(current_version.change_note)
-st.caption(" — ".join(label_bits))
 
 if current_version.components:
     render_data_table(
