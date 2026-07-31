@@ -251,8 +251,6 @@ industrial_intelligence_pages = [
 ]
 
 admin_pages = [
-    ("maintenance_license_admin", st.Page("pages/11_Maintenance_License_Admin.py", title="Maintenance & License Admin", icon="💳")),
-    ("demo_data_admin", st.Page("pages/12_Demo_Data_Admin.py", title="Demo Data Admin", icon="🗂️")),
     ("user_roles_admin", st.Page("pages/24_User_Roles.py", title="User Roles", icon="🔑")),
 ]
 

@@ -23,7 +23,10 @@ autonomous formulation optimization.
 - `access_control.py` — shared page-visibility rules: which pages a role
   can see, and which a company's subscription gates
 - `helpers.py` — shared UI helpers, advisory disclaimer text
-- `demo_data.py` — seeds the internal demonstration case (no real client data)
+- `demo_data.py` — seeds the internal demonstration case (no real client
+  data); not wired into the UI anymore (the Demo Data Admin page was
+  removed 2026-07-31) - call `seed_demo_data(session)` directly for a
+  throwaway local/dev database
 
 ## Screens
 
@@ -37,13 +40,17 @@ autonomous formulation optimization.
 8. Adjustment & Conclusion
 9. Approval & Review — the only screen that can close a trial
 10. Similar Case Retrieval ("Ask PI3")
-11. PI3/AI Connectivity (placeholder, disabled by default)
-12. Maintenance & License Admin
-13. Demo Data Admin (utility, not one of the 12 core screens)
-14. User Accounts (platform admin: manage a company's users)
-15. User Roles (platform admin: built-in + custom roles, page-visibility)
-16. Companies (platform-owner only: the tenant boundary)
-17. Subscription Types (platform-owner only: commercial tiers, limits/features)
+11. PI3 Connectivity (platform-owner only: per-plant PI3/AI on-off switch)
+12. User Accounts (a company's own admin manages their own users; platform owner manages every company's)
+13. User Roles (a company's own admin narrows their own built-in-role clones + custom roles; platform owner manages every company's)
+14. Default User Roles (platform-owner only: the template new companies' built-in roles are seeded from)
+15. Companies (platform-owner only: the tenant boundary)
+16. Subscription Types (platform-owner only: commercial tiers, limits/features, list prices)
+
+This list predates several pages added since (Raw Materials, the five
+Industrial Intelligence screens, Report, Expert Notes) - treat `app.py`'s
+own nav-section lists as the actual source of truth for what screens
+exist, not this list's exact count.
 
 ## The one rule that can't be bypassed
 
@@ -110,11 +117,16 @@ the plant it's keyed to. This is still not full SSO/identity management —
 adequate for direct commercial deployment to a handful of customers, not
 for enterprise identity federation.
 
-### 5. Load demo data
+### 5. Load demo data (optional, local/dev only)
 
-Log in as an `admin` user and open **Demo Data Admin** in the sidebar, then
-click "Load demo data". This seeds the hardness-drift/shrinkage
-demonstration case from `04_PI3_Plant_Edition_Demonstration_Case.docx`.
+The Demo Data Admin page was removed from the UI (not needed once real
+customer data exists). To seed the hardness-drift/shrinkage demonstration
+case from `04_PI3_Plant_Edition_Demonstration_Case.docx` into a local/dev
+database, run:
+
+```
+python -c "from db import get_session, init_db; from demo_data import seed_demo_data; init_db(); print(seed_demo_data(get_session()))"
+```
 
 ## Local development
 

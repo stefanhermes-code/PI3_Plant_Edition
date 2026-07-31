@@ -86,8 +86,6 @@ SessionLocal = sessionmaker(bind=ENGINE, autoflush=False, autocommit=False, expi
 CONFIDENCE_LEVELS = ["Confirmed", "Likely", "Unconfirmed", "Rejected"]
 APPROVAL_STATUSES = ["Draft", "Pending Review", "Approved", "Rejected"]
 TRIAL_STATUSES = ["Open", "Pending Closure", "Closed"]
-INSTALLATION_TYPES = ["Single Plant", "Multi-Plant", "Enterprise / Group"]
-
 # Process-data capture vocabularies (Mandatory-tier taxonomy, see
 # "Expanding PI3 Plant Edition Production-Trial Data Capture" report).
 # Limited to two snapshots deliberately: without a live PLC/OPC UA/MQTT link
@@ -285,7 +283,6 @@ class Plant(Base):
 
     company = relationship("Company")
     product_families = relationship("ProductFamily", back_populates="plant")
-    maintenance_records = relationship("MaintenanceLicenseRecord", back_populates="plant")
     pi3_ai_settings = relationship("PI3AIConnectionSetting", back_populates="plant")
 
 
@@ -992,23 +989,6 @@ class PI3AIConnectionSetting(Base):
 # ---------------------------------------------------------------------------
 # 16. maintenance_and_license_records
 # ---------------------------------------------------------------------------
-class MaintenanceLicenseRecord(Base):
-    __tablename__ = "maintenance_and_license_records"
-
-    id = Column(Integer, primary_key=True)
-    plant_id = Column(Integer, ForeignKey("plants.id"), nullable=False)
-    plant_count = Column(Integer, default=1)
-    installation_type = Column(String(100), default="Single Plant")
-    deployment_type = Column(String(100))
-    license_value = Column(Float)
-    annual_maintenance_percentage = Column(Float, default=18.0)
-    annual_maintenance_value = Column(Float)
-    maintenance_start_date = Column(Date)
-    renewal_date = Column(Date)
-
-    plant = relationship("Plant", back_populates="maintenance_records")
-
-
 ALL_MODELS = [
     Plant,
     Machine,
@@ -1038,7 +1018,6 @@ ALL_MODELS = [
     ExpertNote,
     SimilarCaseLink,
     PI3AIConnectionSetting,
-    MaintenanceLicenseRecord,
 ]
 
 

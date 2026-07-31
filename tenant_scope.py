@@ -4,9 +4,9 @@ Plant in the schema hierarchy.
 Plant, RawMaterial, and Supplier already carry their own `company_id`
 (see pages/1_Plant_Installation_Overview.py and pages/14_Raw_Materials.py).
 Everything else - product families, foam grades, recipes, production runs,
-and all the quality/trial/maintenance data keyed to a production run or a
-plant - has no `company_id` column of its own. It scopes through the
-plant(s) it ultimately hangs off:
+and all the quality/trial data keyed to a production run or a plant - has
+no `company_id` column of its own. It scopes through the plant(s) it
+ultimately hangs off:
 
     Plant --- ProductFamily --- FoamGrade --- RecipeVersion --- RecipeComponent
       |
@@ -16,7 +16,7 @@ plant(s) it ultimately hangs off:
                               PhysicalPropertyResult / AdjustmentConclusion /
                               ApprovalRecord / ExpertNote / ...
       |
-      +--- MaintenanceLicenseRecord / PI3AIConnectionSetting
+      +--- PI3AIConnectionSetting
 
 `None` is used throughout as the "unfiltered" sentinel (the platform owner
 viewing "All companies"), matching the convention already used in

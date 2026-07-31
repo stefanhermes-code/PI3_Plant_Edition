@@ -68,8 +68,6 @@ PAGE_CATALOG = {
     "similar_case_retrieval": "Similar Case Retrieval",
     "expert_notes": "Expert Notes",
     "report": "Report",
-    "maintenance_license_admin": "Maintenance & License Admin",
-    "demo_data_admin": "Demo Data Admin",
     "pi3_ai_connectivity": "PI3 Connectivity",
     "companies_admin": "Companies",
     "subscription_types_admin": "Subscription Types",

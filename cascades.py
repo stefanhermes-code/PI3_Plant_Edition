@@ -24,7 +24,6 @@ from db import (
     FoamGrade,
     FoamGradeTargetProperty,
     Machine,
-    MaintenanceLicenseRecord,
     PhysicalPropertyResult,
     PI3AIConnectionSetting,
     Plant,
@@ -298,9 +297,6 @@ def plant_dependency_counts(session, plant_id):
         _merge_counts(counts, production_run_dependency_counts(session, run_id))
 
     counts["machine(s)"] = session.query(Machine).filter(Machine.plant_id == plant_id).count()
-    counts["maintenance/license record(s)"] = (
-        session.query(MaintenanceLicenseRecord).filter(MaintenanceLicenseRecord.plant_id == plant_id).count()
-    )
     counts["pi3/ai connectivity setting(s)"] = (
         session.query(PI3AIConnectionSetting).filter(PI3AIConnectionSetting.plant_id == plant_id).count()
     )
@@ -324,6 +320,5 @@ def delete_plant_cascade(session, plant_id):
         delete_production_run_cascade(session, run_id)
 
     session.query(Machine).filter(Machine.plant_id == plant_id).delete(synchronize_session=False)
-    session.query(MaintenanceLicenseRecord).filter(MaintenanceLicenseRecord.plant_id == plant_id).delete(synchronize_session=False)
     session.query(PI3AIConnectionSetting).filter(PI3AIConnectionSetting.plant_id == plant_id).delete(synchronize_session=False)
     session.query(Plant).filter(Plant.id == plant_id).delete(synchronize_session=False)

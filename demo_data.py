@@ -8,9 +8,12 @@ producer sees recurring hardness drift and block shrinkage in a 28 kg/m3
 medium-hardness flexible slabstock grade after a formulation version
 change. No real client data is used.
 
-Run standalone:   python demo_data.py
-Or trigger from the app: Maintenance & License Admin > Demo Data tab
-(admin role only).
+Run standalone: python demo_data.py
+
+No longer wired into the app's UI (the Demo Data Admin page was removed
+2026-07-31 - not needed once real customer data exists) - this module is
+kept only as a way to seed a throwaway local/dev database by calling
+seed_demo_data(session) directly.
 """
 
 import datetime as dt
@@ -20,7 +23,6 @@ from db import (
     ApprovalRecord,
     FoamGrade,
     Machine,
-    MaintenanceLicenseRecord,
     PhysicalPropertyResult,
     Plant,
     ProductFamily,
@@ -481,20 +483,6 @@ def seed_demo_data(session) -> str:
             linked_trial_id=created_trials[-1].id,
             similarity_basis="foam_grade, observation_type, recipe_version",
             notes="T5 provides the confirmed resolution pattern for the hardness drift first observed in T1.",
-        )
-    )
-
-    session.add(
-        MaintenanceLicenseRecord(
-            plant_id=plant.id,
-            plant_count=1,
-            installation_type="Single Plant",
-            deployment_type="Private / restricted company environment",
-            license_value=15000.0,
-            annual_maintenance_percentage=18.0,
-            annual_maintenance_value=15000.0 * 0.18,
-            maintenance_start_date=dt.date.today(),
-            renewal_date=dt.date.today().replace(year=dt.date.today().year + 1),
         )
     )
 
