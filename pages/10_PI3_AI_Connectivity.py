@@ -13,6 +13,12 @@ This screen owns the per-plant enable/disable toggle and commercial fee.
 The actual PI3 reasoning layer (OpenAI's Responses API, with file_search
 over a vector store of historical trial narratives and expert notes)
 lives in ai_assistant.py.
+
+The edit form below (the actual on/off toggle + annual fee) is
+platform-owner-only (see auth.require_platform_owner): this is HTC's own
+commercial add-on switch, not something a company's own admin self-serves,
+even at a company whose subscription includes PI3/AI. Every user still
+sees the current status/diagnostics above the form regardless of role.
 """
 
 import datetime as dt
@@ -23,7 +29,7 @@ import streamlit as st
 import ai_assistant
 import pi3_query_tool
 from db import Plant, PI3AIConnectionSetting, get_session, init_db
-from auth import current_user, logout_button, require_login, require_role
+from auth import current_user, logout_button, require_login, require_platform_owner
 from helpers import page_setup, render_data_table, render_function_action_intro
 from tenant_scope import apply_scope, company_picker
 
@@ -45,9 +51,10 @@ render_function_action_intro(
     action_text=(
         "If something elsewhere in the app claims PI3 isn't configured, check 'Deployment "
         "diagnostics' first to confirm the API key and vector-store credentials are actually "
-        "visible to this deployment. Then, per plant, turn PI3 connectivity on or off using the "
-        "toggle further down - only admins can change this setting, and even with it on, every "
-        "PI3 output still requires human review before acting on it."
+        "visible to this deployment. Per plant, the platform administrator (HTC) turns PI3 "
+        "connectivity on or off using the toggle further down - this is a commercial add-on "
+        "activated by HTC, not something a company's own admin self-serves - and even with it "
+        "on, every PI3 output still requires human review before acting on it."
     ),
 )
 st.info(
@@ -131,7 +138,7 @@ else:
     st.info("Not yet configured for this plant. Default status: Disabled.")
 
 st.divider()
-require_role("admin")
+require_platform_owner()
 st.subheader("Admin: configure PI3 connectivity")
 
 with st.form("pi3_ai_settings"):
