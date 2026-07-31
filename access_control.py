@@ -3,29 +3,37 @@
 Three independent things can hide a page from the current user, checked in
 this order by `page_visible()`:
 
-1. Platform-only pages (Companies, Subscription Types) - only ever visible
-   to a user whose company is the platform owner (HTC itself), regardless
-   of role. Not configurable per role; this is a hard gate.
-2. Subscription feature flags - a company's SubscriptionType can turn off
-   PI3/AI and/or Reports for every user at that company, including its own
-   admins. This is deliberately the ONLY page-level differentiator between
-   HTC's two real commercial tiers ("PI3 Plant Edition" and "PI3 Plant
-   Edition - Basic"): every page - including Recipe Optimization, Trend
-   Analysis, Machine Settings Correlation, Root-Cause Assistant, Machine
-   Settings Optimization, Similar Case Retrieval, and Expert Notes - stays
-   visible on Basic, because each of those pages already has its own
-   deterministic core that works with zero PI3 involvement (cost/diff
-   calculations, correlation ranking, control charts/Cpk/CUSUM, the
-   run-vs-prior-run diff, ...) and independently checks per-plant PI3
+1. Platform-only pages (Companies, Subscription Types, PI3 Connectivity) -
+   only ever visible to a user whose company is the platform owner (HTC
+   itself), regardless of role. Not configurable per role; this is a hard
+   gate. PI3 Connectivity joined this group after starting out merely
+   subscription-gated (see point 2's history) - its edit form was already
+   platform-owner-only (this is HTC's own commercial add-on switch, not
+   something a company's own admin self-serves), so a company admin who
+   could still open the page only ever saw a read-only status view with no
+   action available. Not worth a page of its own for that - moved in with
+   Companies/Subscription Types instead.
+2. Subscription feature flags - REPORT_KEYS (reports_enabled) is the one
+   remaining subscription-tier feature switch. PI3/AI used to work the
+   same way (pi3_ai_enabled hiding the PI3 Connectivity page for anyone
+   whose company lacked it), but since that page is now platform-only
+   regardless of tier (point 1), pi3_ai_enabled no longer has any runtime
+   enforcement effect - it's tracked on SubscriptionType purely as the
+   commercial record of which tier a company is sold on, and the platform
+   owner is trusted to honor it manually when deciding whether to flip a
+   given plant's PI3 toggle on. Every operational page - including Recipe
+   Optimization, Trend Analysis, Machine Settings Correlation, Root-Cause
+   Assistant, Machine Settings Optimization, Similar Case Retrieval, and
+   Expert Notes - stays visible on every tier, because each already has
+   its own deterministic core that works with zero PI3 involvement
+   (cost/diff calculations, correlation ranking, control charts/Cpk/CUSUM,
+   the run-vs-prior-run diff, ...) and independently checks per-plant PI3
    enablement (ai_assistant.is_enabled_for_plant / any_plant_enabled)
-   before rendering its own "Ask PI3" section. pi3_ai_enabled only hides
-   the PI3 Connectivity admin page itself - which is what determines
-   whether any plant at that company can ever have PI3 turned on in the
-   first place, which is what every one of those per-page checks keys off.
-   An earlier version of this file bundled those 7 pages behind their own
-   feature flags (industrial_intelligence_enabled / case_review_enabled) -
-   that was wrong: it hid real, PI3-independent value from Basic customers
-   instead of letting each page's own PI3 check do its job.
+   before rendering its own "Ask PI3" section. An earlier version of this
+   file bundled those 7 pages behind their own feature flags
+   (industrial_intelligence_enabled / case_review_enabled) - that was
+   wrong: it hid real, PI3-independent value from Basic customers instead
+   of letting each page's own PI3 check do its job.
 3. Role page permissions - a DENY list, not an allow list (see db.py's
    RolePagePermission docstring): a role with no rows sees everything;
    an explicit can_view=False row for a page_key hides just that page for
@@ -69,9 +77,8 @@ PAGE_CATALOG = {
     "user_accounts_admin": "User Accounts",
 }
 
-PI3_AI_KEYS = frozenset({"pi3_ai_connectivity"})
 REPORT_KEYS = frozenset({"report"})
-PLATFORM_ONLY_KEYS = frozenset({"companies_admin", "subscription_types_admin"})
+PLATFORM_ONLY_KEYS = frozenset({"companies_admin", "subscription_types_admin", "pi3_ai_connectivity"})
 
 
 def denied_page_keys(session, role_id):
@@ -92,8 +99,6 @@ def page_visible(page_key, *, is_platform_owner, subscription, denied_keys):
     if page_key in PLATFORM_ONLY_KEYS:
         return bool(is_platform_owner)
     if subscription is not None:
-        if page_key in PI3_AI_KEYS and not subscription.pi3_ai_enabled:
-            return False
         if page_key in REPORT_KEYS and not subscription.reports_enabled:
             return False
     if page_key in denied_keys:

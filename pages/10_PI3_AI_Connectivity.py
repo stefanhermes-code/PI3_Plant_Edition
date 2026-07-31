@@ -14,11 +14,13 @@ The actual PI3 reasoning layer (OpenAI's Responses API, with file_search
 over a vector store of historical trial narratives and expert notes)
 lives in ai_assistant.py.
 
-The edit form below (the actual on/off toggle + annual fee) is
-platform-owner-only (see auth.require_platform_owner): this is HTC's own
-commercial add-on switch, not something a company's own admin self-serves,
-even at a company whose subscription includes PI3/AI. Every user still
-sees the current status/diagnostics above the form regardless of role.
+The whole page is platform-owner-only (see auth.require_platform_owner):
+this is HTC's own commercial add-on switch, not something a company's own
+admin self-serves, even at a company whose subscription includes PI3/AI.
+It used to be visible (read-only) to any company admin, with just the
+toggle itself gated - moved to platform-owner-only entirely once it became
+clear that left non-owner admins looking at a page with nothing they could
+actually do. See access_control.py's PLATFORM_ONLY_KEYS.
 """
 
 import datetime as dt
@@ -36,6 +38,7 @@ from tenant_scope import apply_scope, company_picker
 page_setup("PI3 Connectivity")
 init_db()
 require_login()
+require_platform_owner()
 logout_button()
 
 st.title("PI3 Connectivity")
@@ -137,8 +140,14 @@ if setting:
 else:
     st.info("Not yet configured for this plant. Default status: Disabled.")
 
+if company and company.subscription_type and not company.subscription_type.pi3_ai_enabled:
+    st.warning(
+        f"{company.name}'s subscription tier ('{company.subscription_type.name}') doesn't "
+        "include PI3/AI by default - enabling it below would be an exception to that (e.g. a "
+        "trial). Confirm that's deliberate before saving."
+    )
+
 st.divider()
-require_platform_owner()
 st.subheader("Admin: configure PI3 connectivity")
 
 with st.form("pi3_ai_settings"):
