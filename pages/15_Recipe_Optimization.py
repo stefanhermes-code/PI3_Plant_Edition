@@ -361,27 +361,28 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
     st.caption(
         "Asks PI3 to propose a reformulation direction, using the cost, version-diff, and "
         "correlation data above as its basis rather than just the ingredient list. Target "
-        "properties below are prefilled from this grade's stored specification - edit or add to "
-        "them (resilience, tensile strength, ...) before requesting a recommendation."
+        "properties below are prefilled from this grade's target density/hardness plus any other "
+        "target properties recorded on the Product Family & Foam Grade page - edit or add to them "
+        "before requesting a recommendation."
     )
-    # quality_specification, when present, is a free-text spec written to
-    # already cover density and hardness (usually as a KGI recipe-naming
-    # "hardness code", not a bare number with a real unit - see its own
-    # "confirm units/method before use" wording) - so it's the single
-    # source of truth here. Falling back to target_density/target_hardness
-    # only when there's no free-text spec avoids restating the same two
-    # numbers twice in different, inconsistent forms.
+    # Built from foam_grades' own structured fields rather than free text:
+    # target_density/target_hardness are dedicated columns every grade has,
+    # and any other target property (resilience, tensile strength, ...) comes
+    # from foam_grade_target_properties, entered on the Product Family & Foam
+    # Grade page. A property listed there with no target_value yet ("value
+    # not yet known") is still surfaced, just flagged as such.
     default_targets = []
-    if grade.quality_specification and grade.quality_specification.strip():
-        default_targets.append(grade.quality_specification.strip())
-    else:
-        if grade.target_density is not None:
-            default_targets.append(f"Density {grade.target_density:g} kg/m3")
-        if grade.target_hardness is not None:
-            default_targets.append(
-                f"Hardness (target value {grade.target_hardness:g} - unit/test method not recorded, "
-                "confirm before use)"
-            )
+    if grade.target_density is not None:
+        default_targets.append(f"Density {grade.target_density:g} kg/m3")
+    if grade.target_hardness is not None:
+        default_targets.append(f"Hardness (40% ILD) {grade.target_hardness:g} N")
+    for tp in grade.target_properties:
+        unit_suffix = f" {tp.unit}" if tp.unit else ""
+        if tp.target_value is not None:
+            default_targets.append(f"{tp.property_name} {tp.target_value:g}{unit_suffix}")
+        else:
+            note_suffix = f" - {tp.notes}" if tp.notes else ""
+            default_targets.append(f"{tp.property_name} (target value not yet known{note_suffix})")
 
     target_properties = st.text_area(
         "Target properties",

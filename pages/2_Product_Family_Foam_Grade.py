@@ -10,7 +10,7 @@ from cascades import (
     foam_grade_dependency_counts,
     product_family_dependency_counts,
 )
-from db import FoamGrade, Plant, ProductFamily, get_session, init_db
+from db import FoamGrade, FoamGradeTargetProperty, PhysicalPropertyDefinition, Plant, ProductFamily, get_session, init_db
 from helpers import (
     clickable_table,
     csv_excel_uploader,
@@ -24,7 +24,13 @@ from helpers import (
 )
 
 GRADE_REQUIRED_COLUMNS = ["product_family_id", "grade_name"]
-GRADE_OPTIONAL_COLUMNS = ["target_density", "target_hardness", "quality_specification", "notes"]
+GRADE_OPTIONAL_COLUMNS = ["target_density", "target_hardness", "notes"]
+
+# Density and 40% IFD/hardness already have dedicated foam_grades columns
+# (every grade has them, and the grade-naming code itself encodes them) - so
+# they're excluded from the "other target properties" picker below to avoid
+# a grade carrying two different numbers for the same property.
+DENSITY_HARDNESS_PROPERTY_NAMES = {"density", "40% ifd / hardness"}
 
 page_setup("Product Family & Foam Grade")
 init_db()
@@ -36,16 +42,18 @@ render_function_action_intro(
     function_text=(
         "This page organizes your product catalog on two levels: product families (a market "
         "segment or application grouping under a plant, e.g. mattress comfort layer) and the "
-        "individual foam grades within each family, each carrying its own target density, target "
-        "hardness, and quality specification. Every recipe version, production run, and quality "
-        "result recorded downstream is tied to one of these foam grades, so this is where a new "
-        "grade starts its life in the system."
+        "individual foam grades within each family, each carrying its own target density and "
+        "target hardness (40% ILD), plus any other target physical properties worth specifying "
+        "(resilience, tensile strength, ...) even before the actual value is known. Every recipe "
+        "version, production run, and quality result recorded downstream is tied to one of these "
+        "foam grades, so this is where a new grade starts its life in the system."
     ),
     action_text=(
         "Add a product family under the right plant first, then add each foam grade under it one "
         "at a time, or bring in a batch through the CSV/Excel import tab if you're loading many "
         "grades at once. Set target density and hardness on each grade so the Industrial "
-        "Intelligence pages have a target to compare actual results against. Click a row in "
+        "Intelligence pages have a target to compare actual results against, then use the 'other "
+        "target properties' list on the edit screen for anything beyond those two. Click a row in "
         "either table to edit or delete it - deleting a product family or foam grade cascades to "
         "everything recorded under it, with the count shown before you confirm."
     ),
@@ -165,6 +173,11 @@ with tab_family:
 
 with tab_grade:
     families = session.query(ProductFamily).all()
+    property_defs = (
+        session.query(PhysicalPropertyDefinition)
+        .order_by(PhysicalPropertyDefinition.is_common.desc(), PhysicalPropertyDefinition.sort_order)
+        .all()
+    )
     if not families:
         st.warning("Add a product family first.")
     else:
@@ -176,8 +189,7 @@ with tab_grade:
                     family = st.selectbox("Product family *", families, format_func=lambda f: f.name)
                     grade_name = st.text_input("Grade name / code *")
                     target_density = st.number_input("Target density (kg/m3)", min_value=0.0, step=0.5)
-                    target_hardness = st.number_input("Target hardness (N)", min_value=0.0, step=1.0)
-                    quality_specification = st.text_area("Quality specification")
+                    target_hardness = st.number_input("Target hardness (N, 40% ILD)", min_value=0.0, step=1.0)
                     notes = st.text_area("Notes")
                     submitted = st.form_submit_button("Save foam grade")
                     if submitted:
@@ -190,12 +202,12 @@ with tab_grade:
                                     grade_name=grade_name,
                                     target_density=target_density or None,
                                     target_hardness=target_hardness or None,
-                                    quality_specification=quality_specification,
                                     notes=notes,
                                 )
                             )
                             session.commit()
-                            st.success(f"Foam grade '{grade_name}' added.")
+                            st.success(f"Foam grade '{grade_name}' added. Add any other target physical "
+                                       "properties from the table below.")
                             st.rerun()
 
         with tab_grade_import:
@@ -232,7 +244,6 @@ with tab_grade:
                                 grade_name=str(row["grade_name"]).strip(),
                                 target_density=row.get("target_density") if not pd.isna(row.get("target_density")) else None,
                                 target_hardness=row.get("target_hardness") if not pd.isna(row.get("target_hardness")) else None,
-                                quality_specification=str(row.get("quality_specification", "") or ""),
                                 notes=str(row.get("notes", "") or ""),
                             )
                         )
@@ -253,8 +264,8 @@ with tab_grade:
                     "Grade": grade.grade_name,
                     "Family": grade.product_family.name,
                     "Target density (kg/m3)": grade.target_density,
-                    "Target hardness (N)": grade.target_hardness,
-                    "Quality spec": grade.quality_specification or "",
+                    "Target hardness (N, 40% ILD)": grade.target_hardness,
+                    "Other target properties": len(grade.target_properties),
                 }
                 for grade in grades
             ]
@@ -284,12 +295,8 @@ with tab_grade:
                         value=float(selected_grade.target_density or 0.0), key=f"edit_grade_density_{selected_grade.id}",
                     )
                     e_hardness = st.number_input(
-                        "Target hardness (N)", min_value=0.0, step=1.0,
+                        "Target hardness (N, 40% ILD)", min_value=0.0, step=1.0,
                         value=float(selected_grade.target_hardness or 0.0), key=f"edit_grade_hardness_{selected_grade.id}",
-                    )
-                    e_spec = st.text_area(
-                        "Quality specification", value=selected_grade.quality_specification or "",
-                        key=f"edit_grade_spec_{selected_grade.id}",
                     )
                     e_notes = st.text_area("Notes", value=selected_grade.notes or "", key=f"edit_grade_notes_{selected_grade.id}")
                     if st.form_submit_button("Save changes"):
@@ -300,11 +307,68 @@ with tab_grade:
                             selected_grade.grade_name = e_grade_name.strip()
                             selected_grade.target_density = e_density or None
                             selected_grade.target_hardness = e_hardness or None
-                            selected_grade.quality_specification = e_spec
                             selected_grade.notes = e_notes
                             session.commit()
                             st.success("Foam grade updated.")
                             st.rerun()
+
+                st.markdown("**Other target physical properties**")
+                st.caption(
+                    "Anything beyond density and hardness this grade needs to hit (resilience, "
+                    "tensile strength, ...). Leave 'Target value' blank if it's a property to track "
+                    "but the number isn't known/agreed yet. Edit the table directly, then save."
+                )
+                property_choices = sorted(
+                    p.name for p in property_defs if p.name.strip().lower() not in DENSITY_HARDNESS_PROPERTY_NAMES
+                )
+                target_props_df = (
+                    pd.DataFrame(
+                        [
+                            {
+                                "Property": tp.property_name,
+                                "Target value": tp.target_value,
+                                "Unit": tp.unit or "",
+                                "Notes": tp.notes or "",
+                            }
+                            for tp in selected_grade.target_properties
+                        ]
+                    )
+                    if selected_grade.target_properties
+                    else pd.DataFrame(columns=["Property", "Target value", "Unit", "Notes"])
+                )
+                edited_props_df = st.data_editor(
+                    target_props_df,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key=f"edit_target_properties_{selected_grade.id}",
+                    column_config={
+                        "Property": st.column_config.SelectboxColumn("Property", options=property_choices),
+                        "Target value": st.column_config.NumberColumn("Target value", step=0.1),
+                    },
+                )
+                if st.button("Save other target properties", key=f"save_target_properties_{selected_grade.id}"):
+                    defs_by_name = {p.name.strip().lower(): p for p in property_defs}
+                    session.query(FoamGradeTargetProperty).filter(
+                        FoamGradeTargetProperty.foam_grade_id == selected_grade.id
+                    ).delete(synchronize_session=False)
+                    for _, row in edited_props_df.iterrows():
+                        prop_name = str(row.get("Property") or "").strip()
+                        if not prop_name:
+                            continue
+                        prop_def = defs_by_name.get(prop_name.lower())
+                        session.add(
+                            FoamGradeTargetProperty(
+                                foam_grade_id=selected_grade.id,
+                                property_definition_id=prop_def.id if prop_def else None,
+                                property_name=prop_name,
+                                target_value=row.get("Target value") if pd.notna(row.get("Target value")) else None,
+                                unit=str(row.get("Unit") or ""),
+                                notes=str(row.get("Notes") or ""),
+                            )
+                        )
+                    session.commit()
+                    st.success("Other target properties updated.")
+                    st.rerun()
 
                 counts = foam_grade_dependency_counts(session, selected_grade.id)
                 total_related = sum(counts.values())

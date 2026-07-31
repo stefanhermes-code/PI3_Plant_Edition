@@ -22,6 +22,7 @@ from db import (
     ConditioningSegment,
     FallplateSectionPosition,
     FoamGrade,
+    FoamGradeTargetProperty,
     Machine,
     MaintenanceLicenseRecord,
     PhysicalPropertyResult,
@@ -218,6 +219,11 @@ def foam_grade_dependency_counts(session, foam_grade_id):
         counts["recipe component(s)"] = counts.get("recipe component(s)", 0) + (
             session.query(RecipeComponent).filter(RecipeComponent.recipe_version_id == version_id).count()
         )
+    counts["other target physical propert(y/ies)"] = (
+        session.query(FoamGradeTargetProperty)
+        .filter(FoamGradeTargetProperty.foam_grade_id == foam_grade_id)
+        .count()
+    )
     run_ids = _run_ids_for_foam_grade(session, foam_grade_id)
     counts["production run(s)"] = len(run_ids)
     for run_id in run_ids:
@@ -234,6 +240,9 @@ def delete_foam_grade_cascade(session, foam_grade_id):
             RecipeComponent.recipe_version_id == version_id
         ).delete(synchronize_session=False)
     session.query(RecipeVersion).filter(RecipeVersion.foam_grade_id == foam_grade_id).delete(synchronize_session=False)
+    session.query(FoamGradeTargetProperty).filter(
+        FoamGradeTargetProperty.foam_grade_id == foam_grade_id
+    ).delete(synchronize_session=False)
     session.query(FoamGrade).filter(FoamGrade.id == foam_grade_id).delete(synchronize_session=False)
 
 

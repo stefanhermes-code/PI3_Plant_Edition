@@ -96,15 +96,13 @@ def seed_demo_data(session) -> str:
         grade_name="28 kg/m3 Medium Hardness",
         target_density=28.0,
         target_hardness=140.0,
-        quality_specification="Density 28 +/-1.5 kg/m3, hardness 140 +/-15 N, no visible shrinkage after cure.",
-        notes="Primary grade in the demonstration case.",
+        notes="Primary grade in the demonstration case. No visible shrinkage after cure.",
     )
     grade_32fh = FoamGrade(
         product_family_id=family.id,
         grade_name="32 kg/m3 Firm",
         target_density=32.0,
         target_hardness=180.0,
-        quality_specification="Density 32 +/-1.5 kg/m3, hardness 180 +/-15 N.",
         notes="Second grade - included to show the family covers more than one grade.",
     )
     session.add_all([grade_28mh, grade_32fh])

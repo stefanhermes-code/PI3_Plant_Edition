@@ -212,6 +212,15 @@ class ProductFamily(Base):
 
 # ---------------------------------------------------------------------------
 # 3. foam_grades
+#
+# target_density/target_hardness are dedicated columns rather than entries in
+# foam_grade_target_properties below because every grade has them and the
+# grade-naming code itself encodes them (e.g. "28170" = 28 kg/m3 density,
+# 170 N hardness at 40% ILD) - see grade_name. quality_specification (a
+# free-text field) was removed: it only ever restated density/hardness in
+# prose and had no other use. Any *other* physical property a grade needs to
+# hit (resilience, tensile strength, ...) - optional, and often not yet
+# measured/decided - goes in foam_grade_target_properties instead.
 # ---------------------------------------------------------------------------
 class FoamGrade(Base):
     __tablename__ = "foam_grades"
@@ -220,13 +229,40 @@ class FoamGrade(Base):
     product_family_id = Column(Integer, ForeignKey("product_families.id"), nullable=False)
     grade_name = Column(String(200), nullable=False)
     target_density = Column(Float)
-    target_hardness = Column(Float)
-    quality_specification = Column(Text)
+    target_hardness = Column(Float)  # Newtons, 40% ILD
     notes = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
     product_family = relationship("ProductFamily", back_populates="foam_grades")
     recipe_versions = relationship("RecipeVersion", back_populates="foam_grade")
+    target_properties = relationship(
+        "FoamGradeTargetProperty", back_populates="foam_grade", cascade="all, delete-orphan"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 3b. foam_grade_target_properties
+#
+# Optional additional target specs for a foam grade beyond density/hardness
+# (resilience, tensile strength, compression set, ...), reusing the same
+# physical_property_definitions master list as physical_property_results so
+# names/units stay consistent app-wide. target_value is nullable on purpose:
+# a property can be listed as something this grade needs to meet before the
+# actual number is known/agreed.
+# ---------------------------------------------------------------------------
+class FoamGradeTargetProperty(Base):
+    __tablename__ = "foam_grade_target_properties"
+
+    id = Column(Integer, primary_key=True)
+    foam_grade_id = Column(Integer, ForeignKey("foam_grades.id"), nullable=False)
+    property_definition_id = Column(Integer, ForeignKey("physical_property_definitions.id"))
+    property_name = Column(String(200), nullable=False)  # snapshot text, auto-filled from the chosen definition
+    target_value = Column(Float)
+    unit = Column(String(50))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    foam_grade = relationship("FoamGrade", back_populates="target_properties")
 
 
 # ---------------------------------------------------------------------------
