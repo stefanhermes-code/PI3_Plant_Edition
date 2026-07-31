@@ -1,15 +1,19 @@
-# Upper bounds are deliberate, not decoration: on 2026-07-31 an unpinned
-# deploy picked up streamlit 1.60.0 + pandas 3.0.5 + pyarrow's latest on a
-# freshly-provisioned Python 3.14 environment (all far newer than anything
-# this app has been tested against) and broke in two ways at once - the
-# custom sidebar nav silently fell back to Streamlit's default flat page
-# list, and the Subscription Types listing crashed with a pyarrow
-# ArrowTypeError from pandas 3.0's stricter dtype handling on a column that
-# mixed int and str values. Neither "Clear cache" nor "Reboot app" fixes
-# this class of problem - it's not a stale build, it's a different (newer)
-# set of dependencies actually running. Keep these bounds and bump them
-# deliberately, with a local test pass, rather than letting them drift.
-streamlit>=1.37,<1.60
+# Upper/lower bounds here are deliberate, not decoration - see the
+# "dependency drift" troubleshooting entry in README.md before loosening
+# any of these. Streamlit Community Cloud forces the Python version (no
+# runtime.txt support) and had moved to Python 3.14 by 2026-07-31; Streamlit
+# only gained real Python 3.14 support in 1.60.0 (a PEP 649 deferred-
+# annotation-evaluation fix), so streamlit MUST be >=1.60 here or the app
+# silently fails to route through its own st.navigation()/sidebar code on
+# Cloud (no traceback - it just falls back to Streamlit's default flat page
+# list and default centered layout, which is what made this so confusing
+# to diagnose). Separately, pandas 3.0 changed Arrow/dtype handling strictly
+# enough to crash a real page (Subscription Types, mixed int/str column -
+# also fixed in code), so pandas stays <3.0. Verified 2026-07-31 that
+# streamlit>=1.60,<1.61 + pandas<3.0 + pyarrow<25 resolves cleanly together
+# (streamlit 1.60.0 / pandas 2.3.3 / pyarrow 24.0.0) - don't assume that
+# stays true for future streamlit 1.6x releases without re-checking.
+streamlit>=1.60,<1.61
 bcrypt>=4.0
 SQLAlchemy>=2.0
 psycopg2-binary>=2.9

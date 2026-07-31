@@ -180,22 +180,34 @@ version the container is using.
 (`>=` only), so Streamlit Community Cloud's `uv pip install` was free to
 resolve to whatever the newest release was at deploy time. On 2026-07-31 a
 routine reboot triggered a fresh dependency resolution that picked up
-streamlit 1.60.0, pandas 3.0.5, and pyarrow's latest on Python 3.14 - none
-of which this app had ever been tested against - and broke two things at
-once: the custom sidebar silently fell back to Streamlit's default flat
-nav (root cause not confirmed with a traceback, but the timing and version
-jump line up), and the Subscription Types page threw a hard
-`pyarrow.lib.ArrowTypeError` from a column that mixed `int` and `str`
-values, which pandas 3.0's stricter Arrow interop no longer tolerates.
+streamlit 1.60.0, pandas 3.0.5, and pyarrow's latest on Python 3.14. Two
+real, separate things came out of that:
 
-Fixed by pinning upper bounds in `requirements.txt` (see the comment
-there) and fixing the mixed-type column. If this recurs, compare the
-deploy log's installed versions against those pins - if they've drifted
-again, the pins need tightening (or a `uv.lock`/`pip freeze` committed
-outright) rather than left as loose ranges. Streamlit Community Cloud can
-also silently force-upgrade the Python version itself when an old one
-becomes unsupported (Advanced settings → Python version) - worth checking
-that dropdown against what the log actually shows.
+1. The Subscription Types page threw a hard `pyarrow.lib.ArrowTypeError`
+   from a column that mixed `int` and `str` values, which pandas 3.0's
+   stricter Arrow interop no longer tolerates - a genuine code bug, fixed
+   regardless of dependency version.
+2. The **first** fix attempt pinned `streamlit<1.60` to roll back to the
+   last version this app had been tested against - which made the sidebar
+   problem worse, not better. Streamlit Community Cloud forces the Python
+   version (no `runtime.txt` support, and by this date its only offered
+   version was 3.14 - check Advanced settings → Python version), and
+   Streamlit itself only gained real Python 3.14 support in 1.60.0 (a PEP
+   649 deferred-annotation-evaluation fix). Running streamlit<1.60 on a
+   Python-3.14-only host silently breaks `st.navigation()`'s custom-sidebar
+   routing - no traceback, it just falls back to Streamlit's default flat
+   page list and default centered layout. The fix is the opposite of the
+   instinct to roll back: pin streamlit **>=1.60**, not below it, and keep
+   pandas <3.0 separately (verified `streamlit>=1.60,<1.61` + `pandas<3.0`
+   + `pyarrow<25` resolves cleanly to streamlit 1.60.0 / pandas 2.3.3 /
+   pyarrow 24.0.0 - see the comment in `requirements.txt`).
+
+If this recurs, compare the deploy log's installed versions against these
+pins - and specifically check what Python version Cloud is forcing
+(Advanced settings → Python version) before assuming a lower dependency
+version is the safe choice. "Newer Python forces a newer Streamlit
+minimum" is the opposite of the usual "pin everything down" instinct and
+is easy to get backwards under pressure, as happened here.
 
 ## What v0.1 deliberately does not do
 
