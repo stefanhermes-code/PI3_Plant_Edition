@@ -96,8 +96,8 @@ else:
     rows = [
         {
             "Name": s.name,
-            "Max users": s.max_users if s.max_users else "Unlimited",
-            "Max plants": s.max_plants if s.max_plants else "Unlimited",
+            "Max users": str(s.max_users) if s.max_users else "Unlimited",
+            "Max plants": str(s.max_plants) if s.max_plants else "Unlimited",
             "Annual price": f"${s.annual_price:,.0f}" if s.annual_price else "—",
             "Monthly price": f"${s.monthly_price:,.0f}" if s.monthly_price else "—",
             "PI3/AI": "Yes" if s.pi3_ai_enabled else "No",

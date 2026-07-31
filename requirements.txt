@@ -1,9 +1,21 @@
-streamlit>=1.37
+# Upper bounds are deliberate, not decoration: on 2026-07-31 an unpinned
+# deploy picked up streamlit 1.60.0 + pandas 3.0.5 + pyarrow's latest on a
+# freshly-provisioned Python 3.14 environment (all far newer than anything
+# this app has been tested against) and broke in two ways at once - the
+# custom sidebar nav silently fell back to Streamlit's default flat page
+# list, and the Subscription Types listing crashed with a pyarrow
+# ArrowTypeError from pandas 3.0's stricter dtype handling on a column that
+# mixed int and str values. Neither "Clear cache" nor "Reboot app" fixes
+# this class of problem - it's not a stale build, it's a different (newer)
+# set of dependencies actually running. Keep these bounds and bump them
+# deliberately, with a local test pass, rather than letting them drift.
+streamlit>=1.37,<1.60
 bcrypt>=4.0
 SQLAlchemy>=2.0
 psycopg2-binary>=2.9
-pandas>=2.0
-numpy>=1.24
+pandas>=2.0,<3.0
+numpy>=1.24,<3.0
+pyarrow<25
 scipy>=1.11
 openpyxl>=3.1
 openai>=2.0

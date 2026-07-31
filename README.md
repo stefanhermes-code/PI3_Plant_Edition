@@ -168,6 +168,35 @@ appears right before the failure without a following full dependency
 install / "Uvicorn server started" sequence, which is the tell for this
 stale-process scenario versus an actual code bug.
 
+## Troubleshooting: sidebar reverts to a plain page list, and Clear cache / Reboot app don't fix it
+
+Symptom looks identical to the stale-build case above, but neither Clear
+cache nor a full Reboot app resolves it. Check the deploy log's dependency
+install section (right after "Pulling code changes from Github") for the
+actual `streamlit`/`pandas`/`pyarrow` versions installed and the Python
+version the container is using.
+
+`requirements.txt` originally left `streamlit`/`pandas`/`numpy` unbounded
+(`>=` only), so Streamlit Community Cloud's `uv pip install` was free to
+resolve to whatever the newest release was at deploy time. On 2026-07-31 a
+routine reboot triggered a fresh dependency resolution that picked up
+streamlit 1.60.0, pandas 3.0.5, and pyarrow's latest on Python 3.14 - none
+of which this app had ever been tested against - and broke two things at
+once: the custom sidebar silently fell back to Streamlit's default flat
+nav (root cause not confirmed with a traceback, but the timing and version
+jump line up), and the Subscription Types page threw a hard
+`pyarrow.lib.ArrowTypeError` from a column that mixed `int` and `str`
+values, which pandas 3.0's stricter Arrow interop no longer tolerates.
+
+Fixed by pinning upper bounds in `requirements.txt` (see the comment
+there) and fixing the mixed-type column. If this recurs, compare the
+deploy log's installed versions against those pins - if they've drifted
+again, the pins need tightening (or a `uv.lock`/`pip freeze` committed
+outright) rather than left as loose ranges. Streamlit Community Cloud can
+also silently force-upgrade the Python version itself when an old one
+becomes unsupported (Advanced settings → Python version) - worth checking
+that dropdown against what the log actually shows.
+
 ## What v0.1 deliberately does not do
 
 No ERP integration, no live machine connection, no autonomous formulation
