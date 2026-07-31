@@ -1,4 +1,4 @@
-"""Screen 4: Recipe Version Record (formulation memory)
+"""Screen 4: Recipes (formulation memory)
 
 Each foam grade has exactly one ACTIVE recipe at a time - a new version
 replaces the previous one in production, they don't coexist. This page
@@ -46,12 +46,12 @@ RECIPE_VERSION_OPTIONAL_COLUMNS = ["effective_date", "change_note", "approval_st
 COMPONENT_REQUIRED_COLUMNS = ["recipe_version_id", "raw_material_name"]
 COMPONENT_OPTIONAL_COLUMNS = ["supplier", "php", "role_in_formulation", "notes"]
 
-page_setup("Recipe Version Record")
+page_setup("Recipes")
 init_db()
 require_login()
 logout_button()
 
-st.title("Recipe Version Record")
+st.title("Recipes")
 render_function_action_intro(
     function_text=(
         "Maintains the formulation history for each foam grade: the raw-material list with php "
@@ -243,11 +243,11 @@ with tab_import:
     st.caption(
         "Bulk-create recipe version HEADER records only (e.g. migrating a formulation library) - "
         "not the ingredients/components inside each version. For that, see 'Bulk import recipe "
-        "components' further down this page, below the recipe version list - it's a separate "
-        "upload with its own Confirm import button. A grade with no active recipe yet gets its "
-        "first imported row for that grade marked active automatically; anything after that is "
-        "imported as historical/inactive - use 'Edit Recipe' or the recipe version list below to "
-        "change which one is active."
+        "components' further down this page - it's a separate upload with its own Confirm import "
+        "button. A grade with no active recipe yet gets its first imported row for that grade "
+        "marked active automatically; anything after that is imported as historical/inactive - use "
+        "'Edit Recipe' or the recipe version list at the bottom of this page to change which one is "
+        "active."
     )
     show_pending_banner("recipe_version_import_msg")
     df, filename = csv_excel_uploader(
@@ -308,6 +308,79 @@ with tab_import:
             set_pending_banner("recipe_version_import_msg", msg)
             st.rerun()
 
+# Queried once here (rather than inside the "Recipe versions" section below)
+# because "Bulk import recipe components" also needs it for valid_version_ids
+# - and that section now renders first, with "Recipe versions" moved to the
+# bottom of the page.
+versions = session.query(RecipeVersion).order_by(RecipeVersion.created_at.desc()).all()
+
+# ---------------------------------------------------------------------------
+# Bulk import recipe components (ingredients)
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("🧪 Bulk import recipe components (ingredients)")
+st.caption(
+    "A separate import from 'CSV / Excel import' above - that one creates recipe version "
+    "headers, this one fills in the raw materials/php/role inside a version that already "
+    "exists. Each row needs the recipe_version_id it belongs to (see the recipe version list "
+    "at the bottom of this page for IDs) and a raw material name — unmatched raw material "
+    "names are automatically added to the Raw Materials master list."
+)
+show_pending_banner("recipe_component_import_msg")
+comp_df, comp_filename = csv_excel_uploader(
+    COMPONENT_REQUIRED_COLUMNS, COMPONENT_OPTIONAL_COLUMNS, key="component_upload"
+)
+if comp_df is not None:
+    valid_version_ids = {v.id for v in versions}
+    good_rows, bad_rows = [], []
+    for _, row in comp_df.iterrows():
+        if row.get("recipe_version_id") in valid_version_ids and str(row.get("raw_material_name", "")).strip():
+            good_rows.append(row)
+        else:
+            bad_rows.append(row)
+
+    st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
+    if bad_rows:
+        st.warning("Flagged rows reference an unknown recipe_version_id or have no raw_material_name.")
+        render_data_table(pd.DataFrame(bad_rows), max_height="300px")
+
+    if good_rows and st.button("Confirm import (recipe components)", key="confirm_component_import"):
+        existing_keys = {
+            (c.recipe_version_id, c.raw_material_name.strip().lower())
+            for c in session.query(RecipeComponent).all()
+        }
+        new_rows, dup_rows = dedupe_import_rows(
+            good_rows,
+            existing_keys,
+            key_func=lambda row: (int(row["recipe_version_id"]), str(row["raw_material_name"]).strip().lower()),
+        )
+        for row in new_rows:
+            name_val = str(row["raw_material_name"]).strip()
+            supplier_val = str(row.get("supplier", "") or "")
+            rm = _match_or_create_raw_material(name_val, supplier_val)
+            session.add(
+                RecipeComponent(
+                    recipe_version_id=int(row["recipe_version_id"]),
+                    raw_material_id=rm.id if rm else None,
+                    raw_material_name=name_val,
+                    supplier=supplier_val,
+                    php=row.get("php") if not pd.isna(row.get("php")) else None,
+                    role_in_formulation=str(row.get("role_in_formulation", "") or ""),
+                    notes=str(row.get("notes", "") or ""),
+                )
+            )
+        session.commit()
+        msg = f"Imported {len(new_rows)} recipe component(s) from {comp_filename}."
+        if dup_rows:
+            msg += f" Skipped {len(dup_rows)} row(s) already recorded for their recipe version (likely a repeat click)."
+        set_pending_banner("recipe_component_import_msg", msg)
+        st.rerun()
+
+# ---------------------------------------------------------------------------
+# Recipe versions (full history + detail/edit/delete) - kept at the bottom of
+# the page on purpose: Create/Edit Recipe above cover the day-to-day flow,
+# this is the audit trail underneath it.
+# ---------------------------------------------------------------------------
 st.divider()
 st.subheader("Recipe versions")
 st.caption(
@@ -315,7 +388,6 @@ st.caption(
     "version's details, ingredients, or delete it."
 )
 
-versions = session.query(RecipeVersion).order_by(RecipeVersion.created_at.desc()).all()
 if not versions:
     st.info("No recipe versions recorded yet.")
 else:
@@ -538,62 +610,3 @@ else:
                         session.commit()
                         st.success("Component added.")
                         st.rerun()
-
-st.divider()
-st.subheader("🧪 Bulk import recipe components (ingredients)")
-st.caption(
-    "A separate import from 'CSV / Excel import' above - that one creates recipe version "
-    "headers, this one fills in the raw materials/php/role inside a version that already "
-    "exists. Each row needs the recipe_version_id it belongs to (see the recipe version list "
-    "above for IDs) and a raw material name — unmatched raw material names are automatically "
-    "added to the Raw Materials master list."
-)
-show_pending_banner("recipe_component_import_msg")
-comp_df, comp_filename = csv_excel_uploader(
-    COMPONENT_REQUIRED_COLUMNS, COMPONENT_OPTIONAL_COLUMNS, key="component_upload"
-)
-if comp_df is not None:
-    valid_version_ids = {v.id for v in versions}
-    good_rows, bad_rows = [], []
-    for _, row in comp_df.iterrows():
-        if row.get("recipe_version_id") in valid_version_ids and str(row.get("raw_material_name", "")).strip():
-            good_rows.append(row)
-        else:
-            bad_rows.append(row)
-
-    st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
-    if bad_rows:
-        st.warning("Flagged rows reference an unknown recipe_version_id or have no raw_material_name.")
-        render_data_table(pd.DataFrame(bad_rows), max_height="300px")
-
-    if good_rows and st.button("Confirm import (recipe components)", key="confirm_component_import"):
-        existing_keys = {
-            (c.recipe_version_id, c.raw_material_name.strip().lower())
-            for c in session.query(RecipeComponent).all()
-        }
-        new_rows, dup_rows = dedupe_import_rows(
-            good_rows,
-            existing_keys,
-            key_func=lambda row: (int(row["recipe_version_id"]), str(row["raw_material_name"]).strip().lower()),
-        )
-        for row in new_rows:
-            name_val = str(row["raw_material_name"]).strip()
-            supplier_val = str(row.get("supplier", "") or "")
-            rm = _match_or_create_raw_material(name_val, supplier_val)
-            session.add(
-                RecipeComponent(
-                    recipe_version_id=int(row["recipe_version_id"]),
-                    raw_material_id=rm.id if rm else None,
-                    raw_material_name=name_val,
-                    supplier=supplier_val,
-                    php=row.get("php") if not pd.isna(row.get("php")) else None,
-                    role_in_formulation=str(row.get("role_in_formulation", "") or ""),
-                    notes=str(row.get("notes", "") or ""),
-                )
-            )
-        session.commit()
-        msg = f"Imported {len(new_rows)} recipe component(s) from {comp_filename}."
-        if dup_rows:
-            msg += f" Skipped {len(dup_rows)} row(s) already recorded for their recipe version (likely a repeat click)."
-        set_pending_banner("recipe_component_import_msg", msg)
-        st.rerun()

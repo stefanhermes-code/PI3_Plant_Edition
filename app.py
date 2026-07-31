@@ -202,7 +202,7 @@ setup_pages = [
     st.Page("pages/1_Plant_Installation_Overview.py", title="Plant & Foam Equipment Overview", icon="🏭"),
     st.Page("pages/2_Product_Family_Foam_Grade.py", title="Product Family & Foam Grade", icon="🧬"),
     st.Page("pages/14_Raw_Materials.py", title="Raw Materials", icon="🧴"),
-    st.Page("pages/3_Recipe_Version_Record.py", title="Recipe Version Record", icon="📋"),
+    st.Page("pages/3_Recipe_Version_Record.py", title="Recipes", icon="📋"),
 ]
 
 production_pages = [

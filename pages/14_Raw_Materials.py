@@ -52,7 +52,7 @@ def _supplier_picker(session, key_prefix, current_value=None):
     """Dropdown-with-type-new-fallback for a raw material's default supplier,
     mirroring the same pattern used elsewhere in the app for raw materials
     themselves. Deliberately rendered OUTSIDE any st.form (like the Edit
-    Recipe data_editor on the Recipe Version Record page) so picking
+    Recipe data_editor on the Recipes page) so picking
     "+ Add new supplier..." can immediately reveal the free-text input on the
     same rerun - a selectbox inside a form only reruns on submit, which would
     hide that follow-up field until too late.

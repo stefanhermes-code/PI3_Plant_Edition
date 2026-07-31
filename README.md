@@ -24,7 +24,7 @@ autonomous formulation optimization.
 1. Dashboard (`app.py`)
 2. Plant & Foam Equipment Overview
 3. Product Family & Foam Grade Profile
-4. Recipe Version Record
+4. Recipes
 5. Production Run / Trial Record (also handles runtime data entry + CSV import)
 6. Quality Test Result
 7. Quality Issue
