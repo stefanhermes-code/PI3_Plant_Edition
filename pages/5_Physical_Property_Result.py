@@ -16,7 +16,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-from auth import logout_button, require_login
+from auth import current_user, logout_button, require_login
 from db import (
     CONDITIONING_TYPE_DEFAULTS,
     CONDITIONING_TYPES,
@@ -46,6 +46,7 @@ from helpers import (
     set_pending_banner,
     show_pending_banner,
 )
+from tenant_scope import apply_scope, company_picker, run_ids_for_company
 
 RESULT_REQUIRED_COLUMNS = ["production_run_id", "property_name", "test_method", "unit", "actual_value"]
 RESULT_OPTIONAL_COLUMNS = [
@@ -79,8 +80,18 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="qtr_company_filter"
+)
+active_company_id = company.id if company else None
+run_ids = run_ids_for_company(session, active_company_id)
 
-runs = session.query(ProductionRun).order_by(ProductionRun.created_at.desc()).all()
+runs = (
+    apply_scope(session.query(ProductionRun), ProductionRun.id, run_ids)
+    .order_by(ProductionRun.created_at.desc())
+    .all()
+)
 if not runs:
     st.warning("Create a production run first (Production Run page).")
     st.stop()
@@ -141,10 +152,12 @@ with st.expander("Bulk import samples (CSV / Excel)", expanded=False):
         SAMPLE_REQUIRED_COLUMNS, SAMPLE_OPTIONAL_COLUMNS, key="sample_upload"
     )
     if sample_df is not None:
-        run_ids = {r.id for r in runs}
+        # Local name (not the outer, possibly-None `run_ids`) since `runs` is
+        # already a concrete, company-scoped list at this point.
+        sample_import_run_ids = {r.id for r in runs}
         good_rows, bad_rows = [], []
         for _, row in sample_df.iterrows():
-            if row.get("production_run_id") in run_ids and str(row.get("zone_label", "")).strip():
+            if row.get("production_run_id") in sample_import_run_ids and str(row.get("zone_label", "")).strip():
                 good_rows.append(row)
             else:
                 bad_rows.append(row)
@@ -180,7 +193,11 @@ with st.expander("Bulk import samples (CSV / Excel)", expanded=False):
             set_pending_banner("sample_import_msg", msg)
             st.rerun()
 
-samples = session.query(Sample).order_by(Sample.id.desc()).all()
+samples = (
+    apply_scope(session.query(Sample), Sample.production_run_id, run_ids)
+    .order_by(Sample.id.desc())
+    .all()
+)
 if samples:
     with st.expander(f"Existing samples ({len(samples)})", expanded=False):
         sample_rows = [
@@ -339,8 +356,13 @@ else:
                     st.success("Conditioning segment saved.")
                     st.rerun()
 
+    sample_ids = [s.id for s in samples]
     recent_conditioning = (
-        session.query(ConditioningSegment).order_by(ConditioningSegment.id.desc()).limit(30).all()
+        session.query(ConditioningSegment)
+        .filter(ConditioningSegment.sample_id.in_(sample_ids))
+        .order_by(ConditioningSegment.id.desc())
+        .limit(30)
+        .all()
     )
     if recent_conditioning:
         with st.expander(f"Recent conditioning segments ({len(recent_conditioning)} shown, max 30)"):
@@ -563,16 +585,25 @@ with tab_result_import:
         RESULT_REQUIRED_COLUMNS, RESULT_OPTIONAL_COLUMNS, key="result_upload"
     )
     if result_df is not None:
-        run_ids = {r.id for r in runs}
+        import_run_ids = {r.id for r in runs}
         defs_by_name = {p.name.strip().lower(): p for p in property_defs}
-        samples_all = {s.id: s for s in session.query(Sample).all()}
-        trials_all = {t.id: t for t in session.query(TrialRecord).all()}
+        # Scoped to this company's runs - otherwise a CSV row could attach a
+        # new result to a different company's sample or trial (the run_id
+        # check alone doesn't catch that, since sample_id/trial_record_id
+        # are independent columns).
+        samples_all = {
+            s.id: s for s in apply_scope(session.query(Sample), Sample.production_run_id, run_ids).all()
+        }
+        trials_all = {
+            t.id: t
+            for t in apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, run_ids).all()
+        }
 
         good_rows, bad_rows = [], []
         for _, row in result_df.iterrows():
             try:
                 prop_def = defs_by_name.get(str(row.get("property_name", "")).strip().lower())
-                run_ok = row.get("production_run_id") in run_ids
+                run_ok = row.get("production_run_id") in import_run_ids
                 sample_val = row.get("sample_id")
                 sample_ok = pd.isna(sample_val) or int(sample_val) in samples_all
                 trial_val = row.get("trial_record_id")

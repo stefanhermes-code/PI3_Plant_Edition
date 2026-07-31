@@ -30,8 +30,9 @@ from analytics import (
     property_run_series,
     trend_test,
 )
-from auth import logout_button, require_login
+from auth import current_user, logout_button, require_login
 from db import FoamGrade, QualityObservation, get_session, init_db
+from tenant_scope import apply_scope, company_picker, grade_ids_for_company
 from helpers import (
     CHART_ZOOM_HINT,
     page_setup,
@@ -70,6 +71,12 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="trend_company_filter"
+)
+active_company_id = company.id if company else None
+scoped_grade_ids = grade_ids_for_company(session, active_company_id)
 
 # Plain-language description for each control-chart rule name from
 # analytics.control_chart_analysis() - the analysis itself keeps its
@@ -122,7 +129,7 @@ def _line_chart_no_zero(df, value_cols):
 # otherwise picking it just leads to a dead-end message (see Recipe
 # Optimization's identical filter).
 grades = [
-    g for g in session.query(FoamGrade).all()
+    g for g in apply_scope(session.query(FoamGrade), FoamGrade.id, scoped_grade_ids).all()
     if not property_results_dataframe(session, foam_grade_id=g.id).empty
 ]
 if not grades:

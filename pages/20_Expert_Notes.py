@@ -34,6 +34,7 @@ from helpers import (
     page_setup,
     render_function_action_intro,
 )
+from tenant_scope import apply_scope, company_picker, grade_ids_for_company, run_ids_for_company
 
 page_setup("Expert Notes")
 init_db()
@@ -62,6 +63,12 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="expert_notes_company_filter"
+)
+active_company_id = company.id if company else None
+scoped_run_ids = run_ids_for_company(session, active_company_id)
+scoped_grade_ids = grade_ids_for_company(session, active_company_id)
 
 LINK_TYPES = {
     "Production Run": "production_run",
@@ -70,9 +77,21 @@ LINK_TYPES = {
 }
 
 
-runs = session.query(ProductionRun).order_by(ProductionRun.created_at.desc()).all()
-trials = session.query(TrialRecord).order_by(TrialRecord.created_at.desc()).all()
-grades = session.query(FoamGrade).order_by(FoamGrade.grade_name).all()
+runs = (
+    apply_scope(session.query(ProductionRun), ProductionRun.id, scoped_run_ids)
+    .order_by(ProductionRun.created_at.desc())
+    .all()
+)
+trials = (
+    apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, scoped_run_ids)
+    .order_by(TrialRecord.created_at.desc())
+    .all()
+)
+grades = (
+    apply_scope(session.query(FoamGrade), FoamGrade.id, scoped_grade_ids)
+    .order_by(FoamGrade.grade_name)
+    .all()
+)
 
 st.subheader("Add an expert note")
 # The "Link to" selector lives outside the form on purpose: widgets inside
@@ -139,7 +158,23 @@ with st.form("add_expert_note"):
 st.divider()
 st.subheader("Expert notes")
 
-notes = session.query(ExpertNote).order_by(ExpertNote.created_at.desc()).all()
+all_notes = session.query(ExpertNote).order_by(ExpertNote.created_at.desc()).all()
+if active_company_id is None:
+    notes = all_notes
+else:
+    # ExpertNote is polymorphic (linked_entity_type + linked_entity_id can
+    # point at a production run, trial record, or foam grade). Scope each
+    # kind against the id set already computed above for that company.
+    scoped_trial_ids = {t.id for t in trials}
+    scoped_run_id_set = set(scoped_run_ids) if scoped_run_ids else set()
+    scoped_grade_id_set = set(scoped_grade_ids) if scoped_grade_ids else set()
+    notes = [
+        n
+        for n in all_notes
+        if (n.linked_entity_type == "production_run" and n.linked_entity_id in scoped_run_id_set)
+        or (n.linked_entity_type == "trial_record" and n.linked_entity_id in scoped_trial_ids)
+        or (n.linked_entity_type == "foam_grade" and n.linked_entity_id in scoped_grade_id_set)
+    ]
 if not notes:
     st.info("No expert notes recorded yet.")
 else:

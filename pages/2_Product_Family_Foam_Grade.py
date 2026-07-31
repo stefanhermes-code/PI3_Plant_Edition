@@ -3,7 +3,7 @@
 import pandas as pd
 import streamlit as st
 
-from auth import logout_button, require_login
+from auth import current_user, logout_button, require_login
 from cascades import (
     delete_foam_grade_cascade,
     delete_product_family_cascade,
@@ -22,6 +22,7 @@ from helpers import (
     set_pending_banner,
     show_pending_banner,
 )
+from tenant_scope import apply_scope, company_picker, family_ids_for_plants, plant_ids_for_company
 
 GRADE_REQUIRED_COLUMNS = ["product_family_id", "grade_name"]
 GRADE_OPTIONAL_COLUMNS = ["target_density", "target_hardness", "notes"]
@@ -59,8 +60,15 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="pfg_company_filter"
+)
+company_id = company.id if company else None
+plant_ids = plant_ids_for_company(session, company_id)
+family_ids = family_ids_for_plants(session, plant_ids)
 
-plants = session.query(Plant).all()
+plants = apply_scope(session.query(Plant), Plant.id, plant_ids).all()
 if not plants:
     st.warning("Add a plant first (Plant & Foam Equipment Overview) before creating product families.")
     st.stop()
@@ -94,7 +102,7 @@ with tab_family:
                     st.rerun()
 
     st.divider()
-    families = session.query(ProductFamily).all()
+    families = apply_scope(session.query(ProductFamily), ProductFamily.plant_id, plant_ids).all()
     if not families:
         st.info("No product families recorded yet.")
     else:
@@ -172,7 +180,7 @@ with tab_family:
                 st.rerun()
 
 with tab_grade:
-    families = session.query(ProductFamily).all()
+    families = apply_scope(session.query(ProductFamily), ProductFamily.plant_id, plant_ids).all()
     property_defs = (
         session.query(PhysicalPropertyDefinition)
         .order_by(PhysicalPropertyDefinition.is_common.desc(), PhysicalPropertyDefinition.sort_order)
@@ -230,7 +238,9 @@ with tab_grade:
                 if good_rows and st.button("Confirm import", key="confirm_grade_import"):
                     existing_keys = {
                         (g.product_family_id, g.grade_name.strip().lower())
-                        for g in session.query(FoamGrade).all()
+                        for g in apply_scope(
+                            session.query(FoamGrade), FoamGrade.product_family_id, family_ids
+                        ).all()
                     }
                     new_rows, dup_rows = dedupe_import_rows(
                         good_rows,
@@ -255,7 +265,7 @@ with tab_grade:
                     st.rerun()
 
         st.divider()
-        grades = session.query(FoamGrade).all()
+        grades = apply_scope(session.query(FoamGrade), FoamGrade.product_family_id, family_ids).all()
         if not grades:
             st.info("No foam grades recorded yet.")
         else:

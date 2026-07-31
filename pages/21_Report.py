@@ -17,9 +17,10 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-from auth import logout_button, require_login
+from auth import current_user, logout_button, require_login
 from db import FoamGrade, Plant, ProductFamily, ProductionRun, TrialRecord, get_session, init_db
 from helpers import page_setup, render_data_table, render_function_action_intro
+from tenant_scope import apply_scope, company_picker, family_ids_for_plants, plant_ids_for_company, run_ids_for_company
 import reports
 
 page_setup("Report")
@@ -44,6 +45,14 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="report_company_filter"
+)
+active_company_id = company.id if company else None
+scoped_plant_ids = plant_ids_for_company(session, active_company_id)
+scoped_family_ids = family_ids_for_plants(session, scoped_plant_ids)
+scoped_run_ids = run_ids_for_company(session, active_company_id)
 
 tab_run, tab_period, tab_trial = st.tabs(
     ["Production Run Report", "Plant / Period Summary", "Trial Closeout Report"]
@@ -53,7 +62,11 @@ tab_run, tab_period, tab_trial = st.tabs(
 # 1. Production Run Report
 # ---------------------------------------------------------------------------
 with tab_run:
-    runs = session.query(ProductionRun).order_by(ProductionRun.run_date.desc()).all()
+    runs = (
+        apply_scope(session.query(ProductionRun), ProductionRun.id, scoped_run_ids)
+        .order_by(ProductionRun.run_date.desc())
+        .all()
+    )
     if not runs:
         st.info("No production runs recorded yet.")
     else:
@@ -106,13 +119,13 @@ with tab_run:
 # ---------------------------------------------------------------------------
 with tab_period:
     p1, p2, p3, p4 = st.columns(4)
-    plants = session.query(Plant).all()
+    plants = apply_scope(session.query(Plant), Plant.id, scoped_plant_ids).all()
     with p1:
         plant = st.selectbox(
             "Plant", [None] + plants, format_func=lambda p: "All plants" if p is None else p.name,
             key="report_period_plant",
         )
-    families_q = session.query(ProductFamily)
+    families_q = apply_scope(session.query(ProductFamily), ProductFamily.id, scoped_family_ids)
     if plant:
         families_q = families_q.filter(ProductFamily.plant_id == plant.id)
     with p2:
@@ -134,6 +147,7 @@ with tab_period:
         product_family_id=family.id if family else None,
         date_from=date_from,
         date_to=date_to,
+        allowed_plant_ids=scoped_plant_ids,
     )
 
     st.subheader(f"{data['plant']} · {data['product_family']}")
@@ -169,7 +183,7 @@ with tab_period:
 # ---------------------------------------------------------------------------
 with tab_trial:
     closed_trials = (
-        session.query(TrialRecord)
+        apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, scoped_run_ids)
         .filter(TrialRecord.status == "Closed")
         .order_by(TrialRecord.date_closed.desc())
         .all()

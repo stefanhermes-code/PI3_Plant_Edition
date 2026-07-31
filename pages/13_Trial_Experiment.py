@@ -14,7 +14,7 @@ but always belongs to a production run first and foremost.
 
 import streamlit as st
 
-from auth import logout_button, require_login
+from auth import current_user, logout_button, require_login
 from db import (
     AdjustmentConclusion,
     ApprovalRecord,
@@ -26,6 +26,7 @@ from db import (
     init_db,
 )
 from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
+from tenant_scope import apply_scope, company_picker, run_ids_for_company
 
 page_setup("Trial / Experiment")
 init_db()
@@ -49,8 +50,18 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="trial_company_filter"
+)
+active_company_id = company.id if company else None
+scoped_run_ids = run_ids_for_company(session, active_company_id)
 
-runs = session.query(ProductionRun).order_by(ProductionRun.created_at.desc()).all()
+runs = (
+    apply_scope(session.query(ProductionRun), ProductionRun.id, scoped_run_ids)
+    .order_by(ProductionRun.created_at.desc())
+    .all()
+)
 if not runs:
     st.warning("Create a production run first (Production Run page).")
     st.stop()
@@ -90,7 +101,11 @@ st.subheader("Trials")
 status_filter = st.multiselect(
     "Status filter", ["Open", "Pending Closure", "Closed"], default=["Open", "Pending Closure", "Closed"]
 )
-trials = session.query(TrialRecord).order_by(TrialRecord.created_at.desc()).all()
+trials = (
+    apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, scoped_run_ids)
+    .order_by(TrialRecord.created_at.desc())
+    .all()
+)
 trials = [t for t in trials if t.status in status_filter]
 
 if not trials:

@@ -338,8 +338,17 @@ def render_run_report_excel(data):
 # 2. Plant / Period Summary Report
 # ---------------------------------------------------------------------------
 
-def build_period_summary_data(session, plant_id=None, product_family_id=None, date_from=None, date_to=None):
+def build_period_summary_data(session, plant_id=None, product_family_id=None, date_from=None, date_to=None, allowed_plant_ids=None):
+    """allowed_plant_ids is the tenant-scope guardrail (see tenant_scope.py):
+    None = unfiltered (platform owner viewing "All companies"), otherwise the
+    list of plant ids the calling company is allowed to see - applied
+    unconditionally, on top of whatever single-plant choice plant_id
+    represents. Without this, a non-owner user who leaves the on-screen
+    "Plant" selector at its default "All plants" would get a report across
+    every plant in the database, not just their own company's."""
     runs_q = session.query(ProductionRun)
+    if allowed_plant_ids is not None:
+        runs_q = runs_q.filter(ProductionRun.plant_id.in_(allowed_plant_ids))
     if plant_id:
         runs_q = runs_q.filter(ProductionRun.plant_id == plant_id)
     if product_family_id:

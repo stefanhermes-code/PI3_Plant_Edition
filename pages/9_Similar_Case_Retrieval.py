@@ -22,8 +22,15 @@ from db import (
     get_session,
     init_db,
 )
-from auth import logout_button, require_login
+from auth import current_user, logout_button, require_login
 from helpers import confidence_badge, page_setup, render_function_action_intro
+from tenant_scope import (
+    apply_scope,
+    company_picker,
+    family_ids_for_plants,
+    plant_ids_for_company,
+    run_ids_for_company,
+)
 
 page_setup("Similar Case Retrieval")
 init_db()
@@ -52,13 +59,21 @@ st.info(
     "Decisions remain with your technical team."
 )
 session = get_session()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="scr_company_filter"
+)
+active_company_id = company.id if company else None
+scoped_plant_ids = plant_ids_for_company(session, active_company_id)
+scoped_family_ids = family_ids_for_plants(session, scoped_plant_ids)
+scoped_run_ids = run_ids_for_company(session, active_company_id)
 
 col1, col2, col3 = st.columns(3)
-families = session.query(ProductFamily).all()
+families = apply_scope(session.query(ProductFamily), ProductFamily.id, scoped_family_ids).all()
 with col1:
     family = st.selectbox("Product family", [None] + families, format_func=lambda f: "Any" if f is None else f.name)
 
-grades_q = session.query(FoamGrade)
+grades_q = apply_scope(session.query(FoamGrade), FoamGrade.product_family_id, scoped_family_ids)
 if family:
     grades_q = grades_q.filter(FoamGrade.product_family_id == family.id)
 with col2:
@@ -180,7 +195,11 @@ st.caption(
     "searches surface them together."
 )
 
-closed_trials = session.query(TrialRecord).filter(TrialRecord.status == "Closed").all()
+closed_trials = (
+    apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, scoped_run_ids)
+    .filter(TrialRecord.status == "Closed")
+    .all()
+)
 if len(closed_trials) >= 2:
     with st.form("save_similar_case_link"):
         c1, c2 = st.columns(2)

@@ -25,6 +25,7 @@ import pi3_query_tool
 from db import Plant, PI3AIConnectionSetting, get_session, init_db
 from auth import current_user, logout_button, require_login, require_role
 from helpers import page_setup, render_data_table, render_function_action_intro
+from tenant_scope import apply_scope, company_picker
 
 page_setup("PI3 Connectivity")
 init_db()
@@ -104,7 +105,12 @@ if current_user()["role"] == "admin":
     st.divider()
 
 session = get_session()
-plants = session.query(Plant).all()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="pi3_connectivity_company_filter"
+)
+active_company_id = company.id if company else None
+plants = apply_scope(session.query(Plant), Plant.company_id, [active_company_id] if active_company_id else None).all()
 if not plants:
     st.info("Add a plant first.")
     st.stop()

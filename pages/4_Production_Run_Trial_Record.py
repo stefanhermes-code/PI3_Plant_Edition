@@ -29,7 +29,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-from auth import logout_button, require_login
+from auth import current_user, logout_button, require_login
 from cascades import delete_production_run_cascade, production_run_dependency_counts
 from db import (
     EVENT_TYPES,
@@ -68,6 +68,7 @@ from helpers import (
     set_pending_banner,
     show_pending_banner,
 )
+from tenant_scope import apply_scope, company_picker, grade_ids_for_company, plant_ids_for_company
 
 RUN_REQUIRED_COLUMNS = ["foam_grade_id", "recipe_version_id"]
 RUN_OPTIONAL_COLUMNS = [
@@ -120,16 +121,16 @@ def _run_label(r):
     return f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}"
 
 
-def _max_batch_seq_for_prefix(session, prefix):
+def _max_batch_seq_for_prefix(session, prefix, plant_ids):
     """Highest existing sequence number already used under a given
-    'B-DDMMYY' prefix. Uses the max, not a count, so a deleted or
-    out-of-order batch reference never causes a duplicate number to be
-    reissued."""
-    existing = (
-        session.query(ProductionRun.batch_reference)
-        .filter(ProductionRun.batch_reference.like(f"{prefix}-%"))
-        .all()
-    )
+    'B-DDMMYY' prefix, scoped to this company's plants (plant_ids=None means
+    unfiltered - the platform owner viewing "All companies"). Uses the max,
+    not a count, so a deleted or out-of-order batch reference never causes a
+    duplicate number to be reissued. Scoping matters here too: without it,
+    one company's daily batch count would jump around based on a different
+    company's unrelated activity on the same calendar day."""
+    query = session.query(ProductionRun.batch_reference).filter(ProductionRun.batch_reference.like(f"{prefix}-%"))
+    existing = apply_scope(query, ProductionRun.plant_id, plant_ids).all()
     max_seq = 0
     for (br,) in existing:
         if not br:
@@ -140,13 +141,13 @@ def _max_batch_seq_for_prefix(session, prefix):
     return max_seq
 
 
-def _generate_batch_reference(session, run_date):
+def _generate_batch_reference(session, run_date, plant_ids):
     """Auto-generate a batch reference as B-DDMMYY-NN (e.g. B-240726-01),
-    NN scoped per calendar day so it resets daily and stays short. Manual
-    batch numbers are error-prone (typos, accidental duplicates) so this
-    is computed rather than typed."""
+    NN scoped per calendar day (and per company) so it resets daily and
+    stays short. Manual batch numbers are error-prone (typos, accidental
+    duplicates) so this is computed rather than typed."""
     prefix = f"B-{run_date:%d%m%y}"
-    return f"{prefix}-{_max_batch_seq_for_prefix(session, prefix) + 1:02d}"
+    return f"{prefix}-{_max_batch_seq_for_prefix(session, prefix, plant_ids) + 1:02d}"
 
 
 def _run_selector(runs, key):
@@ -219,13 +220,24 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="prod_run_company_filter"
+)
+active_company_id = company.id if company else None
+plant_ids = plant_ids_for_company(session, active_company_id)
+grade_ids = grade_ids_for_company(session, active_company_id)
 
-grades = session.query(FoamGrade).all()
+grades = apply_scope(session.query(FoamGrade), FoamGrade.id, grade_ids).all()
 if not grades:
     st.warning("Add a foam grade and recipe version first.")
     st.stop()
 
-runs = session.query(ProductionRun).order_by(ProductionRun.created_at.desc()).all()
+runs = (
+    apply_scope(session.query(ProductionRun), ProductionRun.plant_id, plant_ids)
+    .order_by(ProductionRun.created_at.desc())
+    .all()
+)
 
 tab_runs, tab_phases, tab_streams, tab_events, tab_runtime = st.tabs(
     [
@@ -378,7 +390,7 @@ with tab_runs:
             # below updates live as it's changed, before the operator commits
             # to saving - forms otherwise only release widget values on submit.
             run_date = st.date_input("Run date", value=dt.date.today(), key="create_run_date")
-            batch_reference = _generate_batch_reference(session, run_date)
+            batch_reference = _generate_batch_reference(session, run_date, plant_ids)
             st.caption(
                 f"Batch reference (auto-generated, prevents typos/duplicates): **{batch_reference}**"
             )
@@ -419,7 +431,7 @@ with tab_runs:
                             foam_grade_id=grade.id,
                             recipe_version_id=recipe_version.id,
                             run_date=run_date,
-                            batch_reference=_generate_batch_reference(session, run_date),
+                            batch_reference=_generate_batch_reference(session, run_date, plant_ids),
                             block_reference=block_reference,
                             machine_id=machine.id if machine else None,
                             operator_or_team_reference=operator,
@@ -441,7 +453,13 @@ with tab_runs:
             if run_df is not None:
                 grades_by_id = {g.id: g for g in grades}
                 versions_by_id = {v.id: v for v in session.query(RecipeVersion).all()}
-                machines_by_id = {m.id: m for m in session.query(Machine).all()}
+                # Scoped to this company's plants too - otherwise a CSV row could
+                # reference a machine_id belonging to a different company (the
+                # foam_grade/recipe_version cross-check above doesn't catch this,
+                # since machine_id isn't derived from either of those).
+                machines_by_id = {
+                    m.id: m for m in apply_scope(session.query(Machine), Machine.plant_id, plant_ids).all()
+                }
                 good_rows, bad_rows = [], []
                 for _, row in run_df.iterrows():
                     try:
@@ -473,7 +491,9 @@ with tab_runs:
                     # twice. Rows with a blank batch_reference always get a
                     # fresh auto-generated one, so they need no such check.
                     existing_batch_refs = {
-                        r.batch_reference for r in session.query(ProductionRun).all() if r.batch_reference
+                        r.batch_reference
+                        for r in apply_scope(session.query(ProductionRun), ProductionRun.plant_id, plant_ids).all()
+                        if r.batch_reference
                     }
                     import_rows, dup_rows = [], []
                     for row in good_rows:
@@ -499,7 +519,7 @@ with tab_runs:
                         if not batch_val:
                             prefix = f"B-{final_run_date:%d%m%y}"
                             if prefix not in seq_by_prefix:
-                                seq_by_prefix[prefix] = _max_batch_seq_for_prefix(session, prefix)
+                                seq_by_prefix[prefix] = _max_batch_seq_for_prefix(session, prefix, plant_ids)
                             seq_by_prefix[prefix] += 1
                             batch_val = f"{prefix}-{seq_by_prefix[prefix]:02d}"
                         session.add(

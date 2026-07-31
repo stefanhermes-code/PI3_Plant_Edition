@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from db import CONFIDENCE_LEVELS, ProductionRun, QualityObservation, TrialRecord, get_session, init_db
-from auth import logout_button, require_login
+from auth import current_user, logout_button, require_login
 from helpers import (
     clickable_table,
     confidence_badge,
@@ -27,6 +27,7 @@ from helpers import (
     set_pending_banner,
     show_pending_banner,
 )
+from tenant_scope import apply_scope, company_picker, run_ids_for_company
 
 OBSERVATION_REQUIRED_COLUMNS = ["production_run_id", "observation_type"]
 OBSERVATION_OPTIONAL_COLUMNS = [
@@ -58,8 +59,18 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="qi_company_filter"
+)
+active_company_id = company.id if company else None
+scoped_run_ids = run_ids_for_company(session, active_company_id)
 
-runs = session.query(ProductionRun).order_by(ProductionRun.created_at.desc()).all()
+runs = (
+    apply_scope(session.query(ProductionRun), ProductionRun.id, scoped_run_ids)
+    .order_by(ProductionRun.created_at.desc())
+    .all()
+)
 if not runs:
     st.warning("Create a production run first (Production Run page).")
     st.stop()
@@ -127,7 +138,12 @@ with tab_obs_import:
     )
     if obs_df is not None:
         run_ids = {r.id for r in runs}
-        trials_all = {t.id: t for t in session.query(TrialRecord).all()}
+        # Scoped to this company's runs - otherwise a CSV row could link a
+        # new quality issue to a different company's trial record.
+        trials_all = {
+            t.id: t
+            for t in apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, scoped_run_ids).all()
+        }
         good_rows, bad_rows = [], []
         for _, row in obs_df.iterrows():
             try:
@@ -200,7 +216,7 @@ st.subheader("Quality issues")
 
 severity_filter = st.multiselect("Severity filter", ["Low", "Medium", "High"], default=["Low", "Medium", "High"])
 observations = (
-    session.query(QualityObservation)
+    apply_scope(session.query(QualityObservation), QualityObservation.production_run_id, scoped_run_ids)
     .filter(QualityObservation.severity.in_(severity_filter))
     .order_by(QualityObservation.observed_at.desc())
     .all()

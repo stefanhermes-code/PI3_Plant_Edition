@@ -16,9 +16,10 @@ from analytics import (
     property_results_dataframe,
     rank_setting_optimization,
 )
-from auth import logout_button, require_login
+from auth import current_user, logout_button, require_login
 from db import FoamGrade, get_session, init_db
 from helpers import page_setup, render_data_table, render_function_action_intro, render_scatter_chart_no_zero
+from tenant_scope import apply_scope, company_picker, grade_ids_for_company
 
 page_setup("Machine Settings Optimization")
 init_db()
@@ -42,12 +43,18 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="mso_company_filter"
+)
+active_company_id = company.id if company else None
+scoped_grade_ids = grade_ids_for_company(session, active_company_id)
 
 # Only offer a grade here if it actually has quality test results to rank
 # settings against - otherwise picking it just leads to a dead-end message
 # (see Recipe Optimization's identical filter).
 grades = [
-    g for g in session.query(FoamGrade).all()
+    g for g in apply_scope(session.query(FoamGrade), FoamGrade.id, scoped_grade_ids).all()
     if not property_results_dataframe(session, foam_grade_id=g.id).empty
 ]
 if not grades:

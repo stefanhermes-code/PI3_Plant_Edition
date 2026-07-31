@@ -39,6 +39,7 @@ from helpers import (
     set_pending_banner,
     show_pending_banner,
 )
+from tenant_scope import apply_scope, company_picker, grade_ids_for_company
 
 RECIPE_VERSION_REQUIRED_COLUMNS = ["foam_grade_id", "version_label"]
 RECIPE_VERSION_OPTIONAL_COLUMNS = ["effective_date", "change_note", "approval_status", "created_by"]
@@ -73,9 +74,14 @@ render_function_action_intro(
     ),
 )
 session = get_session()
-own_company_id = current_user()["company_id"]
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="recipes_company_filter"
+)
+active_company_id = company.id if company else None
+grade_ids = grade_ids_for_company(session, active_company_id)
 
-grades = session.query(FoamGrade).all()
+grades = apply_scope(session.query(FoamGrade), FoamGrade.id, grade_ids).all()
 if not grades:
     st.warning("Add a foam grade first (Product Family & Foam Grade page).")
     st.stop()
@@ -87,7 +93,8 @@ def _match_or_create_raw_material(name, supplier=None):
     entry becomes available in the master list (and future dropdowns)
     immediately, not just a one-off string on this one component.
 
-    Scoped to the current user's own company - without this, a case-
+    Scoped to the company currently in view (the platform owner's company
+    filter, or the logged-in user's own company) - without this, a case-
     insensitive name match could silently link a recipe component to a
     different company's raw material row (and its cost_per_kg), which
     would leak proprietary data across the tenant boundary."""
@@ -95,13 +102,13 @@ def _match_or_create_raw_material(name, supplier=None):
     if not name:
         return None
     match_query = session.query(RawMaterial).filter(RawMaterial.name.ilike(name))
-    if own_company_id is not None:
-        match_query = match_query.filter(RawMaterial.company_id == own_company_id)
+    if active_company_id is not None:
+        match_query = match_query.filter(RawMaterial.company_id == active_company_id)
     match = match_query.first()
     if match:
         return match
     new_rm = RawMaterial(
-        company_id=own_company_id, name=name, category="Other", default_supplier=supplier or "", active=True
+        company_id=active_company_id, name=name, category="Other", default_supplier=supplier or "", active=True
     )
     session.add(new_rm)
     session.flush()
@@ -276,7 +283,8 @@ with tab_import:
 
         if good_rows and st.button("Confirm import (recipe versions)", key="confirm_recipe_version_import"):
             existing_keys = {
-                (r.foam_grade_id, r.version_label.strip().lower()) for r in session.query(RecipeVersion).all()
+                (r.foam_grade_id, r.version_label.strip().lower())
+                for r in apply_scope(session.query(RecipeVersion), RecipeVersion.foam_grade_id, grade_ids).all()
             }
             new_rows, dup_rows = dedupe_import_rows(
                 good_rows,
@@ -285,7 +293,9 @@ with tab_import:
             )
             grades_with_active_ids = {
                 gid
-                for (gid,) in session.query(RecipeVersion.foam_grade_id)
+                for (gid,) in apply_scope(
+                    session.query(RecipeVersion.foam_grade_id), RecipeVersion.foam_grade_id, grade_ids
+                )
                 .filter(RecipeVersion.is_active.is_(True))
                 .all()
             }
@@ -319,7 +329,12 @@ with tab_import:
 # because "Bulk import recipe components" also needs it for valid_version_ids
 # - and that section now renders first, with "Recipe versions" moved to the
 # bottom of the page.
-versions = session.query(RecipeVersion).order_by(RecipeVersion.created_at.desc()).all()
+versions = (
+    apply_scope(session.query(RecipeVersion), RecipeVersion.foam_grade_id, grade_ids)
+    .order_by(RecipeVersion.created_at.desc())
+    .all()
+)
+version_ids = [v.id for v in versions]
 
 # ---------------------------------------------------------------------------
 # Bulk import recipe components (ingredients)
@@ -354,7 +369,9 @@ if comp_df is not None:
     if good_rows and st.button("Confirm import (recipe components)", key="confirm_component_import"):
         existing_keys = {
             (c.recipe_version_id, c.raw_material_name.strip().lower())
-            for c in session.query(RecipeComponent).all()
+            for c in apply_scope(
+                session.query(RecipeComponent), RecipeComponent.recipe_version_id, version_ids
+            ).all()
         }
         new_rows, dup_rows = dedupe_import_rows(
             good_rows,
@@ -565,8 +582,11 @@ else:
                         st.session_state.pop("comp_selected_id", None)
                         st.rerun()
 
+            rm_query = session.query(RawMaterial)
+            if active_company_id is not None:
+                rm_query = rm_query.filter(RawMaterial.company_id == active_company_id)
             active_raw_materials = (
-                session.query(RawMaterial)
+                rm_query
                 .filter(RawMaterial.active.is_(True))
                 .order_by(RawMaterial.name)
                 .all()

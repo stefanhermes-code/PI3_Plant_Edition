@@ -11,8 +11,9 @@ import datetime as dt
 import streamlit as st
 
 from db import INSTALLATION_TYPES, MaintenanceLicenseRecord, Plant, get_session, init_db
-from auth import logout_button, require_login, require_role
+from auth import current_user, logout_button, require_login, require_role
 from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
+from tenant_scope import apply_scope, company_picker, plant_ids_for_company
 
 page_setup("Maintenance & License Admin")
 init_db()
@@ -36,8 +37,14 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="maintenance_company_filter"
+)
+active_company_id = company.id if company else None
+scoped_plant_ids = plant_ids_for_company(session, active_company_id)
 
-plants = session.query(Plant).all()
+plants = apply_scope(session.query(Plant), Plant.id, scoped_plant_ids).all()
 if not plants:
     st.info("Add a plant first.")
     st.stop()
@@ -78,7 +85,7 @@ with st.expander("Add / update commercial record", expanded=False):
 st.divider()
 st.subheader("Commercial records")
 
-records = session.query(MaintenanceLicenseRecord).all()
+records = apply_scope(session.query(MaintenanceLicenseRecord), MaintenanceLicenseRecord.plant_id, scoped_plant_ids).all()
 if not records:
     st.info("No commercial records yet.")
 else:

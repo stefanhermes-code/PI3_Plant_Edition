@@ -10,7 +10,7 @@ closure still requires review + approval on the Approval & Review screen.
 import streamlit as st
 
 from db import CONFIDENCE_LEVELS, AdjustmentConclusion, TrialRecord, get_session, init_db
-from auth import logout_button, require_login
+from auth import current_user, logout_button, require_login
 from helpers import (
     clickable_table,
     confidence_badge,
@@ -18,6 +18,7 @@ from helpers import (
     page_setup,
     render_function_action_intro,
 )
+from tenant_scope import apply_scope, company_picker, run_ids_for_company
 
 page_setup("Adjustment & Conclusion")
 init_db()
@@ -43,8 +44,19 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="adj_company_filter"
+)
+active_company_id = company.id if company else None
+scoped_run_ids = run_ids_for_company(session, active_company_id)
 
-trials = session.query(TrialRecord).filter(TrialRecord.status != "Closed").order_by(TrialRecord.created_at.desc()).all()
+trials = (
+    apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, scoped_run_ids)
+    .filter(TrialRecord.status != "Closed")
+    .order_by(TrialRecord.created_at.desc())
+    .all()
+)
 if not trials:
     st.info("No open trials. Create one on the Trial / Experiment page.")
     st.stop()

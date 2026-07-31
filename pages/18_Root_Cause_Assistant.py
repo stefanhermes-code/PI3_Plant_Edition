@@ -11,8 +11,9 @@ import streamlit as st
 
 import ai_assistant
 from analytics import PHASE_SETTING_LABELS, run_settings_dataframe
-from auth import logout_button, require_login
+from auth import current_user, logout_button, require_login
 from db import QualityObservation, get_session, init_db
+from tenant_scope import apply_scope, company_picker, run_ids_for_company
 from helpers import (
     page_setup,
     render_ask_pi3_section,
@@ -43,8 +44,18 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
+company, _all_companies = company_picker(
+    st, session, user["is_platform_owner"], user["company_id"], key="rca_company_filter"
+)
+active_company_id = company.id if company else None
+scoped_run_ids = run_ids_for_company(session, active_company_id)
 
-observations = session.query(QualityObservation).order_by(QualityObservation.observed_at.desc()).all()
+observations = (
+    apply_scope(session.query(QualityObservation), QualityObservation.production_run_id, scoped_run_ids)
+    .order_by(QualityObservation.observed_at.desc())
+    .all()
+)
 if not observations:
     st.info("No quality issues recorded yet.")
     st.stop()
