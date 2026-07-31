@@ -192,6 +192,15 @@ class Company(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(200), nullable=False)
+    # The formal registered entity name, if different from the (often
+    # shorter/trading) name above - e.g. name="Acme Foams", legal_entity_name
+    # ="Acme Foam Industries Pte Ltd". Optional: left blank, `name` is used.
+    legal_entity_name = Column(String(300))
+    vat_number = Column(String(50))
+    address = Column(String(300))
+    city = Column(String(100))
+    postal_code = Column(String(20))
+    country = Column(String(100))
     subscription_type_id = Column(Integer, ForeignKey("subscription_types.id"))
     # True only for HTC itself: grants cross-company superadmin scope (see
     # every company, manage subscription types/companies, unrestricted by
@@ -199,6 +208,7 @@ class Company(Base):
     is_platform_owner = Column(Boolean, default=False)
     contact_name = Column(String(200))
     contact_email = Column(String(200))
+    contact_phone = Column(String(50))
     # Which of the subscription type's two list prices (annual_price /
     # monthly_price) this company is actually billed. Deliberately not
     # storing the dollar amount itself here - see SubscriptionType.

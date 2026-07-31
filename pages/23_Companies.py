@@ -5,6 +5,14 @@ and user account belongs to exactly one company. Platform-owner-only (see
 auth.require_platform_owner) - a customer's own admin manages their users
 and custom roles, but never other companies or the subscription catalog.
 
+Adding a company is treated as registering a new customer: legal entity
+name, VAT number, billing address, and a contact person (name/email/phone)
+are captured alongside the subscription assignment, in addition to the
+short display `name` used everywhere else in the app (company pickers,
+nav, etc.). The subscription type and billing frequency pickers sit
+outside the save form so the resulting fee is computed and shown live as
+soon as both are chosen - never typed in by hand.
+
 Company deletion is deliberately not offered once a company has any real
 data under it (users, plants, raw materials, suppliers) - deactivate it
 instead so its history stays intact. A company can only be deleted while
@@ -28,45 +36,80 @@ st.title("Companies")
 render_function_action_intro(
     function_text=(
         "The tenant boundary for the whole app: every plant, raw material, supplier, and user "
-        "account belongs to exactly one company. Each company is assigned a subscription type, "
-        "which caps how many users/plants it can have and gates PI3/AI and Reports, plus a "
-        "billing frequency (Annual or Monthly) that picks which of that tier's two list prices "
-        "the company is actually billed."
+        "account belongs to exactly one company. Registering a company captures its legal/billing "
+        "details (legal entity name, VAT number, address, contact person) alongside a subscription "
+        "type, which caps how many users/plants it can have and gates PI3/AI and Reports, plus a "
+        "billing frequency (Annual or Monthly) that picks which of that tier's two list prices the "
+        "company is actually billed."
     ),
     action_text=(
-        "Add a company, assign it a subscription type and billing frequency, then go to User "
-        "Accounts to create its first admin user. Deactivate a company (rather than deleting it) "
-        "once it has real data - deletion is only offered while a company is still empty."
+        "Add a company, assign it a subscription type and billing frequency - the fee shows "
+        "automatically once both are picked - then go to User Accounts to create its first admin "
+        "user. Click an existing company to edit any of its details. Deactivate a company (rather "
+        "than deleting it) once it has real data - deletion is only offered while a company is "
+        "still empty."
     ),
 )
 
 
-def _effective_fee(company):
-    """Human-readable fee for a company based on its subscription tier's list
-    prices and its own billing_frequency - see db.py's Company/SubscriptionType
-    docstrings for why the dollar amount isn't duplicated onto Company."""
-    sub = company.subscription_type
-    if sub is None:
+def _fee_for(subscription, billing_frequency):
+    """Human-readable fee for a given subscription type + billing frequency,
+    with no Company object required - used to show a live fee preview while
+    adding/editing, before anything is saved."""
+    if subscription is None:
         return "—"
-    freq = company.billing_frequency or "Annual"
+    freq = billing_frequency or "Annual"
     if freq == "Monthly":
-        return f"${sub.monthly_price:,.0f}/plant/mo" if sub.monthly_price else "—"
-    return f"${sub.annual_price:,.0f}/plant/yr" if sub.annual_price else "—"
+        return f"${subscription.monthly_price:,.0f}/plant/mo" if subscription.monthly_price else "—"
+    return f"${subscription.annual_price:,.0f}/plant/yr" if subscription.annual_price else "—"
+
+
+def _effective_fee(company):
+    return _fee_for(company.subscription_type, company.billing_frequency)
+
+
 session = get_session()
 user = current_user()
 
 subscription_types = session.query(SubscriptionType).order_by(SubscriptionType.name).all()
 
 with st.expander("Add company", expanded=False):
-    with st.form("add_company"):
-        name = st.text_input("Company name *")
-        subscription = st.selectbox(
+    st.caption("Subscription and billing frequency (fee updates automatically as you choose):")
+    col1, col2 = st.columns(2)
+    with col1:
+        add_subscription = st.selectbox(
             "Subscription type", [None] + subscription_types,
             format_func=lambda s: "— none assigned —" if s is None else s.name,
+            key="add_co_subscription",
         )
-        billing_frequency = st.selectbox("Billing frequency", ["Annual", "Monthly"])
-        contact_name = st.text_input("Contact name")
-        contact_email = st.text_input("Contact email")
+    with col2:
+        add_billing_frequency = st.selectbox(
+            "Billing frequency", ["Annual", "Monthly"], key="add_co_billing_frequency"
+        )
+    st.metric("Fee", _fee_for(add_subscription, add_billing_frequency))
+
+    with st.form("add_company"):
+        st.markdown("**Company**")
+        name = st.text_input("Company name (display name) *")
+        legal_entity_name = st.text_input("Legal entity name (if different from display name)")
+        vat_number = st.text_input("VAT number")
+        st.markdown("**Address**")
+        address = st.text_input("Address")
+        addr_col1, addr_col2, addr_col3 = st.columns(3)
+        with addr_col1:
+            city = st.text_input("City")
+        with addr_col2:
+            postal_code = st.text_input("Postal code")
+        with addr_col3:
+            country = st.text_input("Country")
+        st.markdown("**Contact person**")
+        c_col1, c_col2, c_col3 = st.columns(3)
+        with c_col1:
+            contact_name = st.text_input("Contact name")
+        with c_col2:
+            contact_email = st.text_input("Contact email")
+        with c_col3:
+            contact_phone = st.text_input("Contact phone")
         notes = st.text_area("Notes")
         submitted = st.form_submit_button("Save company")
         if submitted:
@@ -75,10 +118,17 @@ with st.expander("Add company", expanded=False):
             else:
                 new_company = Company(
                     name=name.strip(),
-                    subscription_type_id=subscription.id if subscription else None,
-                    billing_frequency=billing_frequency,
+                    legal_entity_name=legal_entity_name.strip() or None,
+                    vat_number=vat_number.strip() or None,
+                    address=address.strip() or None,
+                    city=city.strip() or None,
+                    postal_code=postal_code.strip() or None,
+                    country=country.strip() or None,
+                    subscription_type_id=add_subscription.id if add_subscription else None,
+                    billing_frequency=add_billing_frequency,
                     contact_name=contact_name,
                     contact_email=contact_email,
+                    contact_phone=contact_phone.strip() or None,
                     notes=notes,
                     active=True,
                 )
@@ -100,6 +150,7 @@ else:
             "Subscription": c.subscription_type.name if c.subscription_type else "—",
             "Billing": c.billing_frequency or "Annual",
             "Fee": _effective_fee(c),
+            "Country": c.country or "—",
             "Platform owner": "Yes" if c.is_platform_owner else "",
             "Users": session.query(User).filter(User.company_id == c.id).count(),
             "Plants": session.query(Plant).filter(Plant.company_id == c.id).count(),
@@ -109,7 +160,11 @@ else:
     ]
     st.caption("Click a row to edit that company.")
     idx = clickable_table(company_rows, key="companies_table")
-    if idx is not None:
+    if idx is not None and idx < len(companies):
+        # The bounds check guards a stale selection surviving a delete: right
+        # after deleting the selected row, the table shrinks by one but the
+        # dataframe widget's selection state can still report the old index
+        # until the operator clicks again.
         st.session_state["company_selected_id"] = companies[idx].id
     else:
         st.session_state.pop("company_selected_id", None)
@@ -119,8 +174,10 @@ else:
 
     if selected:
         st.markdown(f"**Edit company: {selected.name}**")
-        with st.form(f"edit_company_{selected.id}"):
-            e_name = st.text_input("Company name *", value=selected.name, key=f"edit_co_name_{selected.id}")
+
+        st.caption("Subscription and billing frequency (fee updates automatically as you choose):")
+        e_col1, e_col2 = st.columns(2)
+        with e_col1:
             e_sub = st.selectbox(
                 "Subscription type", [None] + subscription_types,
                 index=(
@@ -130,18 +187,49 @@ else:
                 format_func=lambda s: "— none assigned —" if s is None else s.name,
                 key=f"edit_co_sub_{selected.id}",
             )
+        with e_col2:
             e_billing = st.selectbox(
                 "Billing frequency", ["Annual", "Monthly"],
                 index=0 if (selected.billing_frequency or "Annual") == "Annual" else 1,
                 key=f"edit_co_billing_{selected.id}",
             )
-            st.caption(f"Current fee: {_effective_fee(selected)}")
-            e_contact_name = st.text_input(
-                "Contact name", value=selected.contact_name or "", key=f"edit_co_cname_{selected.id}"
+        st.metric("Fee", _fee_for(e_sub, e_billing))
+
+        with st.form(f"edit_company_{selected.id}"):
+            st.markdown("**Company**")
+            e_name = st.text_input("Company name (display name) *", value=selected.name, key=f"edit_co_name_{selected.id}")
+            e_legal_name = st.text_input(
+                "Legal entity name (if different from display name)",
+                value=selected.legal_entity_name or "", key=f"edit_co_legal_{selected.id}",
             )
-            e_contact_email = st.text_input(
-                "Contact email", value=selected.contact_email or "", key=f"edit_co_cemail_{selected.id}"
-            )
+            e_vat = st.text_input("VAT number", value=selected.vat_number or "", key=f"edit_co_vat_{selected.id}")
+            st.markdown("**Address**")
+            e_address = st.text_input("Address", value=selected.address or "", key=f"edit_co_address_{selected.id}")
+            e_addr_col1, e_addr_col2, e_addr_col3 = st.columns(3)
+            with e_addr_col1:
+                e_city = st.text_input("City", value=selected.city or "", key=f"edit_co_city_{selected.id}")
+            with e_addr_col2:
+                e_postal = st.text_input(
+                    "Postal code", value=selected.postal_code or "", key=f"edit_co_postal_{selected.id}"
+                )
+            with e_addr_col3:
+                e_country = st.text_input(
+                    "Country", value=selected.country or "", key=f"edit_co_country_{selected.id}"
+                )
+            st.markdown("**Contact person**")
+            e_c_col1, e_c_col2, e_c_col3 = st.columns(3)
+            with e_c_col1:
+                e_contact_name = st.text_input(
+                    "Contact name", value=selected.contact_name or "", key=f"edit_co_cname_{selected.id}"
+                )
+            with e_c_col2:
+                e_contact_email = st.text_input(
+                    "Contact email", value=selected.contact_email or "", key=f"edit_co_cemail_{selected.id}"
+                )
+            with e_c_col3:
+                e_contact_phone = st.text_input(
+                    "Contact phone", value=selected.contact_phone or "", key=f"edit_co_cphone_{selected.id}"
+                )
             e_active = st.checkbox("Active", value=selected.active, key=f"edit_co_active_{selected.id}")
             e_notes = st.text_area("Notes", value=selected.notes or "", key=f"edit_co_notes_{selected.id}")
             if selected.is_platform_owner:
@@ -151,10 +239,17 @@ else:
                     st.error("Company name is required.")
                 else:
                     selected.name = e_name.strip()
+                    selected.legal_entity_name = e_legal_name.strip() or None
+                    selected.vat_number = e_vat.strip() or None
+                    selected.address = e_address.strip() or None
+                    selected.city = e_city.strip() or None
+                    selected.postal_code = e_postal.strip() or None
+                    selected.country = e_country.strip() or None
                     selected.subscription_type_id = e_sub.id if e_sub else None
                     selected.billing_frequency = e_billing
                     selected.contact_name = e_contact_name
                     selected.contact_email = e_contact_email
+                    selected.contact_phone = e_contact_phone.strip() or None
                     selected.active = e_active or selected.is_platform_owner
                     selected.notes = e_notes
                     session.commit()
