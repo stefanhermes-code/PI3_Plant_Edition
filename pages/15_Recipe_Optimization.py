@@ -364,13 +364,24 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
         "properties below are prefilled from this grade's stored specification - edit or add to "
         "them (resilience, tensile strength, ...) before requesting a recommendation."
     )
+    # quality_specification, when present, is a free-text spec written to
+    # already cover density and hardness (usually as a KGI recipe-naming
+    # "hardness code", not a bare number with a real unit - see its own
+    # "confirm units/method before use" wording) - so it's the single
+    # source of truth here. Falling back to target_density/target_hardness
+    # only when there's no free-text spec avoids restating the same two
+    # numbers twice in different, inconsistent forms.
     default_targets = []
-    if grade.target_density is not None:
-        default_targets.append(f"Density {grade.target_density:g} kg/m3")
-    if grade.target_hardness is not None:
-        default_targets.append(f"Hardness {grade.target_hardness:g} (unit per test method)")
-    if grade.quality_specification:
+    if grade.quality_specification and grade.quality_specification.strip():
         default_targets.append(grade.quality_specification.strip())
+    else:
+        if grade.target_density is not None:
+            default_targets.append(f"Density {grade.target_density:g} kg/m3")
+        if grade.target_hardness is not None:
+            default_targets.append(
+                f"Hardness (target value {grade.target_hardness:g} - unit/test method not recorded, "
+                "confirm before use)"
+            )
 
     target_properties = st.text_area(
         "Target properties",
