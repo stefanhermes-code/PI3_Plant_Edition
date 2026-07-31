@@ -16,6 +16,7 @@ import streamlit as st
 from auth import current_user, logout_button, require_login, require_platform_owner
 from db import Company, RawMaterial, Supplier, SubscriptionType, User, Plant, get_session, init_db
 from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
+from role_provisioning import clone_builtin_roles_for_company
 
 page_setup("Companies")
 init_db()
@@ -72,17 +73,18 @@ with st.expander("Add company", expanded=False):
             if not name.strip():
                 st.error("Company name is required.")
             else:
-                session.add(
-                    Company(
-                        name=name.strip(),
-                        subscription_type_id=subscription.id if subscription else None,
-                        billing_frequency=billing_frequency,
-                        contact_name=contact_name,
-                        contact_email=contact_email,
-                        notes=notes,
-                        active=True,
-                    )
+                new_company = Company(
+                    name=name.strip(),
+                    subscription_type_id=subscription.id if subscription else None,
+                    billing_frequency=billing_frequency,
+                    contact_name=contact_name,
+                    contact_email=contact_email,
+                    notes=notes,
+                    active=True,
                 )
+                session.add(new_company)
+                session.flush()  # need new_company.id before cloning its roles
+                clone_builtin_roles_for_company(session, new_company.id)
                 session.commit()
                 st.success(f"Company '{name}' added. Go to User Accounts to create its first user.")
                 st.rerun()

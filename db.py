@@ -213,10 +213,27 @@ class Company(Base):
 
 
 class Role(Base):
+    """company_id NULL + is_builtin True is a *template* row (exactly 3:
+    admin/technical/viewer) - never assigned to a User directly, and never
+    shown outside the Default User Roles page (platform-owner-only). Every
+    real company gets its own company_id-scoped CLONE of those 3 roles,
+    seeded from the templates at company-creation time (see
+    role_provisioning.clone_builtin_roles_for_company) - that clone is what
+    Users actually get assigned to, and what a company's own admin narrows
+    on the User Roles page. This exists because RolePagePermission is keyed
+    by role_id alone: if built-in roles stayed a single shared row per
+    company, one company narrowing "viewer" would silently narrow every
+    other company's viewer role too (a real cross-tenant leak, caught and
+    fixed 2026-07-31 before any second real customer existed to be bitten
+    by it). Non-builtin (custom) roles are always company_id-scoped from
+    creation and were never affected by this - "shared across every
+    company" custom roles are deliberately not offered in the UI anymore,
+    for the same reason."""
+
     __tablename__ = "roles"
 
     id = Column(Integer, primary_key=True)
-    company_id = Column(Integer, ForeignKey("companies.id"))  # NULL = built-in, available to every company
+    company_id = Column(Integer, ForeignKey("companies.id"))
     name = Column(String(100), nullable=False)
     description = Column(Text)
     is_builtin = Column(Boolean, default=False)

@@ -2,13 +2,23 @@
 
 Three built-in roles (admin, technical, viewer) ship for every company and
 can't be renamed or deleted - see auth.py's docstring for what each grants
-today. Any company's own admin can also define custom roles scoped to just
-that company. Every role (built-in or custom) can have its page visibility
+today, and db.py's Role docstring for why each company gets its own CLONE
+of these 3 roles (created automatically when the company is added) rather
+than sharing one global row: narrowing one company's "viewer" role must
+never narrow another company's. Every role shown here - built-in clone or
+custom - is scoped to exactly one company, so editing it is always safe.
+
+Any company's own admin can also define custom roles scoped to just that
+company. Every role (built-in clone or custom) can have its page visibility
 narrowed on this screen: unchecking a page here hides it from anyone with
 that role, on top of whatever their company's subscription already hides.
 
-The platform owner (HTC) sees and manages every company's custom roles;
-a company's own admin only sees the built-in roles plus their own.
+The platform owner (HTC) sees and manages every company's roles; a
+company's own admin only sees their own company's. The DEFAULT starting
+visibility new companies' built-in role clones are seeded with is set on
+the separate Default User Roles page (platform-owner-only) - editing an
+existing company's roles here never affects that default, or any other
+company.
 """
 
 import streamlit as st
@@ -28,9 +38,10 @@ st.title("User Roles")
 render_function_action_intro(
     function_text=(
         "Three built-in roles (admin, technical, viewer) are available to every company and "
-        "can't be renamed or deleted. Any company's own admin can also define custom roles scoped "
-        "to just that company. Every role's page visibility can be narrowed here - unchecking a "
-        "page hides it from anyone with that role."
+        "can't be renamed or deleted, and each company gets its own independent copy of them - "
+        "narrowing one company's role never affects another's. Any company's own admin can also "
+        "define custom roles scoped to just that company. Every role's page visibility can be "
+        "narrowed here - unchecking a page hides it from anyone with that role."
     ),
     action_text=(
         "Add a custom role if the three built-in ones don't fit (e.g. a 'plant floor' role that "
@@ -50,27 +61,17 @@ with st.expander("Add custom role", expanded=False):
     with st.form("add_role"):
         name = st.text_input("Role name *")
         description = st.text_area("Description")
+        company_for_role = None
         if is_platform_owner:
-            scope = st.radio(
-                "Available to", ["All companies (shared)", "One specific company"], horizontal=True,
-            )
-            company_for_role = None
-            if scope == "One specific company":
-                company_for_role = st.selectbox("Company *", companies, format_func=lambda c: c.name)
-        else:
-            scope = "One specific company"
-            company_for_role = None
+            company_for_role = st.selectbox("Company *", companies, format_func=lambda c: c.name)
         submitted = st.form_submit_button("Save role")
         if submitted:
             if not name.strip():
                 st.error("Role name is required.")
-            elif scope == "One specific company" and is_platform_owner and not company_for_role:
+            elif is_platform_owner and not company_for_role:
                 st.error("Pick a company for this role.")
             else:
-                target_company_id = (
-                    None if (is_platform_owner and scope == "All companies (shared)")
-                    else (company_for_role.id if is_platform_owner else own_company_id)
-                )
+                target_company_id = company_for_role.id if is_platform_owner else own_company_id
                 session.add(
                     Role(
                         company_id=target_company_id,
@@ -85,12 +86,19 @@ with st.expander("Add custom role", expanded=False):
 
 st.divider()
 if is_platform_owner:
-    roles = session.query(Role).order_by(Role.company_id.isnot(None), Role.name).all()
+    # Only company-owned roles - the 3 global templates (company_id IS NULL)
+    # are edited exclusively on the Default User Roles page, never here.
+    roles = (
+        session.query(Role)
+        .filter(Role.company_id.isnot(None))
+        .order_by(Role.company_id, Role.name)
+        .all()
+    )
 else:
     roles = (
         session.query(Role)
-        .filter((Role.company_id.is_(None)) | (Role.company_id == own_company_id))
-        .order_by(Role.company_id.isnot(None), Role.name)
+        .filter(Role.company_id == own_company_id)
+        .order_by(Role.name)
         .all()
     )
 
@@ -101,7 +109,7 @@ else:
     role_rows = [
         {
             "Name": r.name,
-            "Scope": "All companies" if r.company_id is None else company_by_id.get(r.company_id, "—"),
+            "Company": company_by_id.get(r.company_id, "—"),
             "Built-in": "Yes" if r.is_builtin else "No",
             "Users": session.query(User).filter(User.role_id == r.id).count(),
         }

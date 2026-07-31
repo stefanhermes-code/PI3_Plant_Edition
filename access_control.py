@@ -74,11 +74,14 @@ PAGE_CATALOG = {
     "companies_admin": "Companies",
     "subscription_types_admin": "Subscription Types",
     "user_roles_admin": "User Roles",
+    "default_user_roles_admin": "Default User Roles",
     "user_accounts_admin": "User Accounts",
 }
 
 REPORT_KEYS = frozenset({"report"})
-PLATFORM_ONLY_KEYS = frozenset({"companies_admin", "subscription_types_admin", "pi3_ai_connectivity"})
+PLATFORM_ONLY_KEYS = frozenset(
+    {"companies_admin", "subscription_types_admin", "pi3_ai_connectivity", "default_user_roles_admin"}
+)
 
 
 def denied_page_keys(session, role_id):

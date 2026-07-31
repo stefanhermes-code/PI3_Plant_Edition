@@ -259,6 +259,7 @@ admin_pages = [
 platform_admin_pages = [
     ("companies_admin", st.Page("pages/23_Companies.py", title="Companies", icon="🏢")),
     ("subscription_types_admin", st.Page("pages/22_Subscription_Types.py", title="Subscription Types", icon="🎟️")),
+    ("default_user_roles_admin", st.Page("pages/26_Default_User_Roles.py", title="Default User Roles", icon="🗝️")),
     ("user_accounts_admin", st.Page("pages/25_User_Accounts.py", title="User Accounts", icon="👤")),
     ("pi3_ai_connectivity", st.Page("pages/10_PI3_AI_Connectivity.py", title="PI3 Connectivity", icon="🤖")),
 ]
