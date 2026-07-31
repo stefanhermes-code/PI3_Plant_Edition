@@ -253,23 +253,23 @@ industrial_intelligence_pages = [
 admin_pages = [
     ("maintenance_license_admin", st.Page("pages/11_Maintenance_License_Admin.py", title="Maintenance & License Admin", icon="💳")),
     ("demo_data_admin", st.Page("pages/12_Demo_Data_Admin.py", title="Demo Data Admin", icon="🗂️")),
+    ("user_roles_admin", st.Page("pages/24_User_Roles.py", title="User Roles", icon="🔑")),
 ]
 
 platform_admin_pages = [
-    ("user_accounts_admin", st.Page("pages/25_User_Accounts.py", title="User Accounts", icon="👤")),
-    ("user_roles_admin", st.Page("pages/24_User_Roles.py", title="User Roles", icon="🔑")),
-    ("pi3_ai_connectivity", st.Page("pages/10_PI3_AI_Connectivity.py", title="PI3 Connectivity", icon="🤖")),
     ("companies_admin", st.Page("pages/23_Companies.py", title="Companies", icon="🏢")),
     ("subscription_types_admin", st.Page("pages/22_Subscription_Types.py", title="Subscription Types", icon="🎟️")),
+    ("user_accounts_admin", st.Page("pages/25_User_Accounts.py", title="User Accounts", icon="👤")),
+    ("pi3_ai_connectivity", st.Page("pages/10_PI3_AI_Connectivity.py", title="PI3 Connectivity", icon="🤖")),
 ]
 
 nav_sections_with_keys = {
     "Setup": setup_pages,
     "Production": production_pages,
-    "Experiments (optional)": experiment_pages,
+    "Trials & Samples": experiment_pages,
     "Industrial Intelligence": industrial_intelligence_pages,
-    "Admin": admin_pages,
-    "Platform Admin": platform_admin_pages,
+    "Company Admin": admin_pages,
+    "Application Admin": platform_admin_pages,
 }
 
 # Nav visibility: a fresh, unauthenticated script run has no role/company in
