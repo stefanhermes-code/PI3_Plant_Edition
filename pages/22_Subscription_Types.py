@@ -1,12 +1,20 @@
 """Screen: Subscription Types
 
 The commercial tiers this app is sold under. Each type caps how many users
-and plants a company can have (blank = unlimited) and gates whole feature
-areas (Industrial Intelligence, Case Review, PI3/AI, Reports) for every
-user at any company on that tier - including that company's own admin.
-Platform-owner-only (see auth.require_platform_owner). No payment
-processing is wired up here - this only tracks and enforces the
+and plants a company can have (blank = unlimited) and can turn off PI3/AI
+and/or Reports for every user at any company on that tier - including that
+company's own admin. Platform-owner-only (see auth.require_platform_owner).
+No payment processing is wired up here - this only tracks and enforces the
 limits/features themselves.
+
+PI3/AI is deliberately the only page-level feature switch: every other
+page (including Recipe Optimization, Trend Analysis, Machine Settings
+Correlation, Root-Cause Assistant, Machine Settings Optimization, Similar
+Case Retrieval, and Expert Notes) works the same on every tier, since each
+already has its own deterministic core that needs no PI3 involvement and
+independently checks per-plant PI3 enablement before showing its own "Ask
+PI3" section - see access_control.py's module docstring for the full
+reasoning.
 """
 
 import streamlit as st
@@ -25,12 +33,11 @@ st.title("Subscription Types")
 render_function_action_intro(
     function_text=(
         "Defines the commercial tiers companies subscribe to: a cap on user count and plant "
-        "count (blank = unlimited), and on/off switches for Industrial Intelligence (Recipe "
-        "Optimization, Trend Analysis, Correlation, Root-Cause Assistant, Machine Settings "
-        "Optimization), Case Review (Similar Case Retrieval, Expert Notes), PI3/AI, and the "
-        "Report screen. These limits are enforced when a company's admin tries to add a new "
-        "user or plant beyond the cap, and the feature switches hide the relevant pages entirely "
-        "for anyone at a company on that tier."
+        "count (blank = unlimited), and on/off switches for PI3/AI (the PI3 Connectivity page, "
+        "and everywhere else PI3 assistance can appear) and the Report screen. These limits are "
+        "enforced when a company's admin tries to add a new user or plant beyond the cap, and "
+        "the feature switches hide the relevant pages entirely for anyone at a company on that "
+        "tier. Every other page works the same regardless of tier."
     ),
     action_text=(
         "Add a subscription type, set its limits/feature switches, then assign it to a company "
@@ -46,11 +53,9 @@ with st.expander("Add subscription type", expanded=False):
         c1, c2 = st.columns(2)
         max_users = c1.number_input("Max users (0 = unlimited)", min_value=0, step=1, value=0)
         max_plants = c2.number_input("Max plants (0 = unlimited)", min_value=0, step=1, value=0)
-        f1, f2, f3, f4 = st.columns(4)
-        ii_enabled = f1.checkbox("Industrial Intelligence", value=True)
-        cr_enabled = f2.checkbox("Case Review", value=True)
-        ai_enabled = f3.checkbox("PI3/AI", value=True)
-        reports_enabled = f4.checkbox("Reports", value=True)
+        f1, f2 = st.columns(2)
+        ai_enabled = f1.checkbox("PI3/AI", value=True)
+        reports_enabled = f2.checkbox("Reports", value=True)
         price_note = st.text_input("Price note (free text, e.g. \"$500/mo\" - not billed automatically)")
         notes = st.text_area("Notes")
         submitted = st.form_submit_button("Save subscription type")
@@ -63,8 +68,6 @@ with st.expander("Add subscription type", expanded=False):
                         name=name.strip(),
                         max_users=int(max_users) or None,
                         max_plants=int(max_plants) or None,
-                        industrial_intelligence_enabled=ii_enabled,
-                        case_review_enabled=cr_enabled,
                         pi3_ai_enabled=ai_enabled,
                         reports_enabled=reports_enabled,
                         price_note=price_note or None,
@@ -86,8 +89,6 @@ else:
             "Name": s.name,
             "Max users": s.max_users if s.max_users else "Unlimited",
             "Max plants": s.max_plants if s.max_plants else "Unlimited",
-            "Industrial Intelligence": "Yes" if s.industrial_intelligence_enabled else "No",
-            "Case Review": "Yes" if s.case_review_enabled else "No",
             "PI3/AI": "Yes" if s.pi3_ai_enabled else "No",
             "Reports": "Yes" if s.reports_enabled else "No",
             "Companies": session.query(Company).filter(Company.subscription_type_id == s.id).count(),
@@ -118,15 +119,9 @@ else:
                 "Max plants (0 = unlimited)", min_value=0, step=1,
                 value=int(selected.max_plants or 0), key=f"edit_st_plants_{selected.id}",
             )
-            f1, f2, f3, f4 = st.columns(4)
-            e_ii = f1.checkbox(
-                "Industrial Intelligence", value=selected.industrial_intelligence_enabled, key=f"edit_st_ii_{selected.id}"
-            )
-            e_cr = f2.checkbox(
-                "Case Review", value=selected.case_review_enabled, key=f"edit_st_cr_{selected.id}"
-            )
-            e_ai = f3.checkbox("PI3/AI", value=selected.pi3_ai_enabled, key=f"edit_st_ai_{selected.id}")
-            e_reports = f4.checkbox(
+            f1, f2 = st.columns(2)
+            e_ai = f1.checkbox("PI3/AI", value=selected.pi3_ai_enabled, key=f"edit_st_ai_{selected.id}")
+            e_reports = f2.checkbox(
                 "Reports", value=selected.reports_enabled, key=f"edit_st_rep_{selected.id}"
             )
             e_price_note = st.text_input(
@@ -141,8 +136,6 @@ else:
                     selected.name = e_name.strip()
                     selected.max_users = int(e_max_users) or None
                     selected.max_plants = int(e_max_plants) or None
-                    selected.industrial_intelligence_enabled = e_ii
-                    selected.case_review_enabled = e_cr
                     selected.pi3_ai_enabled = e_ai
                     selected.reports_enabled = e_reports
                     selected.price_note = e_price_note or None

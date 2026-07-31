@@ -7,16 +7,25 @@ this order by `page_visible()`:
    to a user whose company is the platform owner (HTC itself), regardless
    of role. Not configurable per role; this is a hard gate.
 2. Subscription feature flags - a company's SubscriptionType can turn off
-   whole feature areas (Industrial Intelligence, Case Review, PI3/AI,
-   Reports). Applies to every user at that company, including its own
-   admins. Industrial Intelligence and Case Review are deliberately
-   separate flags: HTC's two real commercial tiers ("PI3 Plant Edition"
-   and "PI3 Plant Edition - Basic") both include Similar Case Retrieval
-   and Expert Notes, just with or without PI3's semantic search layered on
-   top (that layer is gated separately, per plant, via pi3_ai_enabled /
-   PI3AIConnectionSetting) - only Basic drops the deeper analytics pages
-   (Recipe Optimization, Trend Analysis, Correlation, Root-Cause Assistant,
-   Machine Settings Optimization).
+   PI3/AI and/or Reports for every user at that company, including its own
+   admins. This is deliberately the ONLY page-level differentiator between
+   HTC's two real commercial tiers ("PI3 Plant Edition" and "PI3 Plant
+   Edition - Basic"): every page - including Recipe Optimization, Trend
+   Analysis, Machine Settings Correlation, Root-Cause Assistant, Machine
+   Settings Optimization, Similar Case Retrieval, and Expert Notes - stays
+   visible on Basic, because each of those pages already has its own
+   deterministic core that works with zero PI3 involvement (cost/diff
+   calculations, correlation ranking, control charts/Cpk/CUSUM, the
+   run-vs-prior-run diff, ...) and independently checks per-plant PI3
+   enablement (ai_assistant.is_enabled_for_plant / any_plant_enabled)
+   before rendering its own "Ask PI3" section. pi3_ai_enabled only hides
+   the PI3 Connectivity admin page itself - which is what determines
+   whether any plant at that company can ever have PI3 turned on in the
+   first place, which is what every one of those per-page checks keys off.
+   An earlier version of this file bundled those 7 pages behind their own
+   feature flags (industrial_intelligence_enabled / case_review_enabled) -
+   that was wrong: it hid real, PI3-independent value from Basic customers
+   instead of letting each page's own PI3 check do its job.
 3. Role page permissions - a DENY list, not an allow list (see db.py's
    RolePagePermission docstring): a role with no rows sees everything;
    an explicit can_view=False row for a page_key hides just that page for
@@ -60,21 +69,6 @@ PAGE_CATALOG = {
     "user_accounts_admin": "User Accounts",
 }
 
-INDUSTRIAL_INTELLIGENCE_KEYS = frozenset(
-    {
-        "recipe_optimization",
-        "trend_analysis",
-        "machine_settings_correlation",
-        "root_cause_assistant",
-        "machine_settings_optimization",
-    }
-)
-# Similar Case Retrieval and Expert Notes are gated separately from the
-# deeper analytics pages above: HTC's two commercial tiers both include
-# case review (just with or without PI3's semantic search layered on top,
-# which is separately gated per-plant via PI3AIConnectionSetting/pi3_ai_enabled) -
-# only the Basic tier drops the deeper Industrial Intelligence pages.
-CASE_REVIEW_KEYS = frozenset({"similar_case_retrieval", "expert_notes"})
 PI3_AI_KEYS = frozenset({"pi3_ai_connectivity"})
 REPORT_KEYS = frozenset({"report"})
 PLATFORM_ONLY_KEYS = frozenset({"companies_admin", "subscription_types_admin"})
@@ -98,10 +92,6 @@ def page_visible(page_key, *, is_platform_owner, subscription, denied_keys):
     if page_key in PLATFORM_ONLY_KEYS:
         return bool(is_platform_owner)
     if subscription is not None:
-        if page_key in INDUSTRIAL_INTELLIGENCE_KEYS and not subscription.industrial_intelligence_enabled:
-            return False
-        if page_key in CASE_REVIEW_KEYS and not subscription.case_review_enabled:
-            return False
         if page_key in PI3_AI_KEYS and not subscription.pi3_ai_enabled:
             return False
         if page_key in REPORT_KEYS and not subscription.reports_enabled:

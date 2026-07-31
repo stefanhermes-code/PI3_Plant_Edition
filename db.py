@@ -175,9 +175,7 @@ class SubscriptionType(Base):
     name = Column(String(100), nullable=False, unique=True)
     max_users = Column(Integer)  # NULL = unlimited
     max_plants = Column(Integer)  # NULL = unlimited
-    industrial_intelligence_enabled = Column(Boolean, default=True)  # Recipe Optimization, Trend Analysis, Correlation, Root-Cause, Machine Settings Optimization
-    case_review_enabled = Column(Boolean, default=True)  # Similar Case Retrieval + Expert Notes (kept even on Basic - see access_control.py)
-    pi3_ai_enabled = Column(Boolean, default=True)  # PI3 Connectivity page + PI3/AI features app-wide
+    pi3_ai_enabled = Column(Boolean, default=True)  # PI3 Connectivity page - the one real feature differentiator between HTC's two tiers, see access_control.py
     reports_enabled = Column(Boolean, default=True)  # Report page
     price_note = Column(String(200))  # free text (e.g. "$500/mo") - no payment processing wired up
     active = Column(Boolean, default=True)
