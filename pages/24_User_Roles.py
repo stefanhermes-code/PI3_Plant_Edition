@@ -23,10 +23,10 @@ company.
 
 import streamlit as st
 
-from access_control import PAGE_CATALOG, denied_page_keys
+from access_control import current_access_states, save_access_states
 from auth import current_user, logout_button, require_login, require_role
 from db import Company, Role, RolePagePermission, User, get_session, init_db
-from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
+from helpers import clickable_table, delete_with_confirm, page_access_grid, page_setup, render_function_action_intro
 
 page_setup("User Roles")
 init_db()
@@ -37,17 +37,17 @@ logout_button()
 st.title("User Roles")
 render_function_action_intro(
     function_text=(
-        "Three built-in roles (admin, technical, viewer) are available to every company and "
-        "can't be renamed or deleted, and each company gets its own independent copy of them - "
-        "narrowing one company's role never affects another's. Any company's own admin can also "
-        "define custom roles scoped to just that company. Every role's page visibility can be "
-        "narrowed here - unchecking a page hides it from anyone with that role."
+        "Built-in roles (from the platform owner's Default User Roles templates) are available to "
+        "every company and can't be renamed or deleted, and each company gets its own independent "
+        "copy of them - narrowing one company's role never affects another's. Any company's own "
+        "admin can also define custom roles scoped to just that company. Every role's access to "
+        "each page is one of three states here: Hidden, View only (read-only), or Full access."
     ),
     action_text=(
-        "Add a custom role if the three built-in ones don't fit (e.g. a 'plant floor' role that "
-        "can only see Production Run and Quality screens). Click a role below to edit its page "
-        "visibility, or its name/description for custom roles - built-in roles can only have their "
-        "page visibility adjusted, not their name."
+        "Add a custom role if the built-in ones don't fit (e.g. a 'plant floor' role that can only "
+        "use Production Run and Quality screens). Click a role below to edit its per-page access, "
+        "or its name/description for custom roles - built-in roles can only have their page access "
+        "adjusted, not their name."
     ),
 )
 session = get_session()
@@ -115,9 +115,9 @@ else:
         }
         for r in roles
     ]
-    st.caption("Click a role to edit its page visibility (and name/description, for custom roles).")
+    st.caption("Click a role to edit its page access (and name/description, for custom roles).")
     idx = clickable_table(role_rows, key="roles_table")
-    if idx is not None:
+    if idx is not None and idx < len(roles):
         st.session_state["role_selected_id"] = roles[idx].id
     else:
         st.session_state.pop("role_selected_id", None)
@@ -149,28 +149,14 @@ else:
                     st.success("Role updated.")
                     st.rerun()
 
-        st.markdown("**Page visibility** — uncheck a page to hide it for anyone with this role.")
-        currently_denied = denied_page_keys(session, selected.id)
+        st.markdown("**Page access** — Hidden, View only, or Full access, per page.")
+        current_states = current_access_states(session, selected.id)
         with st.form(f"edit_role_pages_{selected.id}"):
-            checked = {}
-            page_items = list(PAGE_CATALOG.items())
-            cols = st.columns(3)
-            for i, (page_key, title) in enumerate(page_items):
-                with cols[i % 3]:
-                    checked[page_key] = st.checkbox(
-                        title, value=page_key not in currently_denied, key=f"perm_{selected.id}_{page_key}"
-                    )
-            if st.form_submit_button("Save page visibility"):
-                session.query(RolePagePermission).filter(RolePagePermission.role_id == selected.id).delete(
-                    synchronize_session=False
-                )
-                for page_key, is_visible in checked.items():
-                    if not is_visible:
-                        session.add(
-                            RolePagePermission(role_id=selected.id, page_key=page_key, can_view=False)
-                        )
+            selections = page_access_grid(current_states, key_prefix=f"perm_{selected.id}")
+            if st.form_submit_button("Save page access"):
+                save_access_states(session, selected.id, selections)
                 session.commit()
-                st.success("Page visibility updated.")
+                st.success("Page access updated.")
                 st.rerun()
 
         users_with_role = session.query(User).filter(User.role_id == selected.id).count()

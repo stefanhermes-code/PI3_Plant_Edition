@@ -155,16 +155,30 @@ ZONE_LABELS = ["Top", "Middle", "Bottom"]
 # plant_id through the existing hierarchy, so scoping the plant list per
 # company scopes everything under it).
 #
-# Roles are a real table, not a hardcoded list, so a company can define its
-# own custom roles beyond the three built-in ones (admin/technical/viewer,
-# company_id NULL - available to every company, protected from deletion via
-# is_builtin). Per-role page visibility is a DENY list, not an allow list:
-# a role with no RolePagePermission rows sees every page (matches today's
-# behavior for the three built-in roles without needing to seed hundreds of
-# rows) - add an explicit can_view=False row to hide a specific page from a
-# role. This does not yet control add/edit/delete ability within a page
-# beyond what the three built-in role names already imply via
-# require_role() calls - that finer-grained enforcement is a later phase.
+# Roles are a real table, not a hardcoded list, so the platform owner can
+# define any number of default role templates beyond the original three
+# (admin/technical/viewer, company_id NULL - cloned into every new company,
+# see role_provisioning.py), and a company can define its own custom roles
+# on top of its clones.
+#
+# Per-role, per-page access is a DENY list, not an allow list: a role with
+# no RolePagePermission rows has full access to every page (matches every
+# role's behavior before this per-page split existed, and needs no rows
+# seeded for the common case). Each row can deny in one of two ways:
+#   - can_view=False: the page is hidden entirely (nav + direct access).
+#   - can_view=True, can_use=False: the page is visible and its data can be
+#     read, but its Add/Edit/Delete forms and any action buttons (CSV
+#     import, "Ask PI3", approvals, downloads, ...) are hidden - a genuine
+#     read-only view, not just a suggestion. can_use=True with no row is
+#     the default ("full access"); can_use=True is never combined with
+#     can_view=False (using implies being able to view) - the admin UI only
+#     ever offers three states (Hidden / View only / Full access) to avoid
+#     that nonsensical combination, see access_control.py.
+# As of this schema version the MODEL supports view-vs-use everywhere, but
+# individual operational pages opting in to actually hiding their own
+# write controls when can_use=False is a page-by-page rollout, not yet
+# complete for every page - see access_control.py's module docstring for
+# which pages currently check it.
 # ---------------------------------------------------------------------------
 class SubscriptionType(Base):
     __tablename__ = "subscription_types"
@@ -249,12 +263,18 @@ class Role(Base):
 
 
 class RolePagePermission(Base):
+    """A row only ever exists to deny something - see the module docstring
+    above the Role class for the full Hidden / View only / Full access
+    semantics. can_view=False hides the page outright; can_view=True with
+    can_use=False is the new (2026-07-31) view-only state."""
+
     __tablename__ = "role_page_permissions"
 
     id = Column(Integer, primary_key=True)
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
     page_key = Column(String(100), nullable=False)  # see access_control.PAGE_CATALOG
-    can_view = Column(Boolean, default=False)  # a row only ever exists to DENY; see module docstring above
+    can_view = Column(Boolean, default=False)
+    can_use = Column(Boolean, default=True)  # False = read-only for this page (only meaningful when can_view is True)
 
 
 class User(Base):

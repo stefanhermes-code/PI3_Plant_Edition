@@ -35,16 +35,52 @@ this order by `page_visible()`:
    wrong: it hid real, PI3-independent value from Basic customers instead
    of letting each page's own PI3 check do its job.
 3. Role page permissions - a DENY list, not an allow list (see db.py's
-   RolePagePermission docstring): a role with no rows sees everything;
-   an explicit can_view=False row for a page_key hides just that page for
-   that role.
+   RolePagePermission docstring): a role with no rows sees everything, in
+   full; an explicit row can hide a page entirely (can_view=False) or make
+   it view-only (can_view=True, can_use=False - the page renders and its
+   data can be read, but its own Add/Edit/Delete forms and action buttons
+   should be hidden). The three-state picker (Hidden / View only / Full
+   access) is built and edited on the Default User Roles page (platform
+   owner - sets what new companies start with) and the User Roles page
+   (per company) via current_access_states()/save_access_states() below.
+
+   Enforcing view-only INSIDE a page (hiding its own write controls) is a
+   page-by-page opt-in, not automatic just because the row exists - a page
+   checks its own usability with page_key in usable_page_keys(...) (or
+   the single-page can_use_page() shortcut) and conditionally skips
+   rendering its forms/buttons. As of 2026-07-31 this is rolled out on:
+   (none yet - the model and admin UI shipped first; per-page enforcement
+   is a following batch). Every other page currently ignores can_use and
+   behaves as "Full access" for anyone who can view it, same as before
+   this three-state model existed - view-only for those pages currently
+   only degrades as far as "the page is still fully interactive."
 
 PAGE_CATALOG is the single source of truth for page_key -> display title,
-used both to build app.py's nav and to render the permission checkbox grid
-on the User Roles admin page.
+used both to build app.py's nav and to render the permission grid on the
+User Roles / Default User Roles admin pages.
 """
 
 from db import RolePagePermission
+
+# The three states the admin UI ever offers for a role's access to a page -
+# see the module docstring above for what each means. Stored as two
+# booleans on RolePagePermission (can_view, can_use), but never let a UI
+# offer "use without view": that's not a real state.
+ACCESS_HIDDEN = "hidden"
+ACCESS_VIEW_ONLY = "view_only"
+ACCESS_FULL = "full"
+ACCESS_STATE_LABELS = {
+    ACCESS_HIDDEN: "Hidden",
+    ACCESS_VIEW_ONLY: "View only",
+    ACCESS_FULL: "Full access",
+}
+
+# Role names required by name-literal checks elsewhere in the app (see
+# auth.require_role("admin") on the User Roles and User Accounts pages,
+# and pages/10_PI3_AI_Connectivity.py's role == "admin" check) - a company
+# with no role named "admin" could never manage its own users or roles
+# again. Enforced as a delete/rename guard on the Default User Roles page.
+STRUCTURALLY_REQUIRED_ROLE_NAMES = frozenset({"admin"})
 
 # page_key -> title (title kept here only for the permission-matrix editor;
 # app.py's own st.Page(..., title=...) calls remain the source of truth for
@@ -92,6 +128,82 @@ def denied_page_keys(session, role_id):
         .all()
     )
     return {r.page_key for r in rows}
+
+
+def current_access_states(session, role_id):
+    """page_key -> ACCESS_HIDDEN / ACCESS_VIEW_ONLY / ACCESS_FULL for every
+    page_key this role has an explicit RolePagePermission row for. A
+    page_key with no row isn't in the returned dict at all - callers should
+    treat a missing key as ACCESS_FULL (the default for everyone before
+    this three-state model existed, and the default for any page nobody's
+    ever touched the permissions for)."""
+    if not role_id:
+        return {}
+    rows = session.query(RolePagePermission).filter(RolePagePermission.role_id == role_id).all()
+    states = {}
+    for r in rows:
+        if not r.can_view:
+            states[r.page_key] = ACCESS_HIDDEN
+        elif not r.can_use:
+            states[r.page_key] = ACCESS_VIEW_ONLY
+        else:
+            states[r.page_key] = ACCESS_FULL
+    return states
+
+
+def save_access_states(session, role_id, states):
+    """Replaces every RolePagePermission row for role_id to match `states`
+    (page_key -> ACCESS_HIDDEN/ACCESS_VIEW_ONLY/ACCESS_FULL). ACCESS_FULL
+    entries are simply omitted, matching the existing "no row = full
+    access" deny-list convention. Does not commit - caller controls the
+    transaction."""
+    session.query(RolePagePermission).filter(RolePagePermission.role_id == role_id).delete(
+        synchronize_session=False
+    )
+    for page_key, state in states.items():
+        if state == ACCESS_HIDDEN:
+            session.add(RolePagePermission(role_id=role_id, page_key=page_key, can_view=False, can_use=False))
+        elif state == ACCESS_VIEW_ONLY:
+            session.add(RolePagePermission(role_id=role_id, page_key=page_key, can_view=True, can_use=False))
+        # ACCESS_FULL -> no row needed, that's the default.
+
+
+def usable_page_keys_denied(session, role_id):
+    """Every page_key this role can see but can't act on (ACCESS_VIEW_ONLY)
+    - the set an operational page should check itself against to decide
+    whether to render its own Add/Edit/Delete forms and action buttons.
+    Deliberately separate from denied_page_keys(): a page that's fully
+    hidden never reaches the point of asking this question."""
+    if not role_id:
+        return set()
+    rows = (
+        session.query(RolePagePermission)
+        .filter(
+            RolePagePermission.role_id == role_id,
+            RolePagePermission.can_view.is_(True),
+            RolePagePermission.can_use.is_(False),
+        )
+        .all()
+    )
+    return {r.page_key for r in rows}
+
+
+def can_use_page(page_key, *, is_platform_owner, role_id, session):
+    """Single-page convenience wrapper around usable_page_keys_denied() for
+    a page that just wants one yes/no answer at the top of its script.
+    Platform owners always get full use (same precedent as PLATFORM_ONLY_KEYS
+    elsewhere in this module)."""
+    if is_platform_owner:
+        return True
+    return page_key not in usable_page_keys_denied(session, role_id)
+
+
+def protected_role_name(name):
+    """True if this role name is load-bearing for the app itself (see
+    STRUCTURALLY_REQUIRED_ROLE_NAMES) and must never be renamed away from
+    or deleted, on the Default User Roles template page or anywhere else a
+    role's name can be edited."""
+    return (name or "").strip().lower() in STRUCTURALLY_REQUIRED_ROLE_NAMES
 
 
 def page_visible(page_key, *, is_platform_owner, subscription, denied_keys):

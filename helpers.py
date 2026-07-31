@@ -299,6 +299,31 @@ def delete_with_confirm(label, on_confirm, key_prefix, extra_warning=""):
         st.rerun()
 
 
+def page_access_grid(current_states, key_prefix):
+    """Renders a Hidden / View only / Full access selectbox for every page
+    in access_control.PAGE_CATALOG, each defaulting to its current state
+    (current_states.get(page_key, ACCESS_FULL)). Meant to be called inside
+    an st.form; returns {page_key: chosen_state} for the caller to hand to
+    access_control.save_access_states() on submit. Shared by the Default
+    User Roles (platform-owner templates) and User Roles (per-company)
+    pages so both edit page access identically."""
+    from access_control import ACCESS_FULL, ACCESS_HIDDEN, ACCESS_STATE_LABELS, ACCESS_VIEW_ONLY, PAGE_CATALOG
+
+    order = [ACCESS_HIDDEN, ACCESS_VIEW_ONLY, ACCESS_FULL]
+    selections = {}
+    page_items = list(PAGE_CATALOG.items())
+    cols = st.columns(2)
+    for i, (page_key, title) in enumerate(page_items):
+        with cols[i % 2]:
+            current = current_states.get(page_key, ACCESS_FULL)
+            selections[page_key] = st.selectbox(
+                title, order, index=order.index(current),
+                format_func=lambda s: ACCESS_STATE_LABELS[s],
+                key=f"{key_prefix}_{page_key}",
+            )
+    return selections
+
+
 def show_pending_banner(key):
     """Show a one-shot success banner stashed in session_state by an action
     that immediately called st.rerun() right after it. A plain st.success()
