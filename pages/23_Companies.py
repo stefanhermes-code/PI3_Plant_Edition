@@ -28,15 +28,29 @@ render_function_action_intro(
     function_text=(
         "The tenant boundary for the whole app: every plant, raw material, supplier, and user "
         "account belongs to exactly one company. Each company is assigned a subscription type, "
-        "which caps how many users/plants it can have and gates whole feature areas (Industrial "
-        "Intelligence, PI3/AI, Reports)."
+        "which caps how many users/plants it can have and gates PI3/AI and Reports, plus a "
+        "billing frequency (Annual or Monthly) that picks which of that tier's two list prices "
+        "the company is actually billed."
     ),
     action_text=(
-        "Add a company, assign it a subscription type, then go to User Accounts to create its "
-        "first admin user. Deactivate a company (rather than deleting it) once it has real data - "
-        "deletion is only offered while a company is still empty."
+        "Add a company, assign it a subscription type and billing frequency, then go to User "
+        "Accounts to create its first admin user. Deactivate a company (rather than deleting it) "
+        "once it has real data - deletion is only offered while a company is still empty."
     ),
 )
+
+
+def _effective_fee(company):
+    """Human-readable fee for a company based on its subscription tier's list
+    prices and its own billing_frequency - see db.py's Company/SubscriptionType
+    docstrings for why the dollar amount isn't duplicated onto Company."""
+    sub = company.subscription_type
+    if sub is None:
+        return "—"
+    freq = company.billing_frequency or "Annual"
+    if freq == "Monthly":
+        return f"${sub.monthly_price:,.0f}/plant/mo" if sub.monthly_price else "—"
+    return f"${sub.annual_price:,.0f}/plant/yr" if sub.annual_price else "—"
 session = get_session()
 user = current_user()
 
@@ -49,6 +63,7 @@ with st.expander("Add company", expanded=False):
             "Subscription type", [None] + subscription_types,
             format_func=lambda s: "— none assigned —" if s is None else s.name,
         )
+        billing_frequency = st.selectbox("Billing frequency", ["Annual", "Monthly"])
         contact_name = st.text_input("Contact name")
         contact_email = st.text_input("Contact email")
         notes = st.text_area("Notes")
@@ -61,6 +76,7 @@ with st.expander("Add company", expanded=False):
                     Company(
                         name=name.strip(),
                         subscription_type_id=subscription.id if subscription else None,
+                        billing_frequency=billing_frequency,
                         contact_name=contact_name,
                         contact_email=contact_email,
                         notes=notes,
@@ -80,6 +96,8 @@ else:
         {
             "Name": c.name,
             "Subscription": c.subscription_type.name if c.subscription_type else "—",
+            "Billing": c.billing_frequency or "Annual",
+            "Fee": _effective_fee(c),
             "Platform owner": "Yes" if c.is_platform_owner else "",
             "Users": session.query(User).filter(User.company_id == c.id).count(),
             "Plants": session.query(Plant).filter(Plant.company_id == c.id).count(),
@@ -110,6 +128,12 @@ else:
                 format_func=lambda s: "— none assigned —" if s is None else s.name,
                 key=f"edit_co_sub_{selected.id}",
             )
+            e_billing = st.selectbox(
+                "Billing frequency", ["Annual", "Monthly"],
+                index=0 if (selected.billing_frequency or "Annual") == "Annual" else 1,
+                key=f"edit_co_billing_{selected.id}",
+            )
+            st.caption(f"Current fee: {_effective_fee(selected)}")
             e_contact_name = st.text_input(
                 "Contact name", value=selected.contact_name or "", key=f"edit_co_cname_{selected.id}"
             )
@@ -126,6 +150,7 @@ else:
                 else:
                     selected.name = e_name.strip()
                     selected.subscription_type_id = e_sub.id if e_sub else None
+                    selected.billing_frequency = e_billing
                     selected.contact_name = e_contact_name
                     selected.contact_email = e_contact_email
                     selected.active = e_active or selected.is_platform_owner

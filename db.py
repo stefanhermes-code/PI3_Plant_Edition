@@ -177,7 +177,13 @@ class SubscriptionType(Base):
     max_plants = Column(Integer)  # NULL = unlimited
     pi3_ai_enabled = Column(Boolean, default=True)  # PI3 Connectivity page - the one real feature differentiator between HTC's two tiers, see access_control.py
     reports_enabled = Column(Boolean, default=True)  # Report page
-    price_note = Column(String(200))  # free text (e.g. "$500/mo") - no payment processing wired up
+    # List prices for this tier. A company pays whichever one applies to its
+    # own Company.billing_frequency ("Annual" or "Monthly") - not duplicated
+    # onto Company, so raising a tier's price here is immediately reflected
+    # for every company on it rather than needing a per-company update.
+    annual_price = Column(Float)
+    monthly_price = Column(Float)
+    price_note = Column(String(200))  # free text for anything not captured above (e.g. one-time implementation fee) - no payment processing wired up
     active = Column(Boolean, default=True)
     notes = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
@@ -195,6 +201,10 @@ class Company(Base):
     is_platform_owner = Column(Boolean, default=False)
     contact_name = Column(String(200))
     contact_email = Column(String(200))
+    # Which of the subscription type's two list prices (annual_price /
+    # monthly_price) this company is actually billed. Deliberately not
+    # storing the dollar amount itself here - see SubscriptionType.
+    billing_frequency = Column(String(20), default="Annual")  # "Annual" or "Monthly"
     active = Column(Boolean, default=True)
     notes = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
