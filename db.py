@@ -620,6 +620,16 @@ class ProductionPhase(Base):
     sidewall_width_mm = Column(Float)
     foam_height_mm = Column(Float)
 
+    # Ambient plant-floor conditions at the time this phase was recorded -
+    # measured, not set (like foam_height_mm/sidewall_width_mm above), but
+    # tracked per phase for the same reason: Setup captures the
+    # expected/planned reading, Finalized the actual reading during the
+    # run, so the two can be compared. A genuine per-batch confound for
+    # foam rise/cure behavior, so it belongs alongside the other process
+    # settings rather than as a single value on ProductionRun.
+    ambient_temperature_c = Column(Float)
+    ambient_humidity_pct = Column(Float)
+
     # Stoichiometric ratio/index for this phase - the report's single
     # highest-value diagnostic field (explains density/compression/cure
     # drift better than any individual stream reading). Compare the Setup
@@ -761,8 +771,13 @@ class RuntimeDataRecord(Base):
     pump_speed_or_flow_data = Column(String(200))
     temperature_data = Column(String(200))
     pressure_data = Column(String(200))
-    ambient_temperature = Column(Float)
-    ambient_humidity = Column(Float)
+    # Ambient temperature/humidity used to live here, but this table is a
+    # loose runtime log (multiple rows per run, never wired into any
+    # correlation/trend analysis). Consolidated onto ProductionPhase
+    # (ambient_temperature_c/ambient_humidity_pct) on 2026-08-02 so there is
+    # one place ambient conditions live, and so they flow through the same
+    # PHASE_SETTING_FIELDS pipeline every other process setting does. See
+    # ProductionPhase below.
     rise_time = Column(Float)
     curing_notes = Column(Text)
     source_file_reference = Column(String(300))

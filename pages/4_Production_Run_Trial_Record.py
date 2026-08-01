@@ -85,8 +85,6 @@ RUNTIME_OPTIONAL_COLUMNS = [
     "line_speed",
     "temperature_data",
     "pressure_data",
-    "ambient_temperature",
-    "ambient_humidity",
     "rise_time",
     "curing_notes",
 ]
@@ -96,7 +94,8 @@ PHASE_OPTIONAL_COLUMNS = [
     "phase_start", "phase_end",
     "mixer_rpm", "conveyor_speed", "air_injection_rate", "air_pressure_bar",
     "ratio_index", "laydown_mode", "section_positions_note",
-    "sidewall_width_mm", "foam_height_mm", "notes",
+    "sidewall_width_mm", "foam_height_mm",
+    "ambient_temperature_c", "ambient_humidity_pct", "notes",
 ]
 
 # Component stream readings are actual measurements taken once production is
@@ -204,23 +203,24 @@ render_function_action_intro(
     function_text=(
         "This is the primary record of everything that happens on a batch: which recipe and "
         "machine it ran on, its Setup and Finalized process-phase settings (mixer rpm, conveyor "
-        "speed, air injection, ratio/index, and so on), the per-material flow-meter readings for "
-        "that batch, any production events logged against it (alarms, interventions, grade "
-        "changes), and ambient/line-speed runtime data. Quality test results and issues are "
-        "captured on separate pages but always key back to the run created here. A run doesn't "
-        "need to be framed as an experiment - that's optional and lives on the Trial / Experiment "
-        "page for runs that are a deliberate change investigation."
+        "speed, air injection, ratio/index, ambient temperature/humidity, and so on), the "
+        "per-material flow-meter readings for that batch, any production events logged against "
+        "it (alarms, interventions, grade changes), and line-speed runtime data. Quality test "
+        "results and issues are captured on separate pages but always key back to the run "
+        "created here. A run doesn't need to be framed as an experiment - that's optional and "
+        "lives on the Trial / Experiment page for runs that are a deliberate change "
+        "investigation."
     ),
     action_text=(
         "Start on the Production Runs tab to create the batch record (foam grade, recipe version, "
         "machine, run date - the batch reference is generated automatically). Then work through "
         "the other tabs for that same run: log its Setup and Finalized phase settings under "
-        "Process Phases, its metered material flows under Component Stream Readings (readings "
-        "always attach to the Finalized phase), any alarms or interventions under Production "
-        "Events, and ambient/line-speed conditions under Runtime Data. Every tab other than "
-        "Production Runs opens with the same run selector, so pick the run once and work through "
-        "its tabs in turn - manual entry and CSV/Excel bulk import are both available wherever "
-        "heavy data entry is expected."
+        "Process Phases (including ambient temperature/humidity), its metered material flows "
+        "under Component Stream Readings (readings always attach to the Finalized phase), any "
+        "alarms or interventions under Production Events, and line-speed conditions under "
+        "Runtime Data. Every tab other than Production Runs opens with the same run selector, so "
+        "pick the run once and work through its tabs in turn - manual entry and CSV/Excel bulk "
+        "import are both available wherever heavy data entry is expected."
     ),
 )
 session = get_session()
@@ -592,6 +592,8 @@ with tab_phases:
                         "Mixer rpm": p.mixer_rpm,
                         "Conveyor m/min": p.conveyor_speed,
                         "Ratio/index": p.ratio_index,
+                        "Ambient temp (°C)": p.ambient_temperature_c,
+                        "Ambient humidity (%)": p.ambient_humidity_pct,
                         "Laydown mode": p.laydown_mode,
                     }
                     for p in phases_for_run
@@ -657,6 +659,19 @@ with tab_phases:
                             help="Stoichiometric ratio/index for this phase.",
                         )
 
+                        st.markdown("**Ambient conditions for this phase**")
+                        c8, c9 = st.columns(2)
+                        ambient_temperature_c = c8.number_input(
+                            "Ambient temperature (°C)", step=0.1,
+                            value=float(sel_phase.ambient_temperature_c or 0.0),
+                            key=f"edit_phase_ambient_temp_{sel_phase.id}",
+                        )
+                        ambient_humidity_pct = c9.number_input(
+                            "Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5,
+                            value=float(sel_phase.ambient_humidity_pct or 0.0),
+                            key=f"edit_phase_ambient_hum_{sel_phase.id}",
+                        )
+
                         laydown_mode = st.text_input(
                             "Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)",
                             value=sel_phase.laydown_mode or "", key=f"edit_phase_laydown_{sel_phase.id}",
@@ -683,6 +698,8 @@ with tab_phases:
                                 sel_phase.air_injection_rate = air_injection_rate or None
                                 sel_phase.air_pressure_bar = air_pressure_bar or None
                                 sel_phase.ratio_index = ratio_index or None
+                                sel_phase.ambient_temperature_c = ambient_temperature_c or None
+                                sel_phase.ambient_humidity_pct = ambient_humidity_pct or None
                                 sel_phase.laydown_mode = laydown_mode
                                 sel_phase.section_positions_note = section_positions_note
                                 sel_phase.sidewall_width_mm = sidewall_width_mm or None
@@ -744,6 +761,16 @@ with tab_phases:
                     "single strongest diagnostic for explaining density/compression/cure drift.",
                 )
 
+                st.markdown("**Ambient conditions for this phase**")
+                c8, c9 = st.columns(2)
+                ambient_temperature_c = c8.number_input(
+                    "Ambient temperature (°C)", step=0.1, key=f"new_phase_ambient_temp_{run.id}",
+                )
+                ambient_humidity_pct = c9.number_input(
+                    "Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5,
+                    key=f"new_phase_ambient_hum_{run.id}",
+                )
+
                 laydown_mode = st.text_input(
                     "Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)",
                     key=f"new_phase_laydown_{run.id}",
@@ -771,6 +798,8 @@ with tab_phases:
                                 air_injection_rate=air_injection_rate or None,
                                 air_pressure_bar=air_pressure_bar or None,
                                 ratio_index=ratio_index or None,
+                                ambient_temperature_c=ambient_temperature_c or None,
+                                ambient_humidity_pct=ambient_humidity_pct or None,
                                 laydown_mode=laydown_mode,
                                 section_positions_note=section_positions_note,
                                 sidewall_width_mm=sidewall_width_mm or None,
@@ -841,6 +870,8 @@ with tab_phases:
                                         air_injection_rate=row.get("air_injection_rate"),
                                         air_pressure_bar=row.get("air_pressure_bar"),
                                         ratio_index=row.get("ratio_index"),
+                                        ambient_temperature_c=row.get("ambient_temperature_c"),
+                                        ambient_humidity_pct=row.get("ambient_humidity_pct"),
                                         laydown_mode=str(row.get("laydown_mode", "") or ""),
                                         section_positions_note=str(row.get("section_positions_note", "") or ""),
                                         sidewall_width_mm=row.get("sidewall_width_mm"),
@@ -1579,8 +1610,6 @@ with tab_runtime:
                         "Line speed": rt.line_speed,
                         "Temperature data": rt.temperature_data,
                         "Pressure data": rt.pressure_data,
-                        "Ambient temp (°C)": rt.ambient_temperature,
-                        "Ambient humidity (%)": rt.ambient_humidity,
                         "Rise time (s)": rt.rise_time,
                     }
                     for rt in runtime_for_run
@@ -1597,19 +1626,9 @@ with tab_runtime:
                 if sel_runtime:
                     st.markdown("##### Edit runtime data")
                     with st.form(f"edit_runtime_form_{sel_runtime.id}"):
-                        c1, c2, c3 = st.columns(3)
-                        line_speed = c1.number_input(
+                        line_speed = st.number_input(
                             "Line speed", min_value=0.0, step=0.1, value=float(sel_runtime.line_speed or 0.0),
                             key=f"edit_runtime_speed_{sel_runtime.id}",
-                        )
-                        ambient_temp = c2.number_input(
-                            "Ambient temperature (°C)", step=0.1, value=float(sel_runtime.ambient_temperature or 0.0),
-                            key=f"edit_runtime_ambient_temp_{sel_runtime.id}",
-                        )
-                        ambient_humidity = c3.number_input(
-                            "Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5,
-                            value=float(sel_runtime.ambient_humidity or 0.0),
-                            key=f"edit_runtime_ambient_hum_{sel_runtime.id}",
                         )
                         temperature_data = st.text_input(
                             "Temperature data", value=sel_runtime.temperature_data or "",
@@ -1632,8 +1651,6 @@ with tab_runtime:
                             sel_runtime.line_speed = line_speed or None
                             sel_runtime.temperature_data = temperature_data
                             sel_runtime.pressure_data = pressure_data
-                            sel_runtime.ambient_temperature = ambient_temp or None
-                            sel_runtime.ambient_humidity = ambient_humidity or None
                             sel_runtime.rise_time = rise_time or None
                             sel_runtime.curing_notes = curing_notes
                             session.commit()
@@ -1656,10 +1673,7 @@ with tab_runtime:
 
         with sub_create:
             with st.form(f"add_runtime_manual_{run.id}"):
-                c1, c2, c3 = st.columns(3)
-                line_speed = c1.number_input("Line speed", min_value=0.0, step=0.1)
-                ambient_temp = c2.number_input("Ambient temperature (°C)", step=0.1)
-                ambient_humidity = c3.number_input("Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5)
+                line_speed = st.number_input("Line speed", min_value=0.0, step=0.1)
                 temperature_data = st.text_input("Temperature data")
                 pressure_data = st.text_input("Pressure data (where available)")
                 rise_time = st.number_input("Rise time (s)", min_value=0.0, step=1.0)
@@ -1672,8 +1686,6 @@ with tab_runtime:
                             line_speed=line_speed or None,
                             temperature_data=temperature_data,
                             pressure_data=pressure_data,
-                            ambient_temperature=ambient_temp or None,
-                            ambient_humidity=ambient_humidity or None,
                             rise_time=rise_time or None,
                             curing_notes=curing_notes,
                             source_file_reference="manual entry",
@@ -1734,8 +1746,6 @@ with tab_runtime:
                                         line_speed=row.get("line_speed"),
                                         temperature_data=str(row.get("temperature_data", "") or ""),
                                         pressure_data=str(row.get("pressure_data", "") or ""),
-                                        ambient_temperature=row.get("ambient_temperature"),
-                                        ambient_humidity=row.get("ambient_humidity"),
                                         rise_time=row.get("rise_time"),
                                         curing_notes=str(row.get("curing_notes", "") or ""),
                                         source_file_reference=uploaded.name,

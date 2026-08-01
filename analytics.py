@@ -40,6 +40,8 @@ PHASE_SETTING_FIELDS = [
     "ratio_index",
     "foam_height_mm",
     "sidewall_width_mm",
+    "ambient_temperature_c",
+    "ambient_humidity_pct",
 ]
 
 PHASE_SETTING_LABELS = {
@@ -50,6 +52,8 @@ PHASE_SETTING_LABELS = {
     "ratio_index": "Ratio / index",
     "foam_height_mm": "Foam height (mm)",
     "sidewall_width_mm": "Sidewall width (mm)",
+    "ambient_temperature_c": "Ambient temperature (°C)",
+    "ambient_humidity_pct": "Ambient humidity (%)",
 }
 
 
