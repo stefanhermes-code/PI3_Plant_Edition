@@ -24,7 +24,14 @@ from db import (
     init_db,
 )
 from auth import current_user, logout_button, require_login
-from helpers import confidence_badge, page_setup, render_function_action_intro, view_only_notice
+from helpers import (
+    clickable_table,
+    confidence_badge,
+    delete_with_confirm,
+    page_setup,
+    render_function_action_intro,
+    view_only_notice,
+)
 from tenant_scope import (
     apply_scope,
     company_picker,
@@ -234,4 +241,108 @@ if len(closed_trials) >= 2:
                 st.rerun()
 else:
     st.info("Close at least two trials before linking them as similar cases.")
+
+# ---------------------------------------------------------------------------
+# Saved similar-case links - list, edit, delete
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Saved similar-case links")
+
+# closed_trials above is already scoped by apply_scope() to the current
+# company filter (or unrestricted for the platform owner with no filter
+# set) - reuse that same id set here so a link never surfaces a trial
+# outside the reviewer's current scope.
+closed_trial_ids = {t.id for t in closed_trials}
+links = [
+    link for link in session.query(SimilarCaseLink).order_by(SimilarCaseLink.created_at.desc()).all()
+    if link.source_trial_id in closed_trial_ids and link.linked_trial_id in closed_trial_ids
+]
+
+if not links:
+    st.info("No similar-case links saved yet.")
+else:
+    def _trial_label(trial_id):
+        t = session.get(TrialRecord, trial_id)
+        if not t:
+            return f"Trial #{trial_id} (not found)"
+        return f"Trial #{t.id} — {t.production_run.foam_grade.grade_name}"
+
+    link_rows = [
+        {
+            "Trial A": _trial_label(link.source_trial_id),
+            "Trial B": _trial_label(link.linked_trial_id),
+            "Similarity basis": link.similarity_basis or "—",
+            "Notes": link.notes or "—",
+        }
+        for link in links
+    ]
+    st.caption("Click a row to edit (and optionally delete) that link.")
+    idx = clickable_table(link_rows, key="similar_case_links_table")
+    if idx is not None and idx < len(links):
+        st.session_state["similar_case_link_selected_id"] = links[idx].id
+    else:
+        st.session_state.pop("similar_case_link_selected_id", None)
+
+    selected_link_id = st.session_state.get("similar_case_link_selected_id")
+    selected_link = next((link for link in links if link.id == selected_link_id), None)
+
+    if selected_link:
+        st.markdown(f"**Edit link #{selected_link.id}**")
+        with st.form(f"edit_similar_case_link_{selected_link.id}"):
+            all_trials_for_edit = (
+                apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, scoped_run_ids)
+                .filter(TrialRecord.status == "Closed")
+                .all()
+            )
+            trial_options = all_trials_for_edit
+            source_default = next(
+                (i for i, t in enumerate(trial_options) if t.id == selected_link.source_trial_id), 0
+            )
+            target_default = next(
+                (i for i, t in enumerate(trial_options) if t.id == selected_link.linked_trial_id), 0
+            )
+            ec1, ec2 = st.columns(2)
+            e_source = ec1.selectbox(
+                "Trial A", trial_options, index=source_default,
+                format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name}",
+                key=f"edit_link_source_{selected_link.id}",
+            )
+            e_target = ec2.selectbox(
+                "Trial B", trial_options, index=target_default,
+                format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name}",
+                key=f"edit_link_target_{selected_link.id}",
+            )
+            e_basis = st.text_input(
+                "Similarity basis", value=selected_link.similarity_basis or "",
+                key=f"edit_link_basis_{selected_link.id}",
+            )
+            e_notes = st.text_area("Notes", value=selected_link.notes or "", key=f"edit_link_notes_{selected_link.id}")
+            if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
+                if e_source.id == e_target.id:
+                    st.error("Choose two different trials.")
+                else:
+                    selected_link.source_trial_id = e_source.id
+                    selected_link.linked_trial_id = e_target.id
+                    selected_link.similarity_basis = e_basis
+                    selected_link.notes = e_notes
+                    session.commit()
+                    st.success("Similar-case link updated.")
+                    st.rerun()
+
+        def _do_delete_link(_session=session, _id=selected_link.id):
+            _session.query(SimilarCaseLink).filter(SimilarCaseLink.id == _id).delete(synchronize_session=False)
+            _session.commit()
+            st.session_state.pop("similar_case_link_selected_id", None)
+
+        if page_usable:
+            delete_with_confirm(
+                f"link #{selected_link.id}", _do_delete_link, key_prefix=f"similar_case_link_{selected_link.id}",
+                extra_warning="This is a leaf record — deleting it has no other effects.",
+            )
+        else:
+            st.caption("View-only access - deleting is restricted for your role.")
+
+        if st.button("Clear selection", key="clear_similar_case_link_selection"):
+            st.session_state.pop("similar_case_link_selected_id", None)
+            st.rerun()
 
