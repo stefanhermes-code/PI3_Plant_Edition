@@ -348,24 +348,43 @@ else:
     if selected:
         st.divider()
         st.subheader(f"Edit: {selected.observation_type}")
+
+        # Production run + trial link are rendered OUTSIDE the form, same
+        # reasoning as the issue-type picker below: the trial dropdown's
+        # options depend on which run is currently selected, so it needs to
+        # react immediately when the run changes rather than waiting for
+        # form submit. This also fixes a real gap - the run this issue was
+        # recorded against used to be fixed at creation time with no way to
+        # correct it later if it had been linked to the wrong run.
+        run_options = runs
+        run_default = next((i for i, r in enumerate(run_options) if r.id == selected.production_run_id), 0)
+        e_run = st.selectbox(
+            "Production run *",
+            run_options,
+            index=run_default,
+            format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
+            key=f"edit_obs_run_{selected.id}",
+        )
+        trials_for_edit = (
+            session.query(TrialRecord).filter(TrialRecord.production_run_id == e_run.id).all() if e_run else []
+        )
+        trial_options = [None] + trials_for_edit
+        trial_default = next(
+            (i for i, t in enumerate(trial_options) if t and t.id == selected.trial_record_id), 0
+        )
+        e_trial = st.selectbox(
+            "Link to trial (optional)",
+            trial_options,
+            index=trial_default,
+            format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
+            key=f"edit_obs_trial_{selected.id}",
+        )
+
         e_type, e_typical_causes = _issue_type_picker(f"edit_obs_{selected.id}", current_value=selected.observation_type)
         if e_typical_causes:
             st.caption(f"Typical causes/checks: {e_typical_causes}")
+
         with st.form(f"edit_obs_{selected.id}"):
-            trials_for_edit = (
-                session.query(TrialRecord)
-                .filter(TrialRecord.production_run_id == selected.production_run_id)
-                .all()
-            )
-            trial_options = [None] + trials_for_edit
-            trial_default = next((i for i, t in enumerate(trial_options) if t and t.id == selected.trial_record_id), 0)
-            e_trial = st.selectbox(
-                "Link to trial (optional)",
-                trial_options,
-                index=trial_default,
-                format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
-                key=f"edit_obs_trial_{selected.id}",
-            )
             st.caption(f"Issue type: **{e_type or '(describe the issue above)'}**")
             ec1, ec2 = st.columns(2)
             e_severity = ec1.selectbox(
@@ -392,7 +411,10 @@ else:
             if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
                 if not e_type:
                     st.error("Issue type is required.")
+                elif not e_run:
+                    st.error("Production run is required.")
                 else:
+                    selected.production_run_id = e_run.id
                     selected.trial_record_id = e_trial.id if e_trial else None
                     selected.observation_type = e_type
                     selected.severity = e_severity
