@@ -26,6 +26,12 @@ Roles: admin, technical, viewer
              or change commercial/admin settings
 - viewer:    read-only access to all screens
 
+is_super_admin (User.is_super_admin): an unconditional bypass of every
+RolePagePermission check, independent of role name or is_platform_owner -
+see db.py's User docstring for why this exists separately from
+is_platform_owner. Only ever set on a platform-owner-company user (the
+User Accounts page only offers the toggle in that context).
+
 Expected st.secrets structure for the legacy fallback only (see
 .streamlit/secrets.toml.example):
 
@@ -99,6 +105,7 @@ def _start_db_session(session, user):
     st.session_state["role"] = user.role.name if user.role else "viewer"
     st.session_state["company_id"] = user.company_id
     st.session_state["is_platform_owner"] = bool(user.company and user.company.is_platform_owner)
+    st.session_state["is_super_admin"] = bool(user.is_super_admin)
     user.last_login_at = dt.datetime.utcnow()
     session.commit()
 
@@ -115,6 +122,7 @@ def _start_legacy_session(username, user_record):
     # as platform-owner scope so nothing they previously had access to
     # disappears out from under them.
     st.session_state["is_platform_owner"] = True
+    st.session_state["is_super_admin"] = True
 
 
 def require_login():
@@ -138,6 +146,7 @@ def require_login():
         st.session_state.setdefault("role_id", None)
         st.session_state.setdefault("company_id", None)
         st.session_state.setdefault("is_platform_owner", True)
+        st.session_state.setdefault("is_super_admin", True)
         return
 
     if st.session_state.get("authenticated"):
@@ -190,6 +199,7 @@ def current_user():
         "role_id": st.session_state.get("role_id"),
         "company_id": st.session_state.get("company_id"),
         "is_platform_owner": st.session_state.get("is_platform_owner", False),
+        "is_super_admin": st.session_state.get("is_super_admin", False),
     }
 
 
@@ -221,7 +231,7 @@ def logout_button():
         if st.button("Log out"):
             for key in (
                 "authenticated", "auth_source", "user_id", "username", "display_name",
-                "role", "role_id", "company_id", "is_platform_owner",
+                "role", "role_id", "company_id", "is_platform_owner", "is_super_admin",
             ):
                 st.session_state.pop(key, None)
             st.rerun()

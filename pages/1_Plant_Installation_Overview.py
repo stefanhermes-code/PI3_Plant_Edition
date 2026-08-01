@@ -35,7 +35,7 @@ session = get_session()
 user = current_user()
 is_platform_owner = user["is_platform_owner"]
 own_company_id = user["company_id"]
-page_usable = can_use_page("plant_overview", role_id=user["role_id"], session=session)
+page_usable = can_use_page("plant_overview", role_id=user["role_id"], session=session, is_super_admin=user["is_super_admin"])
 if not page_usable:
     view_only_notice()
 

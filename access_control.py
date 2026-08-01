@@ -198,7 +198,7 @@ def usable_page_keys_denied(session, role_id):
     return {r.page_key for r in rows}
 
 
-def can_use_page(page_key, *, role_id, session):
+def can_use_page(page_key, *, role_id, session, is_super_admin=False):
     """Single-page convenience wrapper around usable_page_keys_denied() for
     a page that just wants one yes/no answer at the top of its script, to
     decide whether to render its own Add/Edit/Delete forms and action
@@ -209,7 +209,17 @@ def can_use_page(page_key, *, role_id, session):
     restrictions on ordinary operational pages. A role_id of None (the
     legacy secrets.toml fallback, or AUTH_DISABLED dev mode) has no
     RolePagePermission rows to deny anything, so it naturally resolves to
-    full use, same as before this three-state model existed."""
+    full use, same as before this three-state model existed.
+
+    is_super_admin (see db.py's User.is_super_admin) IS an unconditional
+    bypass, unlike is_platform_owner above - it's a deliberate per-person
+    escape hatch, not a scope marker, added 2026-08-01 so the platform
+    owner's own trusted staff can never be locked out of their own
+    operational pages by an edit to their own role's permissions (which,
+    unlike a customer's role, the platform owner can reach and change via
+    the User Roles page like any other company's role)."""
+    if is_super_admin:
+        return True
     return page_key not in usable_page_keys_denied(session, role_id)
 
 
@@ -221,9 +231,17 @@ def protected_role_name(name):
     return (name or "").strip().lower() in STRUCTURALLY_REQUIRED_ROLE_NAMES
 
 
-def page_visible(page_key, *, is_platform_owner, subscription, denied_keys):
+def page_visible(page_key, *, is_platform_owner, subscription, denied_keys, is_super_admin=False):
     """subscription may be None (no subscription assigned yet - treat as
-    full access rather than locking a company out over a data gap)."""
+    full access rather than locking a company out over a data gap).
+
+    is_super_admin (see db.py's User.is_super_admin / can_use_page's
+    docstring) short-circuits every other check here too, so a super-admin
+    never has a nav item hidden out from under them by a role permission
+    edit - the same escape-hatch reasoning as can_use_page, extended to
+    visibility."""
+    if is_super_admin:
+        return True
     if page_key in PLATFORM_ONLY_KEYS:
         return bool(is_platform_owner)
     if subscription is not None:

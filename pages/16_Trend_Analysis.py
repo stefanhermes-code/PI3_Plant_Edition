@@ -74,7 +74,7 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
-page_usable = can_use_page("trend_analysis", role_id=user["role_id"], session=session)
+page_usable = can_use_page("trend_analysis", role_id=user["role_id"], session=session, is_super_admin=user["is_super_admin"])
 if not page_usable:
     view_only_notice(action="using PI3 and saving to Expert Notes")
 company, _all_companies = company_picker(

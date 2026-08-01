@@ -281,6 +281,7 @@ init_db()
 _nav_session = get_session()
 _is_authenticated = bool(st.session_state.get("authenticated"))
 _is_platform_owner = bool(st.session_state.get("is_platform_owner", False)) if _is_authenticated else True
+_is_super_admin = bool(st.session_state.get("is_super_admin", False)) if _is_authenticated else True
 _denied_keys = denied_page_keys(_nav_session, st.session_state.get("role_id")) if _is_authenticated else set()
 _company_id = st.session_state.get("company_id") if _is_authenticated else None
 _subscription = None
@@ -290,7 +291,8 @@ if _company_id:
 
 def _visible(key):
     return page_visible(
-        key, is_platform_owner=_is_platform_owner, subscription=_subscription, denied_keys=_denied_keys
+        key, is_platform_owner=_is_platform_owner, subscription=_subscription, denied_keys=_denied_keys,
+        is_super_admin=_is_super_admin,
     )
 
 

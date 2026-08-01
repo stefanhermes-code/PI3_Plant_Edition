@@ -9,6 +9,14 @@ access such as a contractor or a trial user.
 The platform owner (HTC) sees and manages every company's users; a
 company's own admin only sees and manages their own company's users, and
 is blocked from exceeding that company's subscribed user limit.
+
+Only when the company being viewed IS the platform owner (HTC itself) does
+an extra "Super admin" checkbox appear, to set User.is_super_admin - an
+unconditional bypass of every page/role restriction in the app (see
+db.py's User docstring and access_control.can_use_page). Deliberately not
+offered for any other company: it's an escape hatch reserved for HTC's own
+trusted staff, not something a customer's admin should ever be able to
+grant to one of their own users.
 """
 
 import datetime as dt
@@ -93,6 +101,12 @@ with st.expander("Add user", expanded=False):
         valid_from = c1.date_input("Valid from (optional)", value=None)
         valid_until = c2.date_input("Valid until (optional)", value=None)
         active = st.checkbox("Active", value=True)
+        super_admin = False
+        if company_filter.is_platform_owner:
+            super_admin = st.checkbox(
+                "Super admin (bypasses every page/role restriction app-wide - HTC staff only)",
+                value=False,
+            )
         submitted = st.form_submit_button("Save user", disabled=limit_reached)
         if submitted:
             username_clean = username.strip().lower()
@@ -111,6 +125,7 @@ with st.expander("Add user", expanded=False):
                         active=active,
                         valid_from=valid_from or None,
                         valid_until=valid_until or None,
+                        is_super_admin=super_admin,
                     )
                 )
                 session.commit()
@@ -133,6 +148,7 @@ else:
             "Display name": u.display_name or "",
             "Role": u.role.name if u.role else "—",
             "Active": "Yes" if u.active else "No",
+            **({"Super admin": "Yes" if u.is_super_admin else ""} if company_filter.is_platform_owner else {}),
             "Valid from": u.valid_from or "—",
             "Valid until": u.valid_until or "—",
             "Last login": u.last_login_at,
@@ -172,12 +188,19 @@ else:
                 "Valid until (optional)", value=selected.valid_until, key=f"edit_user_vu_{selected.id}"
             )
             e_active = st.checkbox("Active", value=selected.active, key=f"edit_user_active_{selected.id}")
+            e_super_admin = selected.is_super_admin
+            if company_filter.is_platform_owner:
+                e_super_admin = st.checkbox(
+                    "Super admin (bypasses every page/role restriction app-wide - HTC staff only)",
+                    value=selected.is_super_admin, key=f"edit_user_super_{selected.id}",
+                )
             if st.form_submit_button("Save changes"):
                 selected.display_name = e_display
                 selected.role_id = e_role.id
                 selected.valid_from = e_valid_from or None
                 selected.valid_until = e_valid_until or None
                 selected.active = e_active
+                selected.is_super_admin = e_super_admin
                 if e_new_password:
                     selected.password_hash = hash_password(e_new_password)
                 session.commit()

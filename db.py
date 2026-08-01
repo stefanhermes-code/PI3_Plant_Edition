@@ -298,6 +298,26 @@ class User(Base):
     active = Column(Boolean, default=True)
     valid_from = Column(Date)  # NULL = no start restriction
     valid_until = Column(Date)  # NULL = indefinite
+    # Added 2026-08-01: an unconditional bypass of every RolePagePermission
+    # check (access_control.can_use_page/page_visible), independent of
+    # is_platform_owner and of whatever role this user happens to carry.
+    # Why this exists, given Company.is_platform_owner already exists: that
+    # flag is a company-SCOPE marker (which companies' data you can see),
+    # not a personal permission bypass - by design (see access_control.
+    # can_use_page's docstring) a platform-owner-company user assigned a
+    # narrow role (e.g. "viewer") is still meant to be restricted like
+    # anyone else, so HTC can give its own staff genuinely limited access
+    # too. But that same design means the platform owner's own "admin" role
+    # clone is just an ordinary row in the roles table - reachable and
+    # editable from the User Roles page like any other company's role - so
+    # a platform-owner admin could accidentally narrow their OWN role out
+    # from under themselves with no separate escape hatch. is_super_admin is
+    # that escape hatch: a per-person flag, editable only on a platform-
+    # owner-company user (see pages/25_User_Accounts.py), that always
+    # resolves to full access everywhere no matter what any role's
+    # RolePagePermission rows say. Reserve it for the platform owner's own
+    # trusted staff, not customers' admins.
+    is_super_admin = Column(Boolean, default=False)
     last_login_at = Column(DateTime)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
