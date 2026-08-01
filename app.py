@@ -197,6 +197,7 @@ def render_overview():
     st.subheader("Quick actions")
     quick_actions = [
         ("pages/4_Production_Run_Trial_Record.py", "Add a production run", "➕", "production_run"),
+        ("pages/9_Samples_Conditioning.py", "Add a sample", "🧊", "samples_conditioning"),
         ("pages/5_Physical_Property_Result.py", "Record a quality test result", "📏", "quality_test_result"),
         ("pages/6_Quality_Observation.py", "Add a quality issue", "📋", "quality_issue"),
     ]
@@ -222,6 +223,7 @@ production_pages = [
 ]
 
 experiment_pages = [
+    ("samples_conditioning", st.Page("pages/9_Samples_Conditioning.py", title="Samples & Conditioning", icon="🧊")),
     ("trial_experiment", st.Page("pages/13_Trial_Experiment.py", title="Trial / Experiment", icon="🧫")),
     ("adjustment_conclusion", st.Page("pages/7_Adjustment_Conclusion.py", title="Adjustment & Conclusion", icon="🛠️")),
     ("approval_review", st.Page("pages/8_Approval_Review.py", title="Approval & Review", icon="✅")),
