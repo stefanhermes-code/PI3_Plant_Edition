@@ -212,10 +212,38 @@ else:
             _session.commit()
             st.session_state.pop("user_selected_id", None)
 
-        delete_with_confirm(
-            f"user '{selected.username}'", _do_delete_user, key_prefix=f"user_{selected.id}",
-            extra_warning="This is a leaf record — deleting it has no other effects. Consider deactivating instead if you want to keep a record they once had access.",
+        # Historical records (production runs, approvals, ...) reference
+        # a user by free-text name, not a real users.id foreign key, so
+        # there's no cascade/orphan risk to check the way there is for
+        # Companies/Subscription Types/User Roles (see
+        # PI3_Gaps_and_Ambiguities.docx, finding 2.3). The two real footguns
+        # unique to THIS page are blocked explicitly instead: deleting the
+        # account you're currently logged in as, and deleting the last
+        # remaining active super admin (which would leave no one able to
+        # bypass role restrictions platform-wide to fix the mistake).
+        is_self = selected.id == st.session_state.get("user_id")
+        is_last_super_admin = selected.is_super_admin and (
+            session.query(User)
+            .filter(User.is_super_admin.is_(True), User.active.is_(True), User.id != selected.id)
+            .count()
+            == 0
         )
+        if is_self:
+            st.warning(
+                "You can't delete the account you're currently logged in as. Deactivate it instead, "
+                "or have another admin delete it."
+            )
+        elif is_last_super_admin:
+            st.warning(
+                "This is the only active super admin account - deleting it would leave no one with "
+                "unrestricted platform-owner access. Promote another user to super admin first, or "
+                "deactivate this one instead."
+            )
+        else:
+            delete_with_confirm(
+                f"user '{selected.username}'", _do_delete_user, key_prefix=f"user_{selected.id}",
+                extra_warning="This is a leaf record — deleting it has no other effects. Consider deactivating instead if you want to keep a record they once had access.",
+            )
 
         if st.button("Clear selection", key="clear_user_selection"):
             st.session_state.pop("user_selected_id", None)

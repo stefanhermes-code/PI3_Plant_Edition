@@ -816,7 +816,18 @@ with tab_phases:
                             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                         if good_rows and st.button("Confirm import", key="confirm_phase_import", disabled=not page_usable):
-                            for row in good_rows:
+                            # Dedupe on (production_run_id, phase_name): a repeat click of
+                            # this button (e.g. because the previous success message wasn't
+                            # visibly persistent) must not double-insert the same run's phase.
+                            existing_keys = {
+                                (p.production_run_id, p.phase_name)
+                                for p in session.query(ProductionPhase).all()
+                            }
+                            accept, dup = dedupe_import_rows(
+                                good_rows, existing_keys,
+                                key_func=lambda row: (int(row["production_run_id"]), row["phase_name"]),
+                            )
+                            for row in accept:
                                 session.add(
                                     ProductionPhase(
                                         production_run_id=int(row["production_run_id"]),
@@ -837,7 +848,10 @@ with tab_phases:
                                     )
                                 )
                             session.commit()
-                            st.success(f"Imported {len(good_rows)} phase(s) from {uploaded.name}.")
+                            msg = f"Imported {len(accept)} phase(s) from {uploaded.name}."
+                            if dup:
+                                msg += f" Skipped {len(dup)} row(s) already recorded for that run/phase (likely a repeat click)."
+                            st.success(msg)
                             st.rerun()
 
         with sub_fallplate:
@@ -927,7 +941,24 @@ with tab_phases:
                                     render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                                 if good_rows and st.button("Confirm import", key="confirm_fallplate_import", disabled=not page_usable):
-                                    for row, phase_id in zip(good_rows, resolved_phase_ids):
+                                    # Dedupe on (production_phase_id, section_number): a repeat
+                                    # click of this button must not double-insert the same
+                                    # phase's section reading.
+                                    existing_keys = {
+                                        (s.production_phase_id, s.section_number)
+                                        for s in session.query(FallplateSectionPosition).all()
+                                    }
+                                    paired = list(zip(good_rows, resolved_phase_ids))
+                                    accept, dup = [], []
+                                    for row, phase_id in paired:
+                                        key = (phase_id, int(row["section_number"]))
+                                        if key in existing_keys:
+                                            dup.append(row)
+                                        else:
+                                            existing_keys.add(key)
+                                            accept.append((row, phase_id))
+
+                                    for row, phase_id in accept:
                                         session.add(
                                             FallplateSectionPosition(
                                                 production_phase_id=phase_id,
@@ -938,7 +969,10 @@ with tab_phases:
                                             )
                                         )
                                     session.commit()
-                                    st.success(f"Imported {len(good_rows)} section position(s) from {uploaded_fp.name}.")
+                                    msg = f"Imported {len(accept)} section position(s) from {uploaded_fp.name}."
+                                    if dup:
+                                        msg += f" Skipped {len(dup)} row(s) already recorded for that phase/section (likely a repeat click)."
+                                    st.success(msg)
                                     st.rerun()
 
                 recent_fp = (
@@ -1474,7 +1508,24 @@ with tab_events:
                             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                         if good_rows and st.button("Confirm import", key="confirm_event_import", disabled=not page_usable):
-                            for row, phase_id in zip(good_rows, resolved_phase_ids):
+                            # Dedupe on (production_run_id, event_ts, event_type): a repeat
+                            # click of this button must not double-insert the same logged
+                            # event.
+                            existing_keys = {
+                                (e.production_run_id, e.event_ts, e.event_type)
+                                for e in session.query(ProductionEvent).all()
+                            }
+                            paired = list(zip(good_rows, resolved_phase_ids))
+                            accept, dup = [], []
+                            for row, phase_id in paired:
+                                key = (int(row["production_run_id"]), parse_dt(row.get("event_ts")), row["event_type"])
+                                if key in existing_keys:
+                                    dup.append(row)
+                                else:
+                                    existing_keys.add(key)
+                                    accept.append((row, phase_id))
+
+                            for row, phase_id in accept:
                                 session.add(
                                     ProductionEvent(
                                         production_run_id=int(row["production_run_id"]),
@@ -1488,7 +1539,10 @@ with tab_events:
                                     )
                                 )
                             session.commit()
-                            st.success(f"Imported {len(good_rows)} event(s) from {uploaded.name}.")
+                            msg = f"Imported {len(accept)} event(s) from {uploaded.name}."
+                            if dup:
+                                msg += f" Skipped {len(dup)} row(s) already recorded for that run/time/type (likely a repeat click)."
+                            st.success(msg)
                             st.rerun()
 
 # ---------------------------------------------------------------------------
@@ -1661,7 +1715,17 @@ with tab_runtime:
                             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                         if good_rows and st.button("Confirm import", key="confirm_runtime_import", disabled=not page_usable):
-                            for row in good_rows:
+                            # Dedupe on production_run_id: a repeat click of this button
+                            # must not double-insert the same run's runtime data.
+                            existing_keys = {
+                                r.production_run_id
+                                for r in session.query(RuntimeDataRecord).all()
+                            }
+                            accept, dup = dedupe_import_rows(
+                                good_rows, existing_keys,
+                                key_func=lambda row: int(row["production_run_id"]),
+                            )
+                            for row in accept:
                                 session.add(
                                     RuntimeDataRecord(
                                         production_run_id=int(row["production_run_id"]),
@@ -1676,5 +1740,8 @@ with tab_runtime:
                                     )
                                 )
                             session.commit()
-                            st.success(f"Imported {len(good_rows)} runtime data row(s) from {uploaded.name}.")
+                            msg = f"Imported {len(accept)} runtime data row(s) from {uploaded.name}."
+                            if dup:
+                                msg += f" Skipped {len(dup)} row(s) already recorded for that run (likely a repeat click)."
+                            st.success(msg)
                             st.rerun()

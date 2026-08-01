@@ -240,4 +240,16 @@ if ai_assistant.is_enabled_for_plant(session, grade.product_family.plant_id if g
             "historical cases. Confirm through your own investigation before acting on it."
         )
         st.write(ai_answer)
+elif ai_assistant.availability_status(
+    session, grade.product_family.plant_id if grade.product_family else None
+) == "not_configured":
+    st.caption(
+        "PI3 isn't configured for this deployment yet (missing API credentials) - contact "
+        "your administrator."
+    )
+else:
+    st.caption(
+        "Enable PI3 connectivity for this plant (PI3 Connectivity, in Admin) to get PI3's "
+        "interpretation here."
+    )
 

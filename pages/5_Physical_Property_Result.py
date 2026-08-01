@@ -401,6 +401,25 @@ else:
 
             if selected_cond:
                 st.markdown(f"**Edit conditioning segment #{selected_cond.id}**")
+                # Condition type picker lives outside the form (same reason as the Add
+                # form above): the "Other (specify)" text input only needs to appear
+                # once the selectbox choice is known, which requires a rerun between
+                # them - form-internal widgets don't rerun until submit.
+                current_type = selected_cond.condition_type or ""
+                edit_condition_choice = st.selectbox(
+                    "Condition type *",
+                    CONDITIONING_TYPES,
+                    index=CONDITIONING_TYPES.index(current_type) if current_type in CONDITIONING_TYPES
+                    else CONDITIONING_TYPES.index("Other (specify)"),
+                    key=f"edit_cond_type_select_{selected_cond.id}",
+                )
+                edit_condition_other = None
+                if edit_condition_choice == "Other (specify)":
+                    edit_condition_other = st.text_input(
+                        "Specify condition type",
+                        value=current_type if current_type not in CONDITIONING_TYPES else "",
+                        key=f"edit_cond_type_other_{selected_cond.id}",
+                    )
                 with st.form(f"edit_cond_{selected_cond.id}"):
                     ec1, ec2 = st.columns(2)
                     e_temp = ec1.number_input(
@@ -410,9 +429,6 @@ else:
                     e_rh = ec2.number_input(
                         "Relative humidity (%)", min_value=0.0, max_value=100.0, step=1.0,
                         value=float(selected_cond.relative_humidity_pct or 0.0), key=f"edit_cond_rh_{selected_cond.id}",
-                    )
-                    e_condition_type = st.text_input(
-                        "Condition type", value=selected_cond.condition_type or "", key=f"edit_cond_type_{selected_cond.id}"
                     )
                     e_start = combine_date_time(
                         "Segment start", f"edit_cond_start_{selected_cond.id}",
@@ -426,12 +442,17 @@ else:
                     )
                     e_notes = st.text_area("Notes", value=selected_cond.notes or "", key=f"edit_cond_notes_{selected_cond.id}")
                     if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
-                        if not e_condition_type.strip():
+                        e_condition_type = (
+                            (edit_condition_other or "").strip()
+                            if edit_condition_choice == "Other (specify)"
+                            else edit_condition_choice
+                        )
+                        if not e_condition_type:
                             st.error("Specify a condition type.")
                         elif e_end < e_start:
                             st.error("Segment end must not be before segment start.")
                         else:
-                            selected_cond.condition_type = e_condition_type.strip()
+                            selected_cond.condition_type = e_condition_type
                             selected_cond.temperature_c = e_temp or None
                             selected_cond.relative_humidity_pct = e_rh or None
                             selected_cond.segment_start = e_start
@@ -758,6 +779,32 @@ selected_result = (
 if selected_result:
     st.divider()
     st.subheader(f"Edit quality test result #{selected_result.id}")
+    # Same controlled method/UOM pickers as the Add form above, scoped to
+    # this result's own property - previously this edit form used a free
+    # text_input for both fields, which lost the structured picker the Add
+    # form offers (see PI3_Gaps_and_Ambiguities.docx, findings 2.5/2.6).
+    methods_for_edit = (
+        session.query(PhysicalPropertyMethod)
+        .filter(PhysicalPropertyMethod.property_definition_id == selected_result.property_definition_id)
+        .order_by(PhysicalPropertyMethod.sort_order)
+        .all()
+        if selected_result.property_definition_id
+        else []
+    )
+    uoms_for_edit = (
+        session.query(PhysicalPropertyUOM)
+        .filter(PhysicalPropertyUOM.property_definition_id == selected_result.property_definition_id)
+        .order_by(PhysicalPropertyUOM.sort_order)
+        .all()
+        if selected_result.property_definition_id
+        else []
+    )
+    method_match_idx = next(
+        (i for i, m in enumerate(methods_for_edit) if m.method_code == selected_result.test_method), None
+    )
+    uom_match_idx = next(
+        (i for i, u in enumerate(uoms_for_edit) if u.unit_label == selected_result.unit), None
+    )
     with st.form(f"edit_result_{selected_result.id}"):
         samples_for_edit = (
             session.query(Sample).filter(Sample.production_run_id == selected_result.production_run_id).all()
@@ -781,19 +828,43 @@ if selected_result:
             format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
             key=f"edit_result_trial_{selected_result.id}",
         )
-        ec1, ec2, ec3 = st.columns(3)
+        ec1, ec2 = st.columns(2)
         e_target = ec1.number_input(
             "Target value", step=0.1, value=float(selected_result.target_value or 0.0), key=f"edit_result_target_{selected_result.id}"
         )
         e_actual = ec2.number_input(
             "Actual value", step=0.1, value=float(selected_result.actual_value or 0.0), key=f"edit_result_actual_{selected_result.id}"
         )
-        e_unit = ec3.text_input("Unit", value=selected_result.unit or "", key=f"edit_result_unit_{selected_result.id}")
         st.caption(
             f"Industry accepted tolerance for {selected_result.property_name}: "
             f"{tolerance_label(selected_result.property_name)}"
         )
-        e_method = st.text_input("Measuring method *", value=selected_result.test_method or "", key=f"edit_result_method_{selected_result.id}")
+
+        emc1, emc2 = st.columns(2)
+        if methods_for_edit:
+            e_method_choice = emc1.selectbox(
+                "Measuring method", methods_for_edit, index=method_match_idx or 0,
+                format_func=lambda m: m.method_code, key=f"edit_result_method_select_{selected_result.id}",
+            )
+        else:
+            e_method_choice = None
+        e_method_other = emc1.text_input(
+            "Or type a method not listed above",
+            value=(selected_result.test_method or "") if method_match_idx is None else "",
+            key=f"edit_result_method_other_{selected_result.id}",
+        )
+        if uoms_for_edit:
+            e_uom_choice = emc2.selectbox(
+                "Unit of measure", uoms_for_edit, index=uom_match_idx or 0,
+                format_func=lambda u: u.unit_label, key=f"edit_result_uom_select_{selected_result.id}",
+            )
+        else:
+            e_uom_choice = None
+        e_uom_other = emc2.text_input(
+            "Or type a unit not listed above",
+            value=(selected_result.unit or "") if uom_match_idx is None else "",
+            key=f"edit_result_uom_other_{selected_result.id}",
+        )
         e_revision = st.text_input(
             "Method edition / revision", value=selected_result.method_revision or "", key=f"edit_result_rev_{selected_result.id}"
         )
@@ -805,7 +876,9 @@ if selected_result:
         )
         e_notes = st.text_area("Notes", value=selected_result.notes or "", key=f"edit_result_notes_{selected_result.id}")
         if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
-            if not e_method.strip():
+            e_method = e_method_other.strip() or (e_method_choice.method_code if e_method_choice else "")
+            e_unit = e_uom_other.strip() or (e_uom_choice.unit_label if e_uom_choice else "")
+            if not e_method:
                 st.error("A measuring method is required.")
             else:
                 pass_fail = compute_pass_fail(selected_result.property_name, e_target, e_actual)
@@ -815,7 +888,10 @@ if selected_result:
                 selected_result.actual_value = e_actual or None
                 selected_result.unit = e_unit
                 selected_result.pass_fail = pass_fail
-                selected_result.test_method = e_method.strip()
+                selected_result.test_method = e_method
+                selected_result.property_method_id = (
+                    e_method_choice.id if (e_method_choice and not e_method_other.strip()) else None
+                )
                 selected_result.method_revision = e_revision
                 selected_result.replicate_no = int(e_replicate)
                 selected_result.tested_at = e_tested_at

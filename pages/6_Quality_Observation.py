@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from access_control import can_use_page
-from db import CONFIDENCE_LEVELS, ProductionRun, QualityObservation, TrialRecord, get_session, init_db
+from db import CONFIDENCE_LEVELS, SEVERITIES, ProductionRun, QualityObservation, TrialRecord, get_session, init_db
 from auth import current_user, logout_button, require_login
 from helpers import (
     clickable_table,
@@ -102,7 +102,7 @@ with tab_obs_manual:
                 "Issue type * (e.g. hardness drift, shrinkage, collapse, splitting)"
             )
             c1, c2 = st.columns(2)
-            severity = c1.selectbox("Severity", ["Low", "Medium", "High"])
+            severity = c1.selectbox("Severity", SEVERITIES)
             frequency = c2.selectbox("Frequency", ["One-off", "Recurring"])
             location_in_block = st.text_input("Location in block")
             suspected_cause = st.text_area("Suspected cause")
@@ -198,7 +198,7 @@ with tab_obs_import:
                         production_run_id=int(row["production_run_id"]),
                         trial_record_id=int(trial_val) if not pd.isna(trial_val) else None,
                         observation_type=str(row["observation_type"]).strip(),
-                        severity=severity_val if severity_val in ["Low", "Medium", "High"] else "Low",
+                        severity=severity_val if severity_val in SEVERITIES else "Low",
                         frequency=frequency_val if frequency_val in ["One-off", "Recurring"] else "One-off",
                         location_in_block=str(row.get("location_in_block", "") or ""),
                         suspected_cause=str(row.get("suspected_cause", "") or ""),
@@ -219,7 +219,7 @@ with tab_obs_import:
 st.divider()
 st.subheader("Quality issues")
 
-severity_filter = st.multiselect("Severity filter", ["Low", "Medium", "High"], default=["Low", "Medium", "High"])
+severity_filter = st.multiselect("Severity filter", SEVERITIES, default=SEVERITIES)
 observations = (
     apply_scope(session.query(QualityObservation), QualityObservation.production_run_id, scoped_run_ids)
     .filter(QualityObservation.severity.in_(severity_filter))
@@ -277,8 +277,8 @@ else:
             e_type = st.text_input("Issue type *", value=selected.observation_type, key=f"edit_obs_type_{selected.id}")
             ec1, ec2 = st.columns(2)
             e_severity = ec1.selectbox(
-                "Severity", ["Low", "Medium", "High"],
-                index=["Low", "Medium", "High"].index(selected.severity) if selected.severity in ["Low", "Medium", "High"] else 0,
+                "Severity", SEVERITIES,
+                index=SEVERITIES.index(selected.severity) if selected.severity in SEVERITIES else 0,
                 key=f"edit_obs_severity_{selected.id}",
             )
             e_frequency = ec2.selectbox(

@@ -446,6 +446,26 @@ def push_document_to_vector_store(title, text, metadata=None):
     future "only this plant's own history" mode), without needing to
     backfill every previously-pushed document's attributes retroactively.
 
+    OPEN ITEM (PI3_Gaps_and_Ambiguities.docx, finding 3.1, flagged
+    2026-08-01): because query-time filtering doesn't exist yet, a
+    plant-tagged document (an Expert Note or Similar Case narrative from
+    one plant) IS currently returned by file_search when a different
+    plant asks a question - a real cross-plant (and, depending on
+    deployment, potentially cross-tenant) data-isolation gap in this
+    semantic-search layer specifically. The structured-data path
+    (pi3_query_tool.py's SQL views/guard, and get_verified_analysis's
+    _grade_in_plant check) is separately scoped by plant_id and is NOT
+    affected. Deliberately not fixed same-day as this comment was added:
+    the fix requires a live-tested `filters` parameter on the file_search
+    tool (OpenAI's Responses API supports ComparisonFilter/CompoundFilter
+    - see platform.openai.com/docs/guides/retrieval) plus a backfill pass
+    for already-pushed documents that predate this tagging, and neither
+    was safe to ship untested immediately before a live demo. Confirmed
+    2026-08-01 that only one company/one plant currently exist in
+    production, so there is no live customer data actually exposed by
+    this gap today - but it should be fixed and verified against a real
+    vector store before a second plant/company is onboarded.
+
     Returns the new OpenAI file id (str) on success - callers that can
     store it (e.g. ExpertNote.vector_store_file_id) should, so a later
     edit/delete can resync or remove that exact file via
@@ -558,7 +578,7 @@ def ask_assistant(prompt):
 
 PLANT_QUERY_SYSTEM_PROMPT = """You are PI3, answering a technical reviewer's question about ONE specific plant's own production data at a flexible slabstock foam manufacturer.
 
-Hard scope rule: every answer must stay within this one plant's data. You have no ability to see any other plant's data - the tools below are already restricted to it regardless of what you ask for, so do not worry about accidentally overstepping, but also never imply you checked "across plants" or "industry-wide" for anything that came from these tools.
+Hard scope rule: every answer must stay within this one plant's data for tools 1 and 2 below - those results are already restricted to it regardless of what you ask for, so do not worry about accidentally overstepping with either of them, and never imply you checked "across plants" or "industry-wide" for anything that came from them. Tool 3 (file_search) is different - see its own note below - treat anything it returns as general context, not a plant-specific data point, unless you can tell from the content itself that it plainly concerns this plant.
 
 You have three tools:
 
@@ -566,7 +586,7 @@ You have three tools:
 
 2. query_plant_data - a read-only SQL tool for anything the four analyses above don't cover. You may write a single SELECT statement against ONLY these views: v_pi3_production_runs, v_pi3_property_results, v_pi3_recipe_composition, v_pi3_stream_readings, v_pi3_quality_issues (columns are listed in the tool description). Your SELECT list must include plant_id (or use SELECT *) - it will be used to scope results. No other tables are reachable, and no INSERT/UPDATE/DELETE/DDL is possible - if you write one, the tool will reject it and tell you why so you can correct it.
 
-3. file_search - the shared knowledge base (expert notes, historical troubleshooting cases, technical documents). Use this for context a number alone can't give: has this come up before, what did an expert conclude about a similar case, what does a technical document say. This is NOT restricted to the current plant - it's general expertise that applies across the business, so use it freely to round out an answer, but never treat it as a substitute for checking the actual plant data first when the question is about this plant's own numbers.
+3. file_search - the shared knowledge base (expert notes, historical troubleshooting cases, technical documents). Use this for context a number alone can't give: has this come up before, what did an expert conclude about a similar case, what does a technical document say. Unlike tools 1 and 2, this searches the FULL shared store across every plant that has contributed knowledge to it, not just this one - so treat what it returns as general expertise to round out an answer, never as confirmed proof of something happening at THIS plant unless the content is unambiguously about this plant. Never treat it as a substitute for checking the actual plant data first (tools 1/2) when the question is about this plant's own numbers.
 
 Rules:
 - Never state a number that did not come from a tool call. If no tool can answer part of the question, say so plainly instead of estimating or inferring a figure.

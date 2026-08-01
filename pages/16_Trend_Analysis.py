@@ -275,7 +275,7 @@ if trend is None:
     st.info("Not enough results yet to tell whether this is a real trend or just noise.")
 else:
     if trend["significant"]:
-        st.warning(
+        st.info(
             f"Yes - this is a real, sustained {trend['direction']} trend, not just noise: changing "
             f"by about {trend['slope_per_run']:+.4g} per run on average, across {trend['n']} runs."
         )

@@ -231,8 +231,12 @@ formulation instructions — it surfaces historical records for human
 review only.
 
 Multi-tenancy is "shared database, `company_id` column," not a database
-per customer. Plants, raw materials, and suppliers are scoped by company
-today; the remaining operational pages (production runs, quality results,
-recipes, etc.) inherit that scoping through the plant/recipe hierarchy
-they're keyed to, but don't yet filter independently by company - a
-retrofit pass for those is tracked as future work.
+per customer. Plants, raw materials, and suppliers are scoped directly by
+their own `company_id` column; every other operational page (production
+runs, quality results, recipes, trials, approvals, similar case
+retrieval, expert notes, the industrial intelligence pages, the report
+page) is scoped via `tenant_scope.apply_scope()` / `run_ids_for_company()`
+through the plant/recipe hierarchy it's keyed to. This retrofit pass
+completed 2026-08-01 (confirmed by direct reading of `tenant_scope.py`
+and every operational page) - this paragraph previously described it as
+future work, which was stale by the time it was caught.

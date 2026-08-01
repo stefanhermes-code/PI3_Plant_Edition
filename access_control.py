@@ -55,8 +55,13 @@ this order by `page_visible()`:
    Result, Quality Issue, Adjustment & Conclusion, Approval & Review,
    Trial / Experiment, Raw Materials, Similar Case Retrieval, Expert
    Notes, Recipe Optimization, Trend Analysis, Machine Settings
-   Correlation, Root-Cause Assistant, and Machine Settings Optimization
-   (its "Ask PI3"/"Save to Expert Notes" actions). The Report page is
+   Correlation, and Root-Cause Assistant (their "Ask PI3"/"Save to Expert
+   Notes" actions), and Machine Settings Optimization (its single, fixed-
+   prompt "Get PI3 interpretation" button - unlike the other four PI3-
+   enabled pages, this one has no free-form "Ask PI3" box or "Save to
+   Expert Notes" action of its own; corrected 2026-08-01, see
+   PI3_Gaps_and_Ambiguities.docx finding 2.1, which caught this docstring
+   overstating what the page actually offers). The Report page is
    deliberately NOT gated - every control on it is a preview or a
    PDF/Excel download, nothing writes to the database, so there is
    nothing for view-only to restrict. The 4 platform-only pages

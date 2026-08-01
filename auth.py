@@ -48,8 +48,6 @@ import streamlit as st
 
 from db import User, get_session
 
-ROLES = ["admin", "technical", "viewer"]
-
 
 def _auth_disabled():
     try:
