@@ -33,7 +33,6 @@ from db import (
     RecipeComponent,
     RecipeVersion,
     RuntimeDataRecord,
-    SimilarCaseLink,
     TrialRecord,
     get_session,
     init_db,
@@ -476,21 +475,12 @@ def seed_demo_data(session) -> str:
         )
 
     session.flush()
-    # Link the final resolving trial (T5) as the similar case for T1
-    session.add(
-        SimilarCaseLink(
-            source_trial_id=created_trials[0].id,
-            linked_trial_id=created_trials[-1].id,
-            similarity_basis="foam_grade, observation_type, recipe_version",
-            notes="T5 provides the confirmed resolution pattern for the hardness drift first observed in T1.",
-        )
-    )
 
     session.commit()
     return (
         "Demo data created: 1 plant, 1 product family, 2 foam grades, 3 recipe versions, "
-        "5 closed trials (with full closeout, quality issues, adjustments, approvals, and "
-        "1 similar-case link), plus 2 routine production runs with quality results and no trial at all."
+        "5 closed trials (with full closeout, quality issues, adjustments, approvals), "
+        "plus 2 routine production runs with quality results and no trial at all."
     )
 
 

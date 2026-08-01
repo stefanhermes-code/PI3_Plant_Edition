@@ -95,8 +95,7 @@ def render_overview():
             "quality issues, quality test pass rate, and active trials/experiments across "
             "whichever plant, product family, and foam grade you filter to, plus a table of the "
             "most recently logged quality issues. The quick-action links below jump straight "
-            "into logging a new run, quality test result, or quality issue, or into Similar Case "
-            "Retrieval."
+            "into logging a new run, quality test result, or quality issue."
         ),
         action_text=(
             "Filter by plant, product family, foam grade, and date range to scope the KPIs and "
@@ -200,7 +199,6 @@ def render_overview():
         ("pages/4_Production_Run_Trial_Record.py", "Add a production run", "➕", "production_run"),
         ("pages/5_Physical_Property_Result.py", "Record a quality test result", "📏", "quality_test_result"),
         ("pages/6_Quality_Observation.py", "Add a quality issue", "📋", "quality_issue"),
-        ("pages/9_Similar_Case_Retrieval.py", "Find similar historical cases", "🔎", "similar_case_retrieval"),
     ]
     visible_actions = [a for a in quick_actions if _visible(a[3])]
     if visible_actions:
@@ -246,7 +244,6 @@ industrial_intelligence_pages = [
     ),
     ("root_cause_assistant", st.Page("pages/18_Root_Cause_Assistant.py", title="Root-Cause Assistant", icon="🩺")),
     ("machine_settings_optimization", st.Page("pages/19_Machine_Settings_Optimization.py", title="Machine Settings Optimization", icon="⚙️")),
-    ("similar_case_retrieval", st.Page("pages/9_Similar_Case_Retrieval.py", title="Similar Case Retrieval", icon="🧭")),
     ("expert_notes", st.Page("pages/20_Expert_Notes.py", title="Expert Notes", icon="🧠")),
 ]
 

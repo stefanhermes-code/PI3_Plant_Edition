@@ -2,7 +2,7 @@
 
 Wraps the OpenAI Responses API (file_search over a vector store) behind a
 few simple functions so pages don't need to know API details:
-is_configured(), is_enabled_for_plant(), any_plant_enabled(),
+is_configured(), is_enabled_for_plant(),
 push_document_to_vector_store(), delete_document_from_vector_store(),
 ask_assistant(), and (a one-off structured-extraction helper, not tied to
 the vector store) openai_key_configured() / extract_raw_material_from_tds().
@@ -40,7 +40,7 @@ if you're touching this file:
    actionable recommendations (section 15, "Practicality Rule": "what to
    choose", "what to adjust"). That is in tension with this app's own
    non-negotiable requirement, baked separately into the callers in
-   pages/9_Similar_Case_Retrieval.py and pages/18_Root_Cause_Assistant.py,
+   pages/18_Root_Cause_Assistant.py,
    that PI3 Plant Edition must never phrase AI output as an instruction -
    only ever as historical reference for human review. This is resolved
    the same way it already was under the old Assistants API: every
@@ -386,24 +386,6 @@ def availability_status(session, plant_id):
     return "not_enabled"
 
 
-def any_plant_enabled(session):
-    """True when at least one plant has PI3 connectivity switched on (and
-    secrets are configured). Used by cross-plant screens (Similar Case
-    Retrieval spans every plant's history, not one specific plant) to
-    decide whether to show any AI-powered option at all - the vector
-    store itself already only contains knowledge pushed from plants that
-    opted in, so there's nothing further to scope once at least one plant
-    is enabled."""
-    if not is_configured():
-        return False
-    return (
-        session.query(PI3AIConnectionSetting)
-        .filter(PI3AIConnectionSetting.pi3_ai_connectivity_enabled.is_(True))
-        .first()
-        is not None
-    )
-
-
 def _client():
     from openai import OpenAI
 
@@ -448,8 +430,8 @@ def push_document_to_vector_store(title, text, metadata=None):
 
     OPEN ITEM (PI3_Gaps_and_Ambiguities.docx, finding 3.1, flagged
     2026-08-01): because query-time filtering doesn't exist yet, a
-    plant-tagged document (an Expert Note or Similar Case narrative from
-    one plant) IS currently returned by file_search when a different
+    plant-tagged document (an Expert Note from one plant) IS currently
+    returned by file_search when a different
     plant asks a question - a real cross-plant (and, depending on
     deployment, potentially cross-tenant) data-isolation gap in this
     semantic-search layer specifically. The structured-data path
@@ -519,7 +501,7 @@ def ask_assistant(prompt):
     SYSTEM_PROMPT (above) is passed as `instructions` on every call - it
     is the general PI3/PU ExpertCenter behavior. `prompt` is this app's
     own per-request question, which (per the callers in
-    pages/9_Similar_Case_Retrieval.py and pages/18_Root_Cause_Assistant.py)
+    pages/18_Root_Cause_Assistant.py)
     always restates PI3 Plant Edition's own advisory-boundary requirement
     (historical reference only, never an instruction) - see the module
     docstring for why that ordering matters and must not be dropped.
@@ -573,7 +555,7 @@ def ask_assistant(prompt):
 # the project discussion: general expertise (customer questions, TDS
 # documents, formulation science) isn't plant-specific and should inform
 # every plant's answers; only this app's own plant/trial-specific pushes
-# (Expert Notes, Similar Case narratives) carry a plant tag (see
+# (Expert Notes) carry a plant tag (see
 # push_document_to_vector_store's plant_id parameter).
 
 PLANT_QUERY_SYSTEM_PROMPT = """You are PI3, answering a technical reviewer's question about ONE specific plant's own production data at a flexible slabstock foam manufacturer.

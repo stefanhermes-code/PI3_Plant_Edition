@@ -514,8 +514,8 @@ def render_save_to_expert_notes_button(
     again). Saved notes are tagged source="PI3" and, same as a manually-
     typed expert note, pushed into PI3's own vector store if PI3 is enabled
     for the relevant plant - so a genuinely useful PI3 insight can surface
-    again in future Similar Case Retrieval / Root-Cause Assistant searches,
-    same as human-authored knowledge.
+    again in future Root-Cause Assistant searches, same as human-authored
+    knowledge.
 
     `link_type` is one of the Expert Notes "link to" types ("foam_grade",
     "production_run", "trial_record"), `entity_id` the id of that record.

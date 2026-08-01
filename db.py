@@ -1029,6 +1029,15 @@ class ExpertNote(Base):
 # ---------------------------------------------------------------------------
 # 14. similar_case_links
 # ---------------------------------------------------------------------------
+# NOTE (2026-08-01): the Similar Case Retrieval page that created and read
+# these rows was dropped app-wide (it never demonstrated real value beyond
+# what Expert Notes + Root-Cause Assistant already cover, and its "Also use
+# PI3" cross-plant search was a data-isolation leak - see
+# PI3_Gaps_and_Ambiguities.docx and access_control.py's docstring). This
+# model/table is kept as-is (no migration to drop it) so any historical rows
+# already in Supabase aren't destroyed by a decision that was only ever
+# about the page, not the data - nothing in the app writes or reads it
+# anymore.
 class SimilarCaseLink(Base):
     __tablename__ = "similar_case_links"
 

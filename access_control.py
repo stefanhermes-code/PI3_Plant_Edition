@@ -18,22 +18,32 @@ this order by `page_visible()`:
    same way (pi3_ai_enabled hiding the PI3 Connectivity page for anyone
    whose company lacked it), but since that page is now platform-only
    regardless of tier (point 1), pi3_ai_enabled no longer has any runtime
-   enforcement effect - it's tracked on SubscriptionType purely as the
-   commercial record of which tier a company is sold on, and the platform
-   owner is trusted to honor it manually when deciding whether to flip a
-   given plant's PI3 toggle on. Every operational page - including Recipe
+   enforcement effect, and as of 2026-08-01 it no longer even triggers a
+   warning anywhere in the UI - it's tracked on SubscriptionType purely as
+   an internal commercial record of which tier a company is sold on. The
+   platform owner (HTC) has the unilateral right to enable PI3 connectivity
+   for any plant regardless of what this flag says, with no confirmation
+   step in the way; a customer is never shown that this flag exists or
+   that a higher tier would unlock anything, since customers don't
+   self-serve this switch in the first place (see PI3 Connectivity page,
+   platform-owner-only). Every operational page - including Recipe
    Optimization, Trend Analysis, Machine Settings Correlation, Root-Cause
-   Assistant, Machine Settings Optimization, Similar Case Retrieval, and
-   Expert Notes - stays visible on every tier, because each already has
-   its own deterministic core that works with zero PI3 involvement
-   (cost/diff calculations, correlation ranking, control charts/Cpk/CUSUM,
-   the run-vs-prior-run diff, ...) and independently checks per-plant PI3
-   enablement (ai_assistant.is_enabled_for_plant / any_plant_enabled)
-   before rendering its own "Ask PI3" section. An earlier version of this
-   file bundled those 7 pages behind their own feature flags
+   Assistant, and Machine Settings Optimization - stays visible on every
+   tier, because each already has its own deterministic core that works
+   with zero PI3 involvement (cost/diff calculations, correlation ranking,
+   control charts/Cpk/CUSUM, the run-vs-prior-run diff, ...) and
+   independently checks per-plant PI3 enablement
+   (ai_assistant.is_enabled_for_plant / any_plant_enabled) before rendering
+   its own "Ask PI3" section. An earlier version of this file bundled
+   those pages behind their own feature flags
    (industrial_intelligence_enabled / case_review_enabled) - that was
    wrong: it hid real, PI3-independent value from Basic customers instead
-   of letting each page's own PI3 check do its job.
+   of letting each page's own PI3 check do its job. Similar Case Retrieval
+   used to be part of this group too, but the whole page was dropped on
+   2026-08-01 (see below) - it never demonstrated real added value beyond
+   what Expert Notes and the search-first workflow already cover, and its
+   "Also use PI3" toggle could search across every company's data, a
+   cross-tenant leak the other PI3-touching pages don't have.
 3. Role page permissions - a DENY list, not an allow list (see db.py's
    RolePagePermission docstring): a role with no rows sees everything, in
    full; an explicit row can hide a page entirely (can_view=False) or make
@@ -53,7 +63,7 @@ this order by `page_visible()`:
    operational page with a write action: Plant & Foam Equipment Overview,
    Product Family & Foam Grade, Recipes, Production Run, Quality Test
    Result, Quality Issue, Adjustment & Conclusion, Approval & Review,
-   Trial / Experiment, Raw Materials, Similar Case Retrieval, Expert
+   Trial / Experiment, Raw Materials, Expert
    Notes, Recipe Optimization, Trend Analysis, Machine Settings
    Correlation, and Root-Cause Assistant (their "Ask PI3"/"Save to Expert
    Notes" actions), and Machine Settings Optimization (its single, fixed-
@@ -116,7 +126,6 @@ PAGE_CATALOG = {
     "machine_settings_correlation": "Machine Settings vs Physical Properties Correlation",
     "root_cause_assistant": "Root-Cause Assistant",
     "machine_settings_optimization": "Machine Settings Optimization",
-    "similar_case_retrieval": "Similar Case Retrieval",
     "expert_notes": "Expert Notes",
     "report": "Report",
     "pi3_ai_connectivity": "PI3 Connectivity",

@@ -140,13 +140,6 @@ if setting:
 else:
     st.info("Not yet configured for this plant. Default status: Disabled.")
 
-if company and company.subscription_type and not company.subscription_type.pi3_ai_enabled:
-    st.warning(
-        f"{company.name}'s subscription tier ('{company.subscription_type.name}') doesn't "
-        "include PI3/AI by default - enabling it below would be an exception to that (e.g. a "
-        "trial). Confirm that's deliberate before saving."
-    )
-
 st.divider()
 st.subheader("Admin: configure PI3 connectivity")
 

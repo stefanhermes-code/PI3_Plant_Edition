@@ -39,18 +39,19 @@ autonomous formulation optimization.
 7. Quality Issue
 8. Adjustment & Conclusion
 9. Approval & Review — the only screen that can close a trial
-10. Similar Case Retrieval ("Ask PI3")
-11. PI3 Connectivity (platform-owner only: per-plant PI3/AI on-off switch)
-12. User Accounts (a company's own admin manages their own users; platform owner manages every company's)
-13. User Roles (a company's own admin narrows their own built-in-role clones + custom roles; platform owner manages every company's)
-14. Default User Roles (platform-owner only: the template new companies' built-in roles are seeded from)
-15. Companies (platform-owner only: the tenant boundary)
-16. Subscription Types (platform-owner only: commercial tiers, limits/features, list prices)
+10. PI3 Connectivity (platform-owner only: per-plant PI3/AI on-off switch)
+11. User Accounts (a company's own admin manages their own users; platform owner manages every company's)
+12. User Roles (a company's own admin narrows their own built-in-role clones + custom roles; platform owner manages every company's)
+13. Default User Roles (platform-owner only: the template new companies' built-in roles are seeded from)
+14. Companies (platform-owner only: the tenant boundary)
+15. Subscription Types (platform-owner only: commercial tiers, limits/features, list prices)
 
 This list predates several pages added since (Raw Materials, the five
-Industrial Intelligence screens, Report, Expert Notes) - treat `app.py`'s
-own nav-section lists as the actual source of truth for what screens
-exist, not this list's exact count.
+Industrial Intelligence screens, Report, Expert Notes) and postdates one
+removed since (Similar Case Retrieval, dropped 2026-08-01 - see
+`access_control.py`'s docstring and `PI3_Gaps_and_Ambiguities.docx`) -
+treat `app.py`'s own nav-section lists as the actual source of truth for
+what screens exist, not this list's exact count.
 
 ## The one rule that can't be bypassed
 
@@ -226,9 +227,9 @@ is easy to get backwards under pressure, as happened here.
 No ERP integration, no live machine connection, no autonomous formulation
 optimization, no complex billing engine (subscription tiers enforce
 user/plant limits and feature flags, but there's no payment processing),
-no customer complaint platform. "Similar Case Retrieval" never issues
-formulation instructions — it surfaces historical records for human
-review only.
+no customer complaint platform. Root-Cause Assistant and every other
+PI3-touching screen never issues formulation instructions — PI3 only
+surfaces historical records and hypotheses for human review.
 
 Multi-tenancy is "shared database, `company_id` column," not a database
 per customer. Plants, raw materials, and suppliers are scoped directly by

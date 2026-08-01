@@ -572,16 +572,22 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
                 entity_id=grade.id,
                 disabled=not page_usable,
             )
-elif ai_assistant.availability_status(session, plant_id) == "not_configured":
-    st.caption(
-        "PI3 isn't configured for this deployment yet (missing API credentials) - contact "
-        "your administrator."
-    )
-else:
-    st.caption(
-        "Enable PI3 connectivity for this plant (PI3 Connectivity, in Admin) to get a "
-        "formulation recommendation here."
-    )
+elif user["is_platform_owner"]:
+    # Only the platform owner sees why PI3 is unavailable here - a customer
+    # whose subscription/plant simply doesn't have it enabled shouldn't be
+    # shown a feature they don't know exists (see PI3 Gaps discussion,
+    # 2026-08-01: "the customer does not know that they could have this
+    # functionality").
+    if ai_assistant.availability_status(session, plant_id) == "not_configured":
+        st.caption(
+            "PI3 isn't configured for this deployment yet (missing API credentials) - contact "
+            "your administrator."
+        )
+    else:
+        st.caption(
+            "Enable PI3 connectivity for this plant (PI3 Connectivity, in Admin) to get a "
+            "formulation recommendation here."
+        )
 
 st.divider()
 render_ask_pi3_section(

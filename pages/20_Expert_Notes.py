@@ -5,8 +5,7 @@ technical person's head or a stray email, not a structured measurement -
 linked to a production run (the common case), a trial/experiment, or a
 foam grade. This is the raw material PI3 needs: when PI3 connectivity is
 enabled for the relevant plant, saving a note here also feeds it into
-PI3 so future Similar Case Retrieval searches and Root-Cause Assistant
-reasoning can retrieve it.
+PI3 so future Root-Cause Assistant reasoning can retrieve it.
 
 Also shows PI3-sourced notes - insights a reviewer explicitly chose to
 keep via a "Save to Expert Notes" button on Recipe Optimization, Trend
