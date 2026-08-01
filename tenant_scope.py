@@ -30,16 +30,36 @@ from db import Company, FoamGrade, Plant, ProductFamily, ProductionRun
 
 
 def company_picker(st_module, session, is_platform_owner, own_company_id, key):
-    """Same 'Company' selectbox (platform owner) / lock (everyone else)
-    pattern already used on the Plant and Raw Materials pages. Returns
-    (selected_company_or_None, all_companies)."""
+    """Same 'Company' selectbox (platform owner, when there's genuinely
+    more than one company to choose from) / lock (everyone else, and a
+    platform owner when only one company exists) pattern used across the
+    operational and analysis pages. Returns (selected_company_or_None,
+    all_companies).
+
+    The selectbox only renders when is_platform_owner AND there is more
+    than one company in the system. With a single company (today's
+    actual production state, and likely the common case for a while),
+    a "Company: All companies" vs "Company: <the only company>" choice
+    is pure noise - there's nothing to actually choose between, and the
+    scoped result set is identical either way - so it was showing on
+    every operational and analysis page for no reason (see
+    PI3_Gaps_and_Ambiguities.docx-style feedback: a platform-owner user
+    kept seeing this dropdown and asked why, since analysis is always
+    done within one company's data). Locking to that one company (rather
+    than leaving it as the unscoped None sentinel) keeps downstream
+    scoping semantics identical to the non-platform-owner path, so
+    nothing downstream needs to special-case "exactly one company." As
+    soon as a second company is created, the selectbox reappears
+    automatically for platform owner on every page that calls this."""
     all_companies = session.query(Company).order_by(Company.name).all()
-    if is_platform_owner:
+    if is_platform_owner and len(all_companies) > 1:
         company = st_module.selectbox(
             "Company", [None] + all_companies,
             format_func=lambda c: "All companies" if c is None else c.name,
             key=key,
         )
+    elif is_platform_owner:
+        company = all_companies[0] if all_companies else None
     else:
         company = next((c for c in all_companies if c.id == own_company_id), None)
     return company, all_companies

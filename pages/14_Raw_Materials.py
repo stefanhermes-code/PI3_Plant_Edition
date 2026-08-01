@@ -25,6 +25,7 @@ from helpers import (
     show_pending_banner,
     view_only_notice,
 )
+from tenant_scope import company_picker
 
 
 def _extract_pdf_text(uploaded_file):
@@ -129,18 +130,12 @@ page_usable = can_use_page("raw_materials", role_id=user["role_id"], session=ses
 if not page_usable:
     view_only_notice()
 
-all_companies = session.query(Company).order_by(Company.name).all()
-if is_platform_owner:
-    company_filter = st.selectbox(
-        "Company", [None] + all_companies,
-        format_func=lambda c: "All companies" if c is None else c.name,
-        key="rawmat_company_filter",
-    )
-else:
-    company_filter = next((c for c in all_companies if c.id == own_company_id), None)
-    if not company_filter:
-        st.warning("Your account isn't linked to a company yet - contact the platform administrator.")
-        st.stop()
+company_filter, all_companies = company_picker(
+    st, session, is_platform_owner, own_company_id, key="rawmat_company_filter"
+)
+if not is_platform_owner and not company_filter:
+    st.warning("Your account isn't linked to a company yet - contact the platform administrator.")
+    st.stop()
 
 
 def _target_company(key):

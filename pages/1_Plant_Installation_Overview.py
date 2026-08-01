@@ -7,6 +7,7 @@ from auth import current_user, logout_button, require_login
 from cascades import delete_plant_cascade, plant_dependency_counts
 from db import MACHINE_OEMS, Company, Machine, Plant, ProductionRun, get_session, init_db
 from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro, view_only_notice
+from tenant_scope import company_picker
 
 page_setup("Plant & Foam Equipment Overview")
 init_db()
@@ -39,19 +40,12 @@ page_usable = can_use_page("plant_overview", role_id=user["role_id"], session=se
 if not page_usable:
     view_only_notice()
 
-all_companies = session.query(Company).order_by(Company.name).all()
-if is_platform_owner:
-    company_options = [None] + all_companies
-    company_filter = st.selectbox(
-        "Company", company_options,
-        format_func=lambda c: "All companies" if c is None else c.name,
-        key="plant_company_filter",
-    )
-else:
-    company_filter = next((c for c in all_companies if c.id == own_company_id), None)
-    if not company_filter:
-        st.warning("Your account isn't linked to a company yet - contact the platform administrator.")
-        st.stop()
+company_filter, all_companies = company_picker(
+    st, session, is_platform_owner, own_company_id, key="plant_company_filter"
+)
+if not is_platform_owner and not company_filter:
+    st.warning("Your account isn't linked to a company yet - contact the platform administrator.")
+    st.stop()
 
 subscription = company_filter.subscription_type if company_filter else None
 max_plants = subscription.max_plants if subscription else None

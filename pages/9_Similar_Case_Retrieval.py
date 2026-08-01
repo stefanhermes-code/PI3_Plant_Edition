@@ -1,4 +1,4 @@
-"""Screen 10: Similar Case Retrieval ("Use PI3")
+"""Screen 10: Similar Case Retrieval
 
 Advisory boundary (non-negotiable):
 The system supports technical review. It does not issue autonomous
@@ -45,7 +45,7 @@ init_db()
 require_login()
 logout_button()
 
-st.title("Similar Case Retrieval — Use PI3")
+st.title("Similar Case Retrieval")
 render_function_action_intro(
     function_text=(
         "Searches your own historical trial, quality-issue, and expert-note records for cases "

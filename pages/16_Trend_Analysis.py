@@ -150,8 +150,16 @@ property_name = st.selectbox("Property", properties)
 c1, c2 = st.columns(2)
 recipe_versions = sorted(results_df["recipe_version"].dropna().unique())
 recipe_filter = c1.selectbox("Recipe version filter", ["All"] + list(recipe_versions))
+# Only offer a machine filter when this grade's runs actually span more
+# than one machine - with a single machine (today's actual production
+# state), "Machine filter: All" vs "Machine filter: <the only machine>"
+# is the same noise problem the Company selector had: nothing to choose
+# between, identical result set either way.
 machines = sorted(m for m in results_df["machine"].dropna().unique())
-machine_filter = c2.selectbox("Machine filter", ["All"] + list(machines))
+if len(machines) > 1:
+    machine_filter = c2.selectbox("Machine filter", ["All"] + list(machines))
+else:
+    machine_filter = "All"
 
 series = property_run_series(session, grade.id, property_name)
 if recipe_filter != "All":
