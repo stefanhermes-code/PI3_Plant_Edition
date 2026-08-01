@@ -282,6 +282,8 @@ trend = trend_test(series)
 if trend is None:
     st.info("Not enough results yet to tell whether this is a real trend or just noise.")
 else:
+    noise_chance_pct = trend["p_value"] * 100
+    fit_pct = trend["r_squared"] * 100
     if trend["significant"]:
         st.info(
             f"Yes - this is a real, sustained {trend['direction']} trend, not just noise: changing "
@@ -292,6 +294,30 @@ else:
             f"No - the apparent {trend['direction']} movement across {trend['n']} runs looks like "
             "normal run-to-run variation, not a real trend."
         )
+    # Plain-language breakdown of the actual criteria and numbers behind the
+    # verdict above, not just the yes/no - a straight line is fit through
+    # these results in production order, and it's only called a real trend
+    # when there's less than a 5% chance that line is just random noise
+    # (the conventional p<0.05 threshold - see trend_test() in analytics.py).
+    # This is deliberately the strictest of the four checks on this page:
+    # the control chart and slow-drift check above are tuned to catch a
+    # real problem early even from a handful of points, while this test's
+    # job is the final, rigorous confirmation - so "No" is the common,
+    # correct answer for anything short of a clean, sustained signal, and
+    # becomes easier to confirm as more results accumulate or the
+    # underlying noise is lower.
+    st.caption(
+        f"How this is decided: a straight line is fit through these {trend['n']} results in "
+        f"production order. It's only called a real trend when there's less than a 5% chance "
+        f"that a line this steep would appear just from random run-to-run noise - here, that "
+        f"chance is {noise_chance_pct:.3g}%. That line accounts for {fit_pct:.3g}% of the "
+        "run-to-run variation seen in these results (a low number means the results bounce "
+        "around too much for a straight trend line to be a good description at all, regardless "
+        "of direction). Fewer results or noisier data both make the 5% bar harder to clear, "
+        "which is why a real, gradual drift can take a while to get confirmed here - the control "
+        "chart and slow-drift check above are tuned to flag it earlier; this test is the final, "
+        "stricter word on whether it's statistically real."
+    )
 
 # ---------------------------------------------------------------------------
 # What else changed - recipe/machine switches and quality issues on the same timeline
