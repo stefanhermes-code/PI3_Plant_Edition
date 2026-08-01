@@ -75,34 +75,37 @@ trial = st.selectbox(
 st.divider()
 st.subheader("Log an adjustment")
 
-with st.form(f"add_adjustment_{trial.id}"):
-    parameter_changed = st.text_input("Parameter changed (process)")
-    formulation_changed = st.checkbox("Formulation changed?")
-    material_changed = st.text_input("Material changed (if any)")
-    result = st.text_area("Result of this specific adjustment")
-    reuse_recommendation = st.text_area("Reuse recommendation for this adjustment")
-    confidence_level = st.selectbox("Confidence level", CONFIDENCE_LEVELS, index=2)
-    follow_up_required = st.checkbox("Follow-up required?")
-    created_by = st.text_input("Logged by")
-    submitted = st.form_submit_button("Save adjustment", disabled=not page_usable)
-    if submitted and page_usable:
-        session.add(
-            AdjustmentConclusion(
-                production_run_id=trial.production_run_id,
-                trial_record_id=trial.id,
-                parameter_changed=parameter_changed,
-                formulation_changed=formulation_changed,
-                material_changed=material_changed,
-                result=result,
-                reuse_recommendation=reuse_recommendation,
-                confidence_level=confidence_level,
-                follow_up_required=follow_up_required,
-                created_by=created_by,
+if not page_usable:
+    st.caption("View-only access - logging an adjustment is restricted for your role.")
+else:
+    with st.form(f"add_adjustment_{trial.id}"):
+        parameter_changed = st.text_input("Parameter changed (process)")
+        formulation_changed = st.checkbox("Formulation changed?")
+        material_changed = st.text_input("Material changed (if any)")
+        result = st.text_area("Result of this specific adjustment")
+        reuse_recommendation = st.text_area("Reuse recommendation for this adjustment")
+        confidence_level = st.selectbox("Confidence level", CONFIDENCE_LEVELS, index=2)
+        follow_up_required = st.checkbox("Follow-up required?")
+        created_by = st.text_input("Logged by")
+        submitted = st.form_submit_button("Save adjustment")
+        if submitted:
+            session.add(
+                AdjustmentConclusion(
+                    production_run_id=trial.production_run_id,
+                    trial_record_id=trial.id,
+                    parameter_changed=parameter_changed,
+                    formulation_changed=formulation_changed,
+                    material_changed=material_changed,
+                    result=result,
+                    reuse_recommendation=reuse_recommendation,
+                    confidence_level=confidence_level,
+                    follow_up_required=follow_up_required,
+                    created_by=created_by,
+                )
             )
-        )
-        session.commit()
-        st.success("Adjustment logged.")
-        st.rerun()
+            session.commit()
+            st.success("Adjustment logged.")
+            st.rerun()
 
 if trial.adjustment_conclusions:
     adj_rows = [
@@ -192,25 +195,28 @@ st.caption(
     "approved_by, and date_closed are set on the Approval & Review screen."
 )
 
-with st.form(f"closeout_{trial.id}"):
-    result_against_target = st.text_area("Result against target", value=trial.result_against_target or "")
-    physical_property_outcome = st.text_area(
-        "Physical property outcome summary", value=trial.physical_property_outcome or ""
-    )
-    conclusion = st.text_area("Conclusion *", value=trial.conclusion or "")
-    reuse_recommendation = st.text_area("Reuse recommendation *", value=trial.reuse_recommendation or "")
-    submitted = st.form_submit_button("Save closeout narrative", disabled=not page_usable)
-    if submitted and page_usable:
-        if not conclusion or not reuse_recommendation:
-            st.error("Conclusion and reuse recommendation are both required.")
-        else:
-            trial.result_against_target = result_against_target
-            trial.physical_property_outcome = physical_property_outcome
-            trial.conclusion = conclusion
-            trial.reuse_recommendation = reuse_recommendation
-            if trial.status == "Open":
-                trial.status = "Pending Closure"
-            session.commit()
-            st.success("Closeout narrative saved. Trial is now ready for review and approval.")
-            st.rerun()
+if not page_usable:
+    st.caption("View-only access - editing the closeout narrative is restricted for your role.")
+else:
+    with st.form(f"closeout_{trial.id}"):
+        result_against_target = st.text_area("Result against target", value=trial.result_against_target or "")
+        physical_property_outcome = st.text_area(
+            "Physical property outcome summary", value=trial.physical_property_outcome or ""
+        )
+        conclusion = st.text_area("Conclusion *", value=trial.conclusion or "")
+        reuse_recommendation = st.text_area("Reuse recommendation *", value=trial.reuse_recommendation or "")
+        submitted = st.form_submit_button("Save closeout narrative")
+        if submitted:
+            if not conclusion or not reuse_recommendation:
+                st.error("Conclusion and reuse recommendation are both required.")
+            else:
+                trial.result_against_target = result_against_target
+                trial.physical_property_outcome = physical_property_outcome
+                trial.conclusion = conclusion
+                trial.reuse_recommendation = reuse_recommendation
+                if trial.status == "Open":
+                    trial.status = "Pending Closure"
+                session.commit()
+                st.success("Closeout narrative saved. Trial is now ready for review and approval.")
+                st.rerun()
 

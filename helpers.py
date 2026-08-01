@@ -371,11 +371,62 @@ def dedupe_import_rows(rows, existing_keys, key_func):
     return new_rows, dup_rows
 
 
+# PI3_Gaps_and_Ambiguities.docx finding 2.10: no CSV/Excel import anywhere
+# enforced a file-size or row-count limit. These are deliberately generous
+# (this app's imports are historical/bulk data loads, not per-transaction
+# forms) - they exist to catch an accidental wrong-file upload (e.g. a
+# multi-megabyte unrelated export) before it's parsed and held in memory,
+# not to constrain a legitimate large historical migration. A caller that
+# genuinely needs to import more than MAX_IMPORT_ROWS at once should split
+# the source file rather than raising this constant.
+MAX_UPLOAD_SIZE_BYTES = 15 * 1024 * 1024  # 15 MB
+MAX_IMPORT_ROWS = 20_000
+
+
+def upload_within_size_limit(uploaded):
+    """The file-size half of the MAX_UPLOAD_SIZE_BYTES/MAX_IMPORT_ROWS pair
+    above, factored out for pages/4_Production_Run_Trial_Record.py's 5 CSV
+    import tabs - these predate csv_excel_uploader() and build their own
+    st.file_uploader()/pd.read_csv() inline rather than calling it, so they
+    need this check called explicitly right after their own file_uploader
+    (the row-count half still has to be checked by each caller itself,
+    after its own parse, since row-count depends on which columns/parser
+    it uses). Shows an st.error and returns False if oversized; True
+    otherwise (including when uploaded.size is unavailable)."""
+    if uploaded.size and uploaded.size > MAX_UPLOAD_SIZE_BYTES:
+        st.error(
+            f"File is {uploaded.size / (1024 * 1024):.1f} MB, which is over the "
+            f"{MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)} MB limit for a single import. Split it into "
+            "smaller files and import them one at a time."
+        )
+        return False
+    return True
+
+
+def import_within_row_limit(df):
+    """The row-count half of the pair above, for the same 5 inline import
+    tabs - call right after parsing, before doing anything with the rows.
+    Shows an st.error and returns False if over MAX_IMPORT_ROWS; True
+    otherwise."""
+    if len(df) > MAX_IMPORT_ROWS:
+        st.error(
+            f"File has {len(df):,} rows, which is over the {MAX_IMPORT_ROWS:,}-row limit for a "
+            "single import. Split it into smaller files and import them one at a time."
+        )
+        return False
+    return True
+
+
 def csv_excel_uploader(required_cols, optional_cols=None, key=None):
     """Render a file uploader for bulk CSV/Excel import, parse it, and check
     that the required columns are present. Used by every "CSV / Excel
     import" tab across the app so the upload/parse/column-check boilerplate
     (and its error messages) stay identical everywhere.
+
+    Enforces MAX_UPLOAD_SIZE_BYTES (checked before parsing, from the
+    uploaded file's own .size) and MAX_IMPORT_ROWS (checked after parsing,
+    on row count) - see the constants above for why these exist and how
+    generous they are.
 
     Returns (df, filename) once a valid file with all required columns has
     been uploaded, or (None, None) otherwise (an st.error/st.caption has
@@ -391,10 +442,16 @@ def csv_excel_uploader(required_cols, optional_cols=None, key=None):
     if not uploaded:
         return None, None
 
+    if not upload_within_size_limit(uploaded):
+        return None, None
+
     try:
         df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
     except Exception as exc:
         st.error(f"Could not read file: {exc}")
+        return None, None
+
+    if not import_within_row_limit(df):
         return None, None
 
     missing_cols = [c for c in required_cols if c not in df.columns]

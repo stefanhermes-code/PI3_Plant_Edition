@@ -62,12 +62,14 @@ from helpers import (
     csv_excel_uploader,
     dedupe_import_rows,
     delete_with_confirm,
+    import_within_row_limit,
     page_setup,
     parse_dt,
     render_data_table,
     render_function_action_intro,
     set_pending_banner,
     show_pending_banner,
+    upload_within_size_limit,
     view_only_notice,
 )
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company, plant_ids_for_company
@@ -787,14 +789,14 @@ with tab_phases:
                 + ", ".join(PHASE_OPTIONAL_COLUMNS)
             )
             uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="phase_upload")
-            if uploaded:
+            if uploaded and upload_within_size_limit(uploaded):
                 try:
                     df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
                 except Exception as exc:
                     st.error(f"Could not read file: {exc}")
                     df = None
 
-                if df is not None:
+                if df is not None and import_within_row_limit(df):
                     missing_cols = [c for c in PHASE_REQUIRED_COLUMNS if c not in df.columns]
                     if missing_cols:
                         st.error(f"File is missing required column(s): {', '.join(missing_cols)}. Import rejected.")
@@ -897,7 +899,7 @@ with tab_phases:
                         "an existing phase on that run). Optional columns: " + ", ".join(FALLPLATE_OPTIONAL_COLUMNS)
                     )
                     uploaded_fp = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="fallplate_upload")
-                    if uploaded_fp:
+                    if uploaded_fp and upload_within_size_limit(uploaded_fp):
                         try:
                             df_fp = (
                                 pd.read_csv(uploaded_fp) if uploaded_fp.name.endswith(".csv")
@@ -907,7 +909,7 @@ with tab_phases:
                             st.error(f"Could not read file: {exc}")
                             df_fp = None
 
-                        if df_fp is not None:
+                        if df_fp is not None and import_within_row_limit(df_fp):
                             missing_cols = [c for c in FALLPLATE_REQUIRED_COLUMNS if c not in df_fp.columns]
                             if missing_cols:
                                 st.error(f"File is missing required column(s): {', '.join(missing_cols)}. Import rejected.")
@@ -1237,14 +1239,14 @@ with tab_streams:
                     "a Finalized phase — readings always attach there, never to Setup."
                 )
                 uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="stream_upload")
-                if uploaded:
+                if uploaded and upload_within_size_limit(uploaded):
                     try:
                         df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
                     except Exception as exc:
                         st.error(f"Could not read file: {exc}")
                         df = None
 
-                    if df is not None:
+                    if df is not None and import_within_row_limit(df):
                         missing_cols = [c for c in STREAM_REQUIRED_COLUMNS if c not in df.columns]
                         if missing_cols:
                             st.error(f"File is missing required column(s): {', '.join(missing_cols)}. Import rejected.")
@@ -1467,14 +1469,14 @@ with tab_events:
                 + ", ".join(EVENT_OPTIONAL_COLUMNS) + " (phase_name must match an existing phase on that run if given)."
             )
             uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="event_upload")
-            if uploaded:
+            if uploaded and upload_within_size_limit(uploaded):
                 try:
                     df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
                 except Exception as exc:
                     st.error(f"Could not read file: {exc}")
                     df = None
 
-                if df is not None:
+                if df is not None and import_within_row_limit(df):
                     missing_cols = [c for c in EVENT_REQUIRED_COLUMNS if c not in df.columns]
                     if missing_cols:
                         st.error(f"File is missing required column(s): {', '.join(missing_cols)}. Import rejected.")
@@ -1686,7 +1688,7 @@ with tab_runtime:
                 "Required column: `production_run_id`. Optional columns: " + ", ".join(RUNTIME_OPTIONAL_COLUMNS)
             )
             uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="runtime_upload")
-            if uploaded:
+            if uploaded and upload_within_size_limit(uploaded):
                 try:
                     if uploaded.name.endswith(".csv"):
                         df = pd.read_csv(uploaded)
@@ -1696,7 +1698,7 @@ with tab_runtime:
                     st.error(f"Could not read file: {exc}")
                     df = None
 
-                if df is not None:
+                if df is not None and import_within_row_limit(df):
                     missing_cols = [c for c in RUNTIME_REQUIRED_COLUMNS if c not in df.columns]
                     if missing_cols:
                         st.error(f"File is missing required column(s): {', '.join(missing_cols)}. Import rejected.")

@@ -84,57 +84,60 @@ tab_obs_manual, tab_obs_import = st.tabs(["Add quality issue", "CSV / Excel impo
 
 with tab_obs_manual:
     with st.expander("Add quality issue", expanded=False):
-        with st.form("add_observation"):
-            run = st.selectbox(
-                "Production run *",
-                runs,
-                format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
-            )
-            trials_for_run = (
-                session.query(TrialRecord).filter(TrialRecord.production_run_id == run.id).all() if run else []
-            )
-            trial = st.selectbox(
-                "Link to trial (optional)",
-                [None] + trials_for_run,
-                format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
-            )
-            observation_type = st.text_input(
-                "Issue type * (e.g. hardness drift, shrinkage, collapse, splitting)"
-            )
-            c1, c2 = st.columns(2)
-            severity = c1.selectbox("Severity", SEVERITIES)
-            frequency = c2.selectbox("Frequency", ["One-off", "Recurring"])
-            location_in_block = st.text_input("Location in block")
-            suspected_cause = st.text_area("Suspected cause")
-            confidence_level = st.selectbox("Confidence level *", CONFIDENCE_LEVELS, index=2)
-            product_impact = st.text_area("Product impact")
-            customer_impact = st.text_area("Customer impact")
-            notes = st.text_area("Notes")
-            observed_at = st.date_input("Observed on", value=dt.date.today())
-            submitted = st.form_submit_button("Save issue", disabled=not page_usable)
-            if submitted and page_usable:
-                if not observation_type:
-                    st.error("Issue type is required.")
-                else:
-                    session.add(
-                        QualityObservation(
-                            production_run_id=run.id,
-                            trial_record_id=trial.id if trial else None,
-                            observation_type=observation_type,
-                            severity=severity,
-                            frequency=frequency,
-                            location_in_block=location_in_block,
-                            suspected_cause=suspected_cause,
-                            confidence_level=confidence_level,
-                            product_impact=product_impact,
-                            customer_impact=customer_impact,
-                            notes=notes,
-                            observed_at=observed_at,
+        if not page_usable:
+            st.caption("View-only access - adding a quality issue is restricted for your role.")
+        else:
+            with st.form("add_observation"):
+                run = st.selectbox(
+                    "Production run *",
+                    runs,
+                    format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
+                )
+                trials_for_run = (
+                    session.query(TrialRecord).filter(TrialRecord.production_run_id == run.id).all() if run else []
+                )
+                trial = st.selectbox(
+                    "Link to trial (optional)",
+                    [None] + trials_for_run,
+                    format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
+                )
+                observation_type = st.text_input(
+                    "Issue type * (e.g. hardness drift, shrinkage, collapse, splitting)"
+                )
+                c1, c2 = st.columns(2)
+                severity = c1.selectbox("Severity", SEVERITIES)
+                frequency = c2.selectbox("Frequency", ["One-off", "Recurring"])
+                location_in_block = st.text_input("Location in block")
+                suspected_cause = st.text_area("Suspected cause")
+                confidence_level = st.selectbox("Confidence level *", CONFIDENCE_LEVELS, index=2)
+                product_impact = st.text_area("Product impact")
+                customer_impact = st.text_area("Customer impact")
+                notes = st.text_area("Notes")
+                observed_at = st.date_input("Observed on", value=dt.date.today())
+                submitted = st.form_submit_button("Save issue")
+                if submitted:
+                    if not observation_type:
+                        st.error("Issue type is required.")
+                    else:
+                        session.add(
+                            QualityObservation(
+                                production_run_id=run.id,
+                                trial_record_id=trial.id if trial else None,
+                                observation_type=observation_type,
+                                severity=severity,
+                                frequency=frequency,
+                                location_in_block=location_in_block,
+                                suspected_cause=suspected_cause,
+                                confidence_level=confidence_level,
+                                product_impact=product_impact,
+                                customer_impact=customer_impact,
+                                notes=notes,
+                                observed_at=observed_at,
+                            )
                         )
-                    )
-                    session.commit()
-                    st.success("Quality issue saved.")
-                    st.rerun()
+                        session.commit()
+                        st.success("Quality issue saved.")
+                        st.rerun()
 
 with tab_obs_import:
     show_pending_banner("observation_import_msg")

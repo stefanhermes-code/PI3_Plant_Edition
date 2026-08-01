@@ -77,33 +77,36 @@ if not runs:
     st.stop()
 
 with st.expander("Flag a run as a trial / experiment", expanded=False):
-    with st.form("add_trial"):
-        run = st.selectbox(
-            "Production run *",
-            runs,
-            format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date} · batch {r.batch_reference or '—'}",
-        )
-        objective = st.text_area("Trial or change objective *")
-        hypothesis = st.text_area("Hypothesis")
-        what_changed = st.text_area("What changed vs. baseline")
-        responsible_person = st.text_input("Responsible person")
-        submitted = st.form_submit_button("Save trial", disabled=not page_usable)
-        if submitted and page_usable:
-            if not objective:
-                st.error("Trial objective is required.")
-            else:
-                trial = TrialRecord(
-                    production_run_id=run.id,
-                    trial_or_change_objective=objective,
-                    hypothesis=hypothesis,
-                    what_changed=what_changed,
-                    responsible_person=responsible_person,
-                    status="Open",
-                )
-                session.add(trial)
-                session.commit()
-                st.success("Trial created and linked to the run.")
-                st.rerun()
+    if not page_usable:
+        st.caption("View-only access - flagging a trial is restricted for your role.")
+    else:
+        with st.form("add_trial"):
+            run = st.selectbox(
+                "Production run *",
+                runs,
+                format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date} · batch {r.batch_reference or '—'}",
+            )
+            objective = st.text_area("Trial or change objective *")
+            hypothesis = st.text_area("Hypothesis")
+            what_changed = st.text_area("What changed vs. baseline")
+            responsible_person = st.text_input("Responsible person")
+            submitted = st.form_submit_button("Save trial")
+            if submitted:
+                if not objective:
+                    st.error("Trial objective is required.")
+                else:
+                    trial = TrialRecord(
+                        production_run_id=run.id,
+                        trial_or_change_objective=objective,
+                        hypothesis=hypothesis,
+                        what_changed=what_changed,
+                        responsible_person=responsible_person,
+                        status="Open",
+                    )
+                    session.add(trial)
+                    session.commit()
+                    st.success("Trial created and linked to the run.")
+                    st.rerun()
 
 st.divider()
 st.subheader("Trials")

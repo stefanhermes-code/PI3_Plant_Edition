@@ -213,32 +213,35 @@ closed_trials = (
     .all()
 )
 if len(closed_trials) >= 2:
-    with st.form("save_similar_case_link"):
-        c1, c2 = st.columns(2)
-        source = c1.selectbox(
-            "Trial A", closed_trials, format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name}"
-        )
-        target = c2.selectbox(
-            "Trial B", closed_trials, format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name}"
-        )
-        similarity_basis = st.text_input("Similarity basis (e.g. foam grade, issue type, recipe version)")
-        notes = st.text_area("Notes")
-        submitted = st.form_submit_button("Save link", disabled=not page_usable)
-        if submitted and page_usable:
-            if source.id == target.id:
-                st.error("Choose two different trials.")
-            else:
-                session.add(
-                    SimilarCaseLink(
-                        source_trial_id=source.id,
-                        linked_trial_id=target.id,
-                        similarity_basis=similarity_basis,
-                        notes=notes,
+    if not page_usable:
+        st.caption("View-only access - saving a similar-case link is restricted for your role.")
+    else:
+        with st.form("save_similar_case_link"):
+            c1, c2 = st.columns(2)
+            source = c1.selectbox(
+                "Trial A", closed_trials, format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name}"
+            )
+            target = c2.selectbox(
+                "Trial B", closed_trials, format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name}"
+            )
+            similarity_basis = st.text_input("Similarity basis (e.g. foam grade, issue type, recipe version)")
+            notes = st.text_area("Notes")
+            submitted = st.form_submit_button("Save link")
+            if submitted:
+                if source.id == target.id:
+                    st.error("Choose two different trials.")
+                else:
+                    session.add(
+                        SimilarCaseLink(
+                            source_trial_id=source.id,
+                            linked_trial_id=target.id,
+                            similarity_basis=similarity_basis,
+                            notes=notes,
+                        )
                     )
-                )
-                session.commit()
-                st.success("Similar-case link saved.")
-                st.rerun()
+                    session.commit()
+                    st.success("Similar-case link saved.")
+                    st.rerun()
 else:
     st.info("Close at least two trials before linking them as similar cases.")
 

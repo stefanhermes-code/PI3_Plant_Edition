@@ -112,44 +112,47 @@ st.caption(
 )
 
 with st.expander("Add sample", expanded=False):
-    with st.form("add_sample"):
-        run_for_sample = st.selectbox(
-            "Production run *",
-            runs,
-            format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
-            key="sample_run_select",
-        )
-        zone_label = st.selectbox("Zone *", ZONE_LABELS)
-        sample_ts = combine_date_time("Sample extraction time", "sample_ts")
-        cure_age_hours = st.number_input("Cure age at sampling (hours)", min_value=0.0, step=0.5)
-        notes = st.text_area("Notes")
-        submitted = st.form_submit_button("Save sample", disabled=not page_usable)
-        if submitted and page_usable:
-            phases_for_run = (
-                session.query(ProductionPhase)
-                .filter(ProductionPhase.production_run_id == run_for_sample.id)
-                .all()
+    if not page_usable:
+        st.caption("View-only access - adding a sample is restricted for your role.")
+    else:
+        with st.form("add_sample"):
+            run_for_sample = st.selectbox(
+                "Production run *",
+                runs,
+                format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
+                key="sample_run_select",
             )
-            earliest_start = min(
-                (p.phase_start for p in phases_for_run if p.phase_start), default=None
-            )
-            if earliest_start and sample_ts < earliest_start:
-                st.error(
-                    f"Sample extraction time ({sample_ts:%Y-%m-%d %H:%M}) is before this run started "
-                    f"({earliest_start:%Y-%m-%d %H:%M}). Check the date/time."
+            zone_label = st.selectbox("Zone *", ZONE_LABELS)
+            sample_ts = combine_date_time("Sample extraction time", "sample_ts")
+            cure_age_hours = st.number_input("Cure age at sampling (hours)", min_value=0.0, step=0.5)
+            notes = st.text_area("Notes")
+            submitted = st.form_submit_button("Save sample")
+            if submitted:
+                phases_for_run = (
+                    session.query(ProductionPhase)
+                    .filter(ProductionPhase.production_run_id == run_for_sample.id)
+                    .all()
                 )
-            else:
-                session.add(
-                    Sample(
-                        production_run_id=run_for_sample.id,
-                        sample_ts=sample_ts,
-                        zone_label=zone_label,
-                        cure_age_hours=cure_age_hours or None,
-                        notes=notes,
+                earliest_start = min(
+                    (p.phase_start for p in phases_for_run if p.phase_start), default=None
+                )
+                if earliest_start and sample_ts < earliest_start:
+                    st.error(
+                        f"Sample extraction time ({sample_ts:%Y-%m-%d %H:%M}) is before this run started "
+                        f"({earliest_start:%Y-%m-%d %H:%M}). Check the date/time."
                     )
-                )
-                session.commit()
-                st.success("Sample saved.")
+                else:
+                    session.add(
+                        Sample(
+                            production_run_id=run_for_sample.id,
+                            sample_ts=sample_ts,
+                            zone_label=zone_label,
+                            cure_age_hours=cure_age_hours or None,
+                            notes=notes,
+                        )
+                    )
+                    session.commit()
+                    st.success("Sample saved.")
                 st.rerun()
 
 with st.expander("Bulk import samples (CSV / Excel)", expanded=False):
@@ -311,59 +314,62 @@ if not samples:
     st.info("Add a sample above before recording conditioning.")
 else:
     with st.expander("Add conditioning segment", expanded=False):
-        sample_for_cond = st.selectbox(
-            "Sample *",
-            samples,
-            format_func=lambda s: f"Sample #{s.id} — {s.zone_label} (run {s.production_run_id})",
-            key="cond_sample_select",
-        )
-        condition_choice = st.selectbox(
-            "Condition type *",
-            CONDITIONING_TYPES,
-            key="cond_type_select",
-        )
-        condition_other = None
-        if condition_choice == "Other (specify)":
-            condition_other = st.text_input("Specify condition type", key="cond_type_other")
-        default_temp, default_rh = CONDITIONING_TYPE_DEFAULTS[condition_choice]
+        if not page_usable:
+            st.caption("View-only access - adding a conditioning segment is restricted for your role.")
+        else:
+            sample_for_cond = st.selectbox(
+                "Sample *",
+                samples,
+                format_func=lambda s: f"Sample #{s.id} — {s.zone_label} (run {s.production_run_id})",
+                key="cond_sample_select",
+            )
+            condition_choice = st.selectbox(
+                "Condition type *",
+                CONDITIONING_TYPES,
+                key="cond_type_select",
+            )
+            condition_other = None
+            if condition_choice == "Other (specify)":
+                condition_other = st.text_input("Specify condition type", key="cond_type_other")
+            default_temp, default_rh = CONDITIONING_TYPE_DEFAULTS[condition_choice]
 
-        with st.form("add_conditioning"):
-            c1, c2 = st.columns(2)
-            temperature_c = c1.number_input(
-                "Temperature (°C)", step=0.1, value=default_temp if default_temp is not None else 0.0,
-                help="Prefilled from the condition type's nominal value - adjust to the actual chamber reading.",
-            )
-            relative_humidity_pct = c2.number_input(
-                "Relative humidity (%)", min_value=0.0, max_value=100.0, step=1.0,
-                value=default_rh if default_rh is not None else 0.0,
-            )
-            segment_start = combine_date_time("Segment start", "cond_start")
-            segment_end = combine_date_time("Segment end", "cond_end")
-            notes = st.text_area("Notes", key="cond_notes")
-            submitted = st.form_submit_button("Save conditioning segment", disabled=not page_usable)
-            if submitted and page_usable:
-                final_condition_type = (
-                    (condition_other or "").strip() if condition_choice == "Other (specify)" else condition_choice
+            with st.form("add_conditioning"):
+                c1, c2 = st.columns(2)
+                temperature_c = c1.number_input(
+                    "Temperature (°C)", step=0.1, value=default_temp if default_temp is not None else 0.0,
+                    help="Prefilled from the condition type's nominal value - adjust to the actual chamber reading.",
                 )
-                if not final_condition_type:
-                    st.error("Specify a condition type.")
-                elif segment_end < segment_start:
-                    st.error("Segment end must not be before segment start.")
-                else:
-                    session.add(
-                        ConditioningSegment(
-                            sample_id=sample_for_cond.id,
-                            condition_type=final_condition_type,
-                            temperature_c=temperature_c or None,
-                            relative_humidity_pct=relative_humidity_pct or None,
-                            segment_start=segment_start,
-                            segment_end=segment_end,
-                            notes=notes,
-                        )
+                relative_humidity_pct = c2.number_input(
+                    "Relative humidity (%)", min_value=0.0, max_value=100.0, step=1.0,
+                    value=default_rh if default_rh is not None else 0.0,
+                )
+                segment_start = combine_date_time("Segment start", "cond_start")
+                segment_end = combine_date_time("Segment end", "cond_end")
+                notes = st.text_area("Notes", key="cond_notes")
+                submitted = st.form_submit_button("Save conditioning segment")
+                if submitted:
+                    final_condition_type = (
+                        (condition_other or "").strip() if condition_choice == "Other (specify)" else condition_choice
                     )
-                    session.commit()
-                    st.success("Conditioning segment saved.")
-                    st.rerun()
+                    if not final_condition_type:
+                        st.error("Specify a condition type.")
+                    elif segment_end < segment_start:
+                        st.error("Segment end must not be before segment start.")
+                    else:
+                        session.add(
+                            ConditioningSegment(
+                                sample_id=sample_for_cond.id,
+                                condition_type=final_condition_type,
+                                temperature_c=temperature_c or None,
+                                relative_humidity_pct=relative_humidity_pct or None,
+                                segment_start=segment_start,
+                                segment_end=segment_end,
+                                notes=notes,
+                            )
+                        )
+                        session.commit()
+                        st.success("Conditioning segment saved.")
+                        st.rerun()
 
     sample_ids = [s.id for s in samples]
     recent_conditioning = (
@@ -499,112 +505,115 @@ if not property_defs:
 tab_result_manual, tab_result_import = st.tabs(["Add quality test result", "CSV / Excel import"])
 
 with tab_result_manual:
-    run = st.selectbox(
-        "Production run *",
-        runs,
-        format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
-        key="result_run_select",
-    )
-    trials_for_run = (
-        session.query(TrialRecord).filter(TrialRecord.production_run_id == run.id).all() if run else []
-    )
-    trial = st.selectbox(
-        "Link to trial (optional — only if this result is part of a formal experiment)",
-        [None] + trials_for_run,
-        format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
-        key="result_trial_select",
-    )
-    samples_for_run = (
-        session.query(Sample).filter(Sample.production_run_id == run.id).all() if run else []
-    )
-    sample = st.selectbox(
-        "Sample (optional, but recommended for comparability)",
-        [None] + samples_for_run,
-        format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
-        key="result_sample_select",
-    )
-    property_def = st.selectbox(
-        "Property * (⭐ = most commonly tested; full list searchable below)",
-        property_defs,
-        format_func=lambda p: f"⭐ {p.name}" if p.is_common else p.name,
-        key="result_property_select",
-    )
-    if property_def:
-        st.caption(f"{property_def.what_it_measures} — category: {property_def.category}")
-
-    methods_for_property = (
-        session.query(PhysicalPropertyMethod)
-        .filter(PhysicalPropertyMethod.property_definition_id == property_def.id)
-        .order_by(PhysicalPropertyMethod.sort_order)
-        .all()
-        if property_def
-        else []
-    )
-    uoms_for_property = (
-        session.query(PhysicalPropertyUOM)
-        .filter(PhysicalPropertyUOM.property_definition_id == property_def.id)
-        .order_by(PhysicalPropertyUOM.sort_order)
-        .all()
-        if property_def
-        else []
-    )
-
-    with st.form("add_property_result"):
-        c1, c2 = st.columns(2)
-        method_choice = c1.selectbox(
-            "Measuring method *",
-            methods_for_property,
-            format_func=lambda m: m.method_code,
+    if not page_usable:
+        st.caption("View-only access - adding a quality test result is restricted for your role.")
+    else:
+        run = st.selectbox(
+            "Production run *",
+            runs,
+            format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
+            key="result_run_select",
         )
-        method_other = c1.text_input("Or type a method not listed above")
-        uom_choice = c2.selectbox(
-            "Unit of measure *",
-            uoms_for_property,
-            format_func=lambda u: u.unit_label,
+        trials_for_run = (
+            session.query(TrialRecord).filter(TrialRecord.production_run_id == run.id).all() if run else []
         )
-        uom_other = c2.text_input("Or type a unit not listed above")
-
-        c3, c4, c5 = st.columns(3)
-        target_value = c3.number_input("Target value", step=0.1)
-        actual_value = c4.number_input("Actual value", step=0.1)
-        method_revision = c5.text_input("Method edition / revision (e.g. 2017)")
+        trial = st.selectbox(
+            "Link to trial (optional — only if this result is part of a formal experiment)",
+            [None] + trials_for_run,
+            format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
+            key="result_trial_select",
+        )
+        samples_for_run = (
+            session.query(Sample).filter(Sample.production_run_id == run.id).all() if run else []
+        )
+        sample = st.selectbox(
+            "Sample (optional, but recommended for comparability)",
+            [None] + samples_for_run,
+            format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
+            key="result_sample_select",
+        )
+        property_def = st.selectbox(
+            "Property * (⭐ = most commonly tested; full list searchable below)",
+            property_defs,
+            format_func=lambda p: f"⭐ {p.name}" if p.is_common else p.name,
+            key="result_property_select",
+        )
         if property_def:
-            st.caption(f"Industry accepted tolerance for {property_def.name}: {tolerance_label(property_def.name)}")
-        replicate_no = st.number_input("Replicate no.", min_value=1, step=1, value=1)
-        tested_at = st.date_input("Tested on", value=dt.date.today())
-        notes = st.text_area("Notes (e.g. specimen geometry, orientation, deflection, temperature)")
-        submitted = st.form_submit_button("Save result", disabled=not page_usable)
-        if submitted and page_usable:
-            final_method = method_other.strip() or (method_choice.method_code if method_choice else "")
-            final_unit = uom_other.strip() or (uom_choice.unit_label if uom_choice else "")
-            if not property_def:
-                st.error("Select a property.")
-            elif not final_method:
-                st.error("A measuring method is required — pick one or type a custom one.")
-            else:
-                pass_fail = compute_pass_fail(property_def.name, target_value, actual_value)
-                session.add(
-                    PhysicalPropertyResult(
-                        production_run_id=run.id,
-                        trial_record_id=trial.id if trial else None,
-                        sample_id=sample.id if sample else None,
-                        property_definition_id=property_def.id,
-                        property_method_id=method_choice.id if (method_choice and not method_other.strip()) else None,
-                        property_name=property_def.name,
-                        target_value=target_value or None,
-                        actual_value=actual_value or None,
-                        unit=final_unit,
-                        pass_fail=pass_fail,
-                        test_method=final_method,
-                        method_revision=method_revision,
-                        replicate_no=int(replicate_no),
-                        tested_at=tested_at,
-                        notes=notes,
+            st.caption(f"{property_def.what_it_measures} — category: {property_def.category}")
+
+        methods_for_property = (
+            session.query(PhysicalPropertyMethod)
+            .filter(PhysicalPropertyMethod.property_definition_id == property_def.id)
+            .order_by(PhysicalPropertyMethod.sort_order)
+            .all()
+            if property_def
+            else []
+        )
+        uoms_for_property = (
+            session.query(PhysicalPropertyUOM)
+            .filter(PhysicalPropertyUOM.property_definition_id == property_def.id)
+            .order_by(PhysicalPropertyUOM.sort_order)
+            .all()
+            if property_def
+            else []
+        )
+
+        with st.form("add_property_result"):
+            c1, c2 = st.columns(2)
+            method_choice = c1.selectbox(
+                "Measuring method *",
+                methods_for_property,
+                format_func=lambda m: m.method_code,
+            )
+            method_other = c1.text_input("Or type a method not listed above")
+            uom_choice = c2.selectbox(
+                "Unit of measure *",
+                uoms_for_property,
+                format_func=lambda u: u.unit_label,
+            )
+            uom_other = c2.text_input("Or type a unit not listed above")
+
+            c3, c4, c5 = st.columns(3)
+            target_value = c3.number_input("Target value", step=0.1)
+            actual_value = c4.number_input("Actual value", step=0.1)
+            method_revision = c5.text_input("Method edition / revision (e.g. 2017)")
+            if property_def:
+                st.caption(f"Industry accepted tolerance for {property_def.name}: {tolerance_label(property_def.name)}")
+            replicate_no = st.number_input("Replicate no.", min_value=1, step=1, value=1)
+            tested_at = st.date_input("Tested on", value=dt.date.today())
+            notes = st.text_area("Notes (e.g. specimen geometry, orientation, deflection, temperature)")
+            submitted = st.form_submit_button("Save result")
+            if submitted:
+                final_method = method_other.strip() or (method_choice.method_code if method_choice else "")
+                final_unit = uom_other.strip() or (uom_choice.unit_label if uom_choice else "")
+                if not property_def:
+                    st.error("Select a property.")
+                elif not final_method:
+                    st.error("A measuring method is required — pick one or type a custom one.")
+                else:
+                    pass_fail = compute_pass_fail(property_def.name, target_value, actual_value)
+                    session.add(
+                        PhysicalPropertyResult(
+                            production_run_id=run.id,
+                            trial_record_id=trial.id if trial else None,
+                            sample_id=sample.id if sample else None,
+                            property_definition_id=property_def.id,
+                            property_method_id=method_choice.id if (method_choice and not method_other.strip()) else None,
+                            property_name=property_def.name,
+                            target_value=target_value or None,
+                            actual_value=actual_value or None,
+                            unit=final_unit,
+                            pass_fail=pass_fail,
+                            test_method=final_method,
+                            method_revision=method_revision,
+                            replicate_no=int(replicate_no),
+                            tested_at=tested_at,
+                            notes=notes,
+                        )
                     )
-                )
-                session.commit()
-                st.success("Quality test result saved.")
-                st.rerun()
+                    session.commit()
+                    st.success("Quality test result saved.")
+                    st.rerun()
 
 with tab_result_import:
     show_pending_banner("result_import_msg")

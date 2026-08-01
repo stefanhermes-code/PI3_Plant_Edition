@@ -814,6 +814,13 @@ class TrialRecord(Base):
     adjustment_conclusions = relationship("AdjustmentConclusion", back_populates="trial_record")
     approval_records = relationship("ApprovalRecord", back_populates="trial_record")
 
+    # Enforced here in Python (missing_closeout_fields(), used by
+    # pages/8_Approval_Review.py to disable "Close trial" until every field
+    # below is complete) AND, since 2026-08-01 (PI3_Gaps_and_Ambiguities.docx
+    # finding 1.6), by a matching Postgres CHECK constraint
+    # (ck_trial_record_closeout_complete): any row with status='Closed' must
+    # have all 5 fields non-null/non-blank, so a bulk import or direct SQL
+    # write can no longer set status='Closed' without them either.
     REQUIRED_CLOSEOUT_FIELDS = [
         "conclusion",
         "reuse_recommendation",

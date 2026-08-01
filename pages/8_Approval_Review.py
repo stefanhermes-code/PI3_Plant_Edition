@@ -84,35 +84,38 @@ if missing:
 st.divider()
 st.subheader("Record review and approval")
 
-with st.form("approval_form"):
-    reviewed_by = st.text_input("Reviewed by *", value=trial.reviewed_by or "")
-    approved_by = st.text_input("Approved by *", value=trial.approved_by or "")
-    approval_status = st.selectbox("Approval status", APPROVAL_STATUSES, index=1)
-    review_notes = st.text_area("Review notes")
-    date_reviewed = st.date_input("Date reviewed", value=dt.date.today())
-    date_approved = st.date_input("Date approved", value=dt.date.today())
-    submitted = st.form_submit_button("Save review", disabled=not page_usable)
-    if submitted and page_usable:
-        if not reviewed_by or not approved_by:
-            st.error("Reviewed by and approved by are both required.")
-        else:
-            session.add(
-                ApprovalRecord(
-                    production_run_id=trial.production_run_id,
-                    trial_record_id=trial.id,
-                    reviewed_by=reviewed_by,
-                    approved_by=approved_by,
-                    approval_status=approval_status,
-                    review_notes=review_notes,
-                    date_reviewed=date_reviewed,
-                    date_approved=date_approved,
+if not page_usable:
+    st.caption("View-only access - recording a review is restricted for your role.")
+else:
+    with st.form("approval_form"):
+        reviewed_by = st.text_input("Reviewed by *", value=trial.reviewed_by or "")
+        approved_by = st.text_input("Approved by *", value=trial.approved_by or "")
+        approval_status = st.selectbox("Approval status", APPROVAL_STATUSES, index=1)
+        review_notes = st.text_area("Review notes")
+        date_reviewed = st.date_input("Date reviewed", value=dt.date.today())
+        date_approved = st.date_input("Date approved", value=dt.date.today())
+        submitted = st.form_submit_button("Save review")
+        if submitted:
+            if not reviewed_by or not approved_by:
+                st.error("Reviewed by and approved by are both required.")
+            else:
+                session.add(
+                    ApprovalRecord(
+                        production_run_id=trial.production_run_id,
+                        trial_record_id=trial.id,
+                        reviewed_by=reviewed_by,
+                        approved_by=approved_by,
+                        approval_status=approval_status,
+                        review_notes=review_notes,
+                        date_reviewed=date_reviewed,
+                        date_approved=date_approved,
+                    )
                 )
-            )
-            trial.reviewed_by = reviewed_by
-            trial.approved_by = approved_by
-            session.commit()
-            st.success("Review recorded.")
-            st.rerun()
+                trial.reviewed_by = reviewed_by
+                trial.approved_by = approved_by
+                session.commit()
+                st.success("Review recorded.")
+                st.rerun()
 
 st.divider()
 st.subheader("Close trial")
