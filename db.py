@@ -189,12 +189,18 @@ class SubscriptionType(Base):
     max_plants = Column(Integer)  # NULL = unlimited
     pi3_ai_enabled = Column(Boolean, default=True)  # PI3 Connectivity page - the one real feature differentiator between HTC's two tiers, see access_control.py
     reports_enabled = Column(Boolean, default=True)  # Report page
-    # List prices for this tier. A company pays whichever one applies to its
-    # own Company.billing_frequency ("Annual" or "Monthly") - not duplicated
-    # onto Company, so raising a tier's price here is immediately reflected
-    # for every company on it rather than needing a per-company update.
-    annual_price = Column(Float)
-    monthly_price = Column(Float)
+    # Each subscription type row is now a single fixed billing frequency
+    # (2026-08-01 restructure) - "PI3 Plant Edition" and "PI3 Plant Edition
+    # - Basic" each became two rows (an "- Annual" one and a "- Monthly"
+    # one) instead of one row holding both prices and Company picking which
+    # applies. This makes a company's fee AND billing frequency both come
+    # from the single subscription_type_id it's assigned - no separate
+    # Company.billing_frequency field to keep in sync (removed - see
+    # Company docstring), and each frequency's price can be changed
+    # independently (e.g. a monthly-only price bump) without touching the
+    # other. billing_frequency is "Annual" or "Monthly".
+    billing_frequency = Column(String(20), default="Annual")
+    price = Column(Float)  # USD/plant, per billing_frequency above
     price_note = Column(String(200))  # free text for anything not captured above (e.g. one-time implementation fee) - no payment processing wired up
     active = Column(Boolean, default=True)
     notes = Column(Text)
@@ -223,10 +229,13 @@ class Company(Base):
     contact_name = Column(String(200))
     contact_email = Column(String(200))
     contact_phone = Column(String(50))
-    # Which of the subscription type's two list prices (annual_price /
-    # monthly_price) this company is actually billed. Deliberately not
-    # storing the dollar amount itself here - see SubscriptionType.
-    billing_frequency = Column(String(20), default="Annual")  # "Annual" or "Monthly"
+    # billing_frequency used to live here (a separate Annual/Monthly picker
+    # a company chose independently of its subscription_type_id). Removed
+    # 2026-08-01: SubscriptionType itself is now split one row per
+    # frequency (e.g. "PI3 Plant Edition - Annual" vs "- Monthly"), so a
+    # company's billing frequency is simply whichever tier row it's
+    # assigned to - see SubscriptionType.billing_frequency. One field to
+    # pick instead of two that could disagree.
     active = Column(Boolean, default=True)
     notes = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)

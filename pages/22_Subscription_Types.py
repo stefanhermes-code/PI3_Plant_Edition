@@ -34,24 +34,29 @@ render_function_action_intro(
     function_text=(
         "Defines the commercial tiers companies subscribe to: a cap on user count and plant "
         "count (blank = unlimited), on/off switches for PI3/AI (the PI3 Connectivity page, and "
-        "everywhere else PI3 assistance can appear) and the Report screen, and list prices for "
-        "both annual and monthly billing. These limits are enforced when a company's admin tries "
-        "to add a new user or plant beyond the cap, and the feature switches hide the relevant "
-        "pages entirely for anyone at a company on that tier. Every other page works the same "
-        "regardless of tier. A company then picks which billing frequency it actually pays on "
-        "the Companies page."
+        "everywhere else PI3 assistance can appear) and the Report screen, a fixed billing "
+        "frequency, and the list price for that frequency. Each tier/frequency combination is its "
+        "own subscription type (e.g. 'PI3 Plant Edition - Annual' and 'PI3 Plant Edition - "
+        "Monthly' are two separate rows) - a company's fee and billing frequency both come from "
+        "the single subscription type it's assigned on the Companies page, so the two can never "
+        "disagree. These limits are enforced when a company's admin tries to add a new user or "
+        "plant beyond the cap, and the feature switches hide the relevant pages entirely for "
+        "anyone at a company on that tier. Every other page works the same regardless of tier."
     ),
     action_text=(
-        "Add a subscription type, set its limits/feature switches, then assign it to a company "
-        "on the Companies page. Deactivate a type instead of deleting it once a company is using "
-        "it - deletion is only offered while nothing is assigned to it."
+        "Add a subscription type for each tier/frequency combination you sell (e.g. a Basic "
+        "Monthly row and a separate Basic Annual row), set its limits/feature switches and price, "
+        "then assign it to a company on the Companies page. Deactivate a type instead of deleting "
+        "it once a company is using it - deletion is only offered while nothing is assigned to it."
     ),
 )
 session = get_session()
 
 with st.expander("Add subscription type", expanded=False):
     with st.form("add_subscription_type"):
-        name = st.text_input("Name * (e.g. Starter, Professional, Enterprise)")
+        name = st.text_input(
+            "Name * (e.g. 'PI3 Plant Edition - Annual', 'PI3 Plant Edition - Basic - Monthly')"
+        )
         c1, c2 = st.columns(2)
         max_users = c1.number_input("Max users (0 = unlimited)", min_value=0, step=1, value=0)
         max_plants = c2.number_input("Max plants (0 = unlimited)", min_value=0, step=1, value=0)
@@ -59,8 +64,8 @@ with st.expander("Add subscription type", expanded=False):
         ai_enabled = f1.checkbox("PI3/AI", value=True)
         reports_enabled = f2.checkbox("Reports", value=True)
         p1, p2 = st.columns(2)
-        annual_price = p1.number_input("Annual price (USD/plant/year, 0 = not set)", min_value=0.0, step=500.0)
-        monthly_price = p2.number_input("Monthly price (USD/plant/month, 0 = not set)", min_value=0.0, step=100.0)
+        billing_frequency = p1.selectbox("Billing frequency", ["Annual", "Monthly"])
+        price = p2.number_input("Price (USD/plant, 0 = not set)", min_value=0.0, step=500.0)
         price_note = st.text_input(
             "Price note (free text, e.g. one-time implementation fee - not billed automatically)"
         )
@@ -77,8 +82,8 @@ with st.expander("Add subscription type", expanded=False):
                         max_plants=int(max_plants) or None,
                         pi3_ai_enabled=ai_enabled,
                         reports_enabled=reports_enabled,
-                        annual_price=annual_price or None,
-                        monthly_price=monthly_price or None,
+                        billing_frequency=billing_frequency,
+                        price=price or None,
                         price_note=price_note or None,
                         notes=notes,
                         active=True,
@@ -98,8 +103,8 @@ else:
             "Name": s.name,
             "Max users": str(s.max_users) if s.max_users else "Unlimited",
             "Max plants": str(s.max_plants) if s.max_plants else "Unlimited",
-            "Annual price": f"${s.annual_price:,.0f}" if s.annual_price else "—",
-            "Monthly price": f"${s.monthly_price:,.0f}" if s.monthly_price else "—",
+            "Billing frequency": s.billing_frequency or "Annual",
+            "Price": f"${s.price:,.0f}" if s.price else "—",
             "PI3/AI": "Yes" if s.pi3_ai_enabled else "No",
             "Reports": "Yes" if s.reports_enabled else "No",
             "Companies": session.query(Company).filter(Company.subscription_type_id == s.id).count(),
@@ -136,13 +141,14 @@ else:
                 "Reports", value=selected.reports_enabled, key=f"edit_st_rep_{selected.id}"
             )
             p1, p2 = st.columns(2)
-            e_annual_price = p1.number_input(
-                "Annual price (USD/plant/year, 0 = not set)", min_value=0.0, step=500.0,
-                value=float(selected.annual_price or 0.0), key=f"edit_st_annual_{selected.id}",
+            e_billing_frequency = p1.selectbox(
+                "Billing frequency", ["Annual", "Monthly"],
+                index=0 if (selected.billing_frequency or "Annual") == "Annual" else 1,
+                key=f"edit_st_freq_{selected.id}",
             )
-            e_monthly_price = p2.number_input(
-                "Monthly price (USD/plant/month, 0 = not set)", min_value=0.0, step=100.0,
-                value=float(selected.monthly_price or 0.0), key=f"edit_st_monthly_{selected.id}",
+            e_price = p2.number_input(
+                "Price (USD/plant, 0 = not set)", min_value=0.0, step=500.0,
+                value=float(selected.price or 0.0), key=f"edit_st_price_num_{selected.id}",
             )
             e_price_note = st.text_input(
                 "Price note", value=selected.price_note or "", key=f"edit_st_price_{selected.id}"
@@ -158,8 +164,8 @@ else:
                     selected.max_plants = int(e_max_plants) or None
                     selected.pi3_ai_enabled = e_ai
                     selected.reports_enabled = e_reports
-                    selected.annual_price = e_annual_price or None
-                    selected.monthly_price = e_monthly_price or None
+                    selected.billing_frequency = e_billing_frequency
+                    selected.price = e_price or None
                     selected.price_note = e_price_note or None
                     selected.active = e_active
                     selected.notes = e_notes
