@@ -48,6 +48,7 @@ from helpers import (
     show_pending_banner,
     view_only_notice,
 )
+from quality_standards import compute_pass_fail, tolerance_label
 from tenant_scope import apply_scope, company_picker, run_ids_for_company
 
 RESULT_REQUIRED_COLUMNS = ["production_run_id", "property_name", "test_method", "unit", "actual_value"]
@@ -546,6 +547,8 @@ with tab_result_manual:
         target_value = c3.number_input("Target value", step=0.1)
         actual_value = c4.number_input("Actual value", step=0.1)
         method_revision = c5.text_input("Method edition / revision (e.g. 2017)")
+        if property_def:
+            st.caption(f"Industry accepted tolerance for {property_def.name}: {tolerance_label(property_def.name)}")
         replicate_no = st.number_input("Replicate no.", min_value=1, step=1, value=1)
         tested_at = st.date_input("Tested on", value=dt.date.today())
         notes = st.text_area("Notes (e.g. specimen geometry, orientation, deflection, temperature)")
@@ -558,11 +561,7 @@ with tab_result_manual:
             elif not final_method:
                 st.error("A measuring method is required — pick one or type a custom one.")
             else:
-                pass_fail = None
-                if target_value and actual_value:
-                    # simple +/-10% band as a working default; refine with real specs later
-                    lower, upper = target_value * 0.9, target_value * 1.1
-                    pass_fail = "Pass" if lower <= actual_value <= upper else "Fail"
+                pass_fail = compute_pass_fail(property_def.name, target_value, actual_value)
                 session.add(
                     PhysicalPropertyResult(
                         production_run_id=run.id,
@@ -674,10 +673,11 @@ with tab_result_import:
                 )
                 target_val = row.get("target_value")
                 actual_val = row.get("actual_value")
-                pass_fail = None
-                if not pd.isna(target_val) and not pd.isna(actual_val) and target_val:
-                    lower, upper = target_val * 0.9, target_val * 1.1
-                    pass_fail = "Pass" if lower <= actual_val <= upper else "Fail"
+                pass_fail = (
+                    compute_pass_fail(prop_def.name, target_val, actual_val)
+                    if not pd.isna(target_val) and not pd.isna(actual_val)
+                    else None
+                )
                 sample_val = row.get("sample_id")
                 trial_val = row.get("trial_record_id")
                 replicate_val = row.get("replicate_no")
@@ -789,6 +789,10 @@ if selected_result:
             "Actual value", step=0.1, value=float(selected_result.actual_value or 0.0), key=f"edit_result_actual_{selected_result.id}"
         )
         e_unit = ec3.text_input("Unit", value=selected_result.unit or "", key=f"edit_result_unit_{selected_result.id}")
+        st.caption(
+            f"Industry accepted tolerance for {selected_result.property_name}: "
+            f"{tolerance_label(selected_result.property_name)}"
+        )
         e_method = st.text_input("Measuring method *", value=selected_result.test_method or "", key=f"edit_result_method_{selected_result.id}")
         e_revision = st.text_input(
             "Method edition / revision", value=selected_result.method_revision or "", key=f"edit_result_rev_{selected_result.id}"
@@ -804,10 +808,7 @@ if selected_result:
             if not e_method.strip():
                 st.error("A measuring method is required.")
             else:
-                pass_fail = None
-                if e_target and e_actual:
-                    lower, upper = e_target * 0.9, e_target * 1.1
-                    pass_fail = "Pass" if lower <= e_actual <= upper else "Fail"
+                pass_fail = compute_pass_fail(selected_result.property_name, e_target, e_actual)
                 selected_result.sample_id = e_sample.id if e_sample else None
                 selected_result.trial_record_id = e_trial.id if e_trial else None
                 selected_result.target_value = e_target or None

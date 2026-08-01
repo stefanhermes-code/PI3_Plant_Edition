@@ -28,6 +28,7 @@ from analytics import (
     recipe_version_cost,
     recipe_version_diff,
 )
+from quality_standards import tolerance_label
 from auth import current_user, logout_button, require_login
 from db import FoamGrade, get_session, init_db
 from helpers import (
@@ -240,7 +241,9 @@ st.caption(
     "Two questions, answered per property, using only production runs made under the CURRENT "
     "recipe (not older versions - which version was running earlier doesn't matter here): did we "
     "achieve the required property, and if not, does the actual metered dosage of a raw material "
-    "explain why."
+    "explain why. Pass/Fail per result is judged against the industry accepted tolerance for that "
+    "property (a fixed +/- amount in its own unit, not a percentage of target) - see the Tolerance "
+    "column below."
 )
 
 current_version_results = results_df[results_df["recipe_version_id"] == current_version.id]
@@ -268,6 +271,7 @@ else:
     expectation_summary["achieved"] = expectation_summary["pass_rate"].apply(
         lambda p: "Yes" if pd.notna(p) and p >= 1.0 else ("No" if pd.notna(p) else "—")
     )
+    expectation_summary["tolerance"] = expectation_summary["property_name"].apply(tolerance_label)
 
     display_expectation = expectation_summary.copy()
     display_expectation["Pass rate"] = display_expectation["pass_rate"].apply(
@@ -279,6 +283,7 @@ else:
             "avg_actual": "Avg actual (current recipe)",
             "avg_target": "Required (target)",
             "unit": "UOM",
+            "tolerance": "Tolerance",
             "achieved": "Achieved?",
             "n": "Runs",
         }
@@ -290,6 +295,7 @@ else:
                 "Avg actual (current recipe)",
                 "Required (target)",
                 "UOM",
+                "Tolerance",
                 "Pass rate",
                 "Achieved?",
                 "Runs",
