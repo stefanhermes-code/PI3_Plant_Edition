@@ -13,6 +13,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
+import quality_issue_taxonomy
 from access_control import can_use_page
 from db import CONFIDENCE_LEVELS, SEVERITIES, ProductionRun, QualityObservation, TrialRecord, get_session, init_db
 from auth import current_user, logout_button, require_login
@@ -36,6 +37,64 @@ OBSERVATION_OPTIONAL_COLUMNS = [
     "trial_record_id", "severity", "frequency", "location_in_block", "suspected_cause",
     "confidence_level", "product_impact", "customer_impact", "notes", "observed_at",
 ]
+
+
+def _issue_type_picker(key_prefix, current_value=None):
+    """Category -> Issue type dependent picker for the controlled "Issue
+    type" vocabulary (see quality_issue_taxonomy.py). Deliberately rendered
+    OUTSIDE any st.form - Streamlit forms only rerun on submit, so a
+    dependent second selectbox (whose options depend on the first) placed
+    inside a form would show stale options for the category last picked,
+    not the one just chosen. These widgets react immediately instead, and
+    the resolved issue-type string is read back into the enclosing form's
+    submit handler as a plain variable (safe, since the whole script reruns
+    top-to-bottom on every interaction, form submit included).
+
+    current_value pre-selects the matching category/issue type when
+    editing an existing row. A legacy value that predates this taxonomy (or
+    was CSV-imported before it existed) won't match any entry - it falls
+    back to "Other / not yet classified" with the existing text preserved
+    in the free-text box rather than silently discarded.
+
+    Returns (resolved_issue_type, typical_causes_or_None).
+    """
+    match = quality_issue_taxonomy.lookup(current_value) if current_value else None
+    cats = quality_issue_taxonomy.categories()
+    if match:
+        default_category = match["category"]
+    elif current_value:
+        default_category = "Other / not yet classified"
+    else:
+        default_category = cats[0]
+    category = st.selectbox(
+        "Issue category *",
+        cats,
+        index=cats.index(default_category) if default_category in cats else 0,
+        key=f"{key_prefix}_category",
+    )
+    issue_options = quality_issue_taxonomy.issue_types_for_category(category)
+    issue_names = [it["name"] for it in issue_options]
+    default_issue_index = (
+        issue_names.index(match["name"])
+        if match and match["category"] == category and match["name"] in issue_names
+        else 0
+    )
+    issue_name = st.selectbox(
+        "Issue type *", issue_names, index=default_issue_index, key=f"{key_prefix}_issue_name",
+    )
+    entry = quality_issue_taxonomy.lookup(issue_name)
+
+    if issue_name == quality_issue_taxonomy.OTHER_ISSUE_NAME:
+        other_default = current_value if (current_value and not match) else ""
+        other_text = st.text_input(
+            "Describe the issue *",
+            value=other_default,
+            placeholder="e.g. unusual blue discoloration on the cut face",
+            key=f"{key_prefix}_other_text",
+        )
+        return other_text.strip(), None
+
+    return issue_name, (entry["typical_causes"] if entry else None)
 
 page_setup("Quality Issue")
 init_db()
@@ -87,6 +146,15 @@ with tab_obs_manual:
         if not page_usable:
             st.caption("View-only access - adding a quality issue is restricted for your role.")
         else:
+            st.caption(
+                "Issue type is a controlled list drawn from Laader Berg's slabstock foaming "
+                "troubleshooting guide, grouped by category - not free text, so the same fault "
+                "always gets recorded the same way and can be counted/trended reliably."
+            )
+            observation_type, _typical_causes = _issue_type_picker("add_obs")
+            if _typical_causes:
+                st.caption(f"Typical causes/checks: {_typical_causes}")
+
             with st.form("add_observation"):
                 run = st.selectbox(
                     "Production run *",
@@ -101,9 +169,7 @@ with tab_obs_manual:
                     [None] + trials_for_run,
                     format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
                 )
-                observation_type = st.text_input(
-                    "Issue type * (e.g. hardness drift, shrinkage, collapse, splitting)"
-                )
+                st.caption(f"Issue type: **{observation_type or '(describe the issue above)'}**")
                 c1, c2 = st.columns(2)
                 severity = c1.selectbox("Severity", SEVERITIES)
                 frequency = c2.selectbox("Frequency", ["One-off", "Recurring"])
@@ -141,6 +207,10 @@ with tab_obs_manual:
 
 with tab_obs_import:
     show_pending_banner("observation_import_msg")
+    with st.expander("Accepted issue-type names (must match exactly, case-insensitive)"):
+        for _cat in quality_issue_taxonomy.categories():
+            st.write(f"**{_cat}**")
+            st.write(", ".join(it["name"] for it in quality_issue_taxonomy.issue_types_for_category(_cat)))
     obs_df, obs_filename = csv_excel_uploader(
         OBSERVATION_REQUIRED_COLUMNS, OBSERVATION_OPTIONAL_COLUMNS, key="observation_upload"
     )
@@ -158,7 +228,16 @@ with tab_obs_import:
                 run_ok = row.get("production_run_id") in run_ids
                 trial_val = row.get("trial_record_id")
                 trial_ok = pd.isna(trial_val) or int(trial_val) in trials_all
-                ok = bool(run_ok and trial_ok and str(row.get("observation_type", "")).strip())
+                # Issue type must match the controlled taxonomy (see
+                # quality_issue_taxonomy.py) the same as the manual entry
+                # form now requires - a CSV can't be used to sneak free
+                # text back in. Matched case-insensitively since a
+                # spreadsheet author might type "shrinkage" instead of the
+                # exact stored casing "Shrinkage".
+                issue_match = quality_issue_taxonomy.lookup_case_insensitive(
+                    str(row.get("observation_type", "") or "")
+                )
+                ok = bool(run_ok and trial_ok and issue_match)
             except (TypeError, ValueError):
                 ok = False
             if ok:
@@ -169,8 +248,9 @@ with tab_obs_import:
         st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
         if bad_rows:
             st.warning(
-                "Flagged rows reference an unknown production_run_id/trial_record_id or have no "
-                "observation_type."
+                "Flagged rows reference an unknown production_run_id/trial_record_id, or their "
+                "observation_type doesn't match one of the controlled issue-type names (see the "
+                "'Add quality issue' dropdown above for the exact list of accepted values)."
             )
             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
@@ -196,11 +276,17 @@ with tab_obs_import:
                 frequency_val = str(row.get("frequency", "") or "").strip()
                 confidence_val = str(row.get("confidence_level", "") or "").strip()
                 observed_val = pd.to_datetime(row.get("observed_at"), errors="coerce")
+                # Store the taxonomy's own canonical spelling/casing, not
+                # whatever the CSV happened to contain - already validated
+                # to match above, so this lookup can't come back empty here.
+                canonical_issue_type = quality_issue_taxonomy.lookup_case_insensitive(
+                    str(row["observation_type"])
+                )["name"]
                 session.add(
                     QualityObservation(
                         production_run_id=int(row["production_run_id"]),
                         trial_record_id=int(trial_val) if not pd.isna(trial_val) else None,
-                        observation_type=str(row["observation_type"]).strip(),
+                        observation_type=canonical_issue_type,
                         severity=severity_val if severity_val in SEVERITIES else "Low",
                         frequency=frequency_val if frequency_val in ["One-off", "Recurring"] else "One-off",
                         location_in_block=str(row.get("location_in_block", "") or ""),
@@ -262,6 +348,9 @@ else:
     if selected:
         st.divider()
         st.subheader(f"Edit: {selected.observation_type}")
+        e_type, e_typical_causes = _issue_type_picker(f"edit_obs_{selected.id}", current_value=selected.observation_type)
+        if e_typical_causes:
+            st.caption(f"Typical causes/checks: {e_typical_causes}")
         with st.form(f"edit_obs_{selected.id}"):
             trials_for_edit = (
                 session.query(TrialRecord)
@@ -277,7 +366,7 @@ else:
                 format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
                 key=f"edit_obs_trial_{selected.id}",
             )
-            e_type = st.text_input("Issue type *", value=selected.observation_type, key=f"edit_obs_type_{selected.id}")
+            st.caption(f"Issue type: **{e_type or '(describe the issue above)'}**")
             ec1, ec2 = st.columns(2)
             e_severity = ec1.selectbox(
                 "Severity", SEVERITIES,
@@ -301,11 +390,11 @@ else:
             e_notes = st.text_area("Notes", value=selected.notes or "", key=f"edit_obs_notes_{selected.id}")
             e_observed_at = st.date_input("Observed on", value=selected.observed_at or dt.date.today(), key=f"edit_obs_observed_{selected.id}")
             if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
-                if not e_type.strip():
+                if not e_type:
                     st.error("Issue type is required.")
                 else:
                     selected.trial_record_id = e_trial.id if e_trial else None
-                    selected.observation_type = e_type.strip()
+                    selected.observation_type = e_type
                     selected.severity = e_severity
                     selected.frequency = e_frequency
                     selected.location_in_block = e_location
