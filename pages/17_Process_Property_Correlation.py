@@ -101,13 +101,26 @@ if ranked_with_data.empty:
     )
     st.stop()
 
-st.subheader("All settings, ranked by association strength")
+st.subheader("All settings, ranked by correlation strength")
+# Ranked (in rank_setting_correlations, analytics.py) by |correlation|
+# descending - a strong negative correlation is just as significant an
+# association as a strong positive one, just in the opposite direction.
+# Shown here as its own "Strength" column (always positive, so it reads
+# as visibly highest-to-lowest top to bottom) alongside the signed
+# "Correlation" column for direction - a signed column alone made the
+# ranking look inconsistent at a glance (e.g. a strong negative value
+# appearing above a smaller positive one).
 display_ranked = ranked.copy()
-display_ranked["label"] = display_ranked["label"]
+display_ranked["strength"] = display_ranked["correlation"].abs().round(3)
 display_ranked = display_ranked.rename(
-    columns={"label": "Process setting", "n": "Runs compared", "correlation": "Correlation"}
-)[["Process setting", "Runs compared", "Correlation"]]
+    columns={"label": "Process setting", "n": "Runs compared", "strength": "Strength (|r|)", "correlation": "Correlation"}
+)[["Process setting", "Runs compared", "Strength (|r|)", "Correlation"]]
 render_data_table(display_ranked)
+st.caption(
+    "Ranked by strength (|r|) - the size of the association regardless of direction - so the "
+    "setting most worth investigating is always at the top, whether it moves this property up "
+    "or down. Correlation keeps the sign to show that direction."
+)
 
 top = ranked_with_data.iloc[0]
 direction = "positive" if top["correlation"] > 0 else "negative"
