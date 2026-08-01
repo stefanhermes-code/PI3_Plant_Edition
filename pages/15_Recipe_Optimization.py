@@ -242,8 +242,8 @@ st.caption(
     "recipe (not older versions - which version was running earlier doesn't matter here): did we "
     "achieve the required property, and if not, does the actual metered dosage of a raw material "
     "explain why. Pass/Fail per result is judged against the industry accepted tolerance for that "
-    "property (a fixed +/- amount in its own unit, not a percentage of target) - see the Tolerance "
-    "column below."
+    "property (a percentage of the target value, not a fixed amount in its own unit) - see the "
+    "Tolerance column below."
 )
 
 current_version_results = results_df[results_df["recipe_version_id"] == current_version.id]
@@ -375,28 +375,47 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
     st.caption(
         "Asks PI3 to propose a reformulation direction, using the cost, version-diff, and "
         "correlation data above as its basis rather than just the ingredient list. Target "
-        "properties below are prefilled from this grade's target density/hardness plus any other "
-        "target properties recorded on the Product Family & Foam Grade page - edit or add to them "
-        "before requesting a recommendation."
+        "properties below are prefilled from every property with a recorded target under the "
+        "current recipe (density, hardness, tensile strength, elongation, compression set, "
+        "resilience, and so on - see 'Does the current recipe meet target?' above), plus any "
+        "other target properties recorded on the Product Family & Foam Grade page that don't yet "
+        "have results - edit or add to them before requesting a recommendation."
     )
-    # Built from foam_grades' own structured fields rather than free text:
-    # target_density/target_hardness are dedicated columns every grade has,
-    # and any other target property (resilience, tensile strength, ...) comes
-    # from foam_grade_target_properties, entered on the Product Family & Foam
-    # Grade page. A property listed there with no target_value yet ("value
-    # not yet known") is still surfaced, just flagged as such.
-    default_targets = []
-    if grade.target_density is not None:
-        default_targets.append(f"Density {grade.target_density:g} kg/m3")
-    if grade.target_hardness is not None:
-        default_targets.append(f"Hardness (40% ILD) {grade.target_hardness:g} N")
+    # Built primarily from this recipe version's own recorded quality-test
+    # targets (expectation_summary, computed above for "Does the current
+    # recipe meet target?") - the actual target_value entered per result,
+    # for every property with results recorded under the CURRENT version,
+    # not just density/hardness. This is what changed: previously only
+    # target_density/target_hardness were surfaced here, so PI3 never saw
+    # the other tracked properties' targets (tensile strength, elongation,
+    # compression set, resilience) even though the app now records and
+    # judges Pass/Fail against published tolerances for all of them.
+    # Falls back to foam_grades' own target_density/target_hardness
+    # (dedicated columns every grade has) and foam_grade_target_properties
+    # (any other property recorded on the Product Family & Foam Grade page,
+    # entered with or without a target value yet) for anything not already
+    # covered by a recorded result under this version.
+    target_by_name = {}
+    if not expectation_summary.empty:
+        for _, row in expectation_summary.iterrows():
+            if pd.isna(row["avg_target"]):
+                continue
+            unit_suffix = f" {row['unit']}" if row["unit"] else ""
+            target_by_name[row["property_name"]] = f"{row['property_name']} {row['avg_target']:g}{unit_suffix}"
+    if grade.target_density is not None and "Density" not in target_by_name:
+        target_by_name["Density"] = f"Density {grade.target_density:g} kg/m3"
+    if grade.target_hardness is not None and "40% IFD / hardness" not in target_by_name:
+        target_by_name["40% IFD / hardness"] = f"Hardness (40% ILD) {grade.target_hardness:g} N"
     for tp in grade.target_properties:
+        if tp.property_name in target_by_name:
+            continue
         unit_suffix = f" {tp.unit}" if tp.unit else ""
         if tp.target_value is not None:
-            default_targets.append(f"{tp.property_name} {tp.target_value:g}{unit_suffix}")
+            target_by_name[tp.property_name] = f"{tp.property_name} {tp.target_value:g}{unit_suffix}"
         else:
             note_suffix = f" - {tp.notes}" if tp.notes else ""
-            default_targets.append(f"{tp.property_name} (target value not yet known{note_suffix})")
+            target_by_name[tp.property_name] = f"{tp.property_name} (target value not yet known{note_suffix})"
+    default_targets = list(target_by_name.values())
 
     target_properties = st.text_area(
         "Target properties",
