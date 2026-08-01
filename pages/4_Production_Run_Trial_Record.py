@@ -29,6 +29,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
+from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from cascades import delete_production_run_cascade, production_run_dependency_counts
 from db import (
@@ -67,6 +68,7 @@ from helpers import (
     render_function_action_intro,
     set_pending_banner,
     show_pending_banner,
+    view_only_notice,
 )
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company, plant_ids_for_company
 
@@ -221,6 +223,9 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+page_usable = can_use_page("production_run", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice()
 company, _all_companies = company_picker(
     st, session, user["is_platform_owner"], user["company_id"], key="prod_run_company_filter"
 )
@@ -342,8 +347,8 @@ with tab_runs:
                     notes = st.text_area(
                         "Notes", value=selected_run.notes or "", key=f"edit_run_notes_{selected_run.id}"
                     )
-                    save = st.form_submit_button("Save changes")
-                    if save:
+                    save = st.form_submit_button("Save changes", disabled=not page_usable)
+                    if save and page_usable:
                         if not recipe_version:
                             st.error("This foam grade has no recipe version yet — add one first.")
                         else:
@@ -373,10 +378,13 @@ with tab_runs:
                     _session.commit()
                     st.session_state.pop("pr_selected_run_id", None)
 
-                delete_with_confirm(
-                    f"Run #{selected_run.id}", _do_delete_run, key_prefix=f"run_{selected_run.id}",
-                    extra_warning=warning,
-                )
+                if page_usable:
+                    delete_with_confirm(
+                        f"Run #{selected_run.id}", _do_delete_run, key_prefix=f"run_{selected_run.id}",
+                        extra_warning=warning,
+                    )
+                else:
+                    st.caption("View-only access - deleting is restricted for your role.")
 
                 if st.button("Clear selection", key="clear_run_selection"):
                     st.session_state.pop("pr_selected_run_id", None)
@@ -421,8 +429,8 @@ with tab_runs:
                 operator = st.text_input("Operator / team reference")
                 notes = st.text_area("Notes")
 
-                submitted = st.form_submit_button("Save production run")
-                if submitted:
+                submitted = st.form_submit_button("Save production run", disabled=not page_usable)
+                if submitted and page_usable:
                     if not recipe_version:
                         st.error("This foam grade has no recipe version yet — add one first.")
                     else:
@@ -483,7 +491,7 @@ with tab_runs:
                     )
                     render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
-                if good_rows and st.button("Confirm import", key="confirm_run_import"):
+                if good_rows and st.button("Confirm import", key="confirm_run_import", disabled=not page_usable):
                     # Rows with an explicit batch_reference are deduped against
                     # what's already in the database, so re-clicking Confirm
                     # import (e.g. because the previous success message wasn't
@@ -660,8 +668,8 @@ with tab_phases:
                             "Phase notes", value=sel_phase.notes or "", key=f"edit_phase_notes_{sel_phase.id}"
                         )
 
-                        save = st.form_submit_button("Save changes")
-                        if save:
+                        save = st.form_submit_button("Save changes", disabled=not page_usable)
+                        if save and page_usable:
                             if phase_end < phase_start:
                                 st.error("Phase end must not be before phase start.")
                             else:
@@ -686,15 +694,18 @@ with tab_phases:
                         _delete_phase_cascade(_session, _phase)
                         st.session_state.pop("pr_selected_phase_id", None)
 
-                    delete_with_confirm(
-                        f"{sel_phase.phase_name} phase (Run #{run.id})", _do_delete_phase,
-                        key_prefix=f"phase_{sel_phase.id}",
-                        extra_warning=(
-                            "Deleting this phase also deletes its component stream readings and fall-plate "
-                            "section positions, and unlinks (does not delete) any production events that "
-                            "referenced it."
-                        ),
-                    )
+                    if page_usable:
+                        delete_with_confirm(
+                            f"{sel_phase.phase_name} phase (Run #{run.id})", _do_delete_phase,
+                            key_prefix=f"phase_{sel_phase.id}",
+                            extra_warning=(
+                                "Deleting this phase also deletes its component stream readings and fall-plate "
+                                "section positions, and unlinks (does not delete) any production events that "
+                                "referenced it."
+                            ),
+                        )
+                    else:
+                        st.caption("View-only access - deleting is restricted for your role.")
                 else:
                     st.caption("Click a row above to edit (and optionally delete) that phase.")
 
@@ -742,8 +753,8 @@ with tab_phases:
                 )
                 notes = st.text_area("Phase notes", key=f"new_phase_notes_{run.id}")
 
-                submitted = st.form_submit_button("Save phase")
-                if submitted:
+                submitted = st.form_submit_button("Save phase", disabled=not page_usable)
+                if submitted and page_usable:
                     if phase_end < phase_start:
                         st.error("Phase end must not be before phase start.")
                     else:
@@ -804,7 +815,7 @@ with tab_phases:
                             )
                             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
-                        if good_rows and st.button("Confirm import", key="confirm_phase_import"):
+                        if good_rows and st.button("Confirm import", key="confirm_phase_import", disabled=not page_usable):
                             for row in good_rows:
                                 session.add(
                                     ProductionPhase(
@@ -851,8 +862,8 @@ with tab_phases:
                         position_mm = c2.number_input("Position (mm above conveyor datum)", step=1.0)
                         angle_deg = st.number_input("Angle (degrees, optional)", step=0.5)
                         fp_notes = st.text_area("Notes", key=f"fp_notes_{run.id}")
-                        submitted = st.form_submit_button("Save section position")
-                        if submitted:
+                        submitted = st.form_submit_button("Save section position", disabled=not page_usable)
+                        if submitted and page_usable:
                             session.add(
                                 FallplateSectionPosition(
                                     production_phase_id=phase_for_fp.id,
@@ -915,7 +926,7 @@ with tab_phases:
                                     )
                                     render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
-                                if good_rows and st.button("Confirm import", key="confirm_fallplate_import"):
+                                if good_rows and st.button("Confirm import", key="confirm_fallplate_import", disabled=not page_usable):
                                     for row, phase_id in zip(good_rows, resolved_phase_ids):
                                         session.add(
                                             FallplateSectionPosition(
@@ -1083,8 +1094,8 @@ with tab_streams:
                                 "Notes", value=sel_stream.notes or "", key=f"edit_stream_notes_{sel_stream.id}"
                             )
 
-                            save = st.form_submit_button("Save changes")
-                            if save:
+                            save = st.form_submit_button("Save changes", disabled=not page_usable)
+                            if save and page_usable:
                                 if not stream_name.strip():
                                     st.error("Stream / raw material name is required.")
                                 else:
@@ -1108,10 +1119,13 @@ with tab_streams:
                             _session.commit()
                             st.session_state.pop("pr_selected_stream_id", None)
 
-                        delete_with_confirm(
-                            f"stream reading — {sel_stream.stream_name}", _do_delete_stream,
-                            key_prefix=f"stream_{sel_stream.id}",
-                        )
+                        if page_usable:
+                            delete_with_confirm(
+                                f"stream reading — {sel_stream.stream_name}", _do_delete_stream,
+                                key_prefix=f"stream_{sel_stream.id}",
+                            )
+                        else:
+                            st.caption("View-only access - deleting is restricted for your role.")
                     else:
                         st.caption("Click a row above to edit (and optionally delete) that stream reading.")
 
@@ -1153,8 +1167,8 @@ with tab_streams:
                     calibration_note = c6.text_input("Calibration note (e.g. cal. due date, certificate ref.)")
                     notes = st.text_area("Notes")
 
-                    submitted = st.form_submit_button("Save stream reading")
-                    if submitted:
+                    submitted = st.form_submit_button("Save stream reading", disabled=not page_usable)
+                    if submitted and page_usable:
                         final_stream_name = stream_other.strip() or (
                             stream_choice.raw_material_name if stream_choice else ""
                         )
@@ -1223,7 +1237,7 @@ with tab_streams:
                                 )
                                 render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
-                            if good_rows and st.button("Confirm import", key="confirm_stream_import"):
+                            if good_rows and st.button("Confirm import", key="confirm_stream_import", disabled=not page_usable):
                                 # Dedupe on (production_run_id, stream_name): a repeat click of
                                 # this button (e.g. because the previous success message wasn't
                                 # visibly persistent) must not double-insert the same material's
@@ -1356,8 +1370,8 @@ with tab_events:
                             "Action taken", value=sel_event.action_taken or "", key=f"edit_event_action_{sel_event.id}"
                         )
 
-                        save = st.form_submit_button("Save changes")
-                        if save:
+                        save = st.form_submit_button("Save changes", disabled=not page_usable)
+                        if save and page_usable:
                             sel_event.event_type = event_type
                             sel_event.severity = severity or None
                             sel_event.production_phase_id = phase.id if phase else None
@@ -1373,9 +1387,12 @@ with tab_events:
                         _session.commit()
                         st.session_state.pop("pr_selected_event_id", None)
 
-                    delete_with_confirm(
-                        f"event — {sel_event.event_type}", _do_delete_event, key_prefix=f"event_{sel_event.id}"
-                    )
+                    if page_usable:
+                        delete_with_confirm(
+                            f"event — {sel_event.event_type}", _do_delete_event, key_prefix=f"event_{sel_event.id}"
+                        )
+                    else:
+                        st.caption("View-only access - deleting is restricted for your role.")
                 else:
                     st.caption("Click a row above to edit (and optionally delete) that event.")
 
@@ -1392,8 +1409,8 @@ with tab_events:
                 description = st.text_area("Description")
                 action_taken = st.text_area("Action taken")
 
-                submitted = st.form_submit_button("Save event")
-                if submitted:
+                submitted = st.form_submit_button("Save event", disabled=not page_usable)
+                if submitted and page_usable:
                     session.add(
                         ProductionEvent(
                             production_run_id=run.id,
@@ -1456,7 +1473,7 @@ with tab_events:
                             )
                             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
-                        if good_rows and st.button("Confirm import", key="confirm_event_import"):
+                        if good_rows and st.button("Confirm import", key="confirm_event_import", disabled=not page_usable):
                             for row, phase_id in zip(good_rows, resolved_phase_ids):
                                 session.add(
                                     ProductionEvent(
@@ -1554,8 +1571,8 @@ with tab_runtime:
                             "Curing / cutting timing notes", value=sel_runtime.curing_notes or "",
                             key=f"edit_runtime_curing_{sel_runtime.id}",
                         )
-                        save = st.form_submit_button("Save changes")
-                        if save:
+                        save = st.form_submit_button("Save changes", disabled=not page_usable)
+                        if save and page_usable:
                             sel_runtime.line_speed = line_speed or None
                             sel_runtime.temperature_data = temperature_data
                             sel_runtime.pressure_data = pressure_data
@@ -1572,9 +1589,12 @@ with tab_runtime:
                         _session.commit()
                         st.session_state.pop("pr_selected_runtime_id", None)
 
-                    delete_with_confirm(
-                        "this runtime data record", _do_delete_runtime, key_prefix=f"runtime_{sel_runtime.id}"
-                    )
+                    if page_usable:
+                        delete_with_confirm(
+                            "this runtime data record", _do_delete_runtime, key_prefix=f"runtime_{sel_runtime.id}"
+                        )
+                    else:
+                        st.caption("View-only access - deleting is restricted for your role.")
                 else:
                     st.caption("Click a row above to edit (and optionally delete) that runtime data record.")
 
@@ -1588,8 +1608,8 @@ with tab_runtime:
                 pressure_data = st.text_input("Pressure data (where available)")
                 rise_time = st.number_input("Rise time (s)", min_value=0.0, step=1.0)
                 curing_notes = st.text_area("Curing / cutting timing notes")
-                submitted = st.form_submit_button("Save runtime data")
-                if submitted:
+                submitted = st.form_submit_button("Save runtime data", disabled=not page_usable)
+                if submitted and page_usable:
                     session.add(
                         RuntimeDataRecord(
                             production_run_id=run.id,
@@ -1640,7 +1660,7 @@ with tab_runtime:
                             st.warning("Flagged rows reference a production_run_id that does not exist and will be skipped.")
                             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
-                        if good_rows and st.button("Confirm import", key="confirm_runtime_import"):
+                        if good_rows and st.button("Confirm import", key="confirm_runtime_import", disabled=not page_usable):
                             for row in good_rows:
                                 session.add(
                                     RuntimeDataRecord(

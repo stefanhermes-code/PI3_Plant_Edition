@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 import ai_assistant
+from access_control import can_use_page
 from analytics import (
     PHASE_SETTING_LABELS,
     merged_run_property_dataframe,
@@ -18,7 +19,13 @@ from analytics import (
 )
 from auth import current_user, logout_button, require_login
 from db import FoamGrade, get_session, init_db
-from helpers import page_setup, render_data_table, render_function_action_intro, render_scatter_chart_no_zero
+from helpers import (
+    page_setup,
+    render_data_table,
+    render_function_action_intro,
+    render_scatter_chart_no_zero,
+    view_only_notice,
+)
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company
 
 page_setup("Machine Settings Optimization")
@@ -44,6 +51,9 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+page_usable = can_use_page("machine_settings_optimization", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice(action="using PI3")
 company, _all_companies = company_picker(
     st, session, user["is_platform_owner"], user["company_id"], key="mso_company_filter"
 )
@@ -189,7 +199,11 @@ else:
 if ai_assistant.is_enabled_for_plant(session, grade.product_family.plant_id if grade.product_family else None):
     st.divider()
     st.subheader("Ask PI3 to interpret this ranking")
-    if st.button("Get PI3 interpretation", key=f"ask_pi3_optimization_{grade.id}_{property_name}"):
+    if st.button(
+        "Get PI3 interpretation",
+        key=f"ask_pi3_optimization_{grade.id}_{property_name}",
+        disabled=not page_usable,
+    ):
         ranking_summary = "\n".join(
             (
                 f"- {r['label']}: best range {r['best_range']} ({r['best_range_setting']}), "

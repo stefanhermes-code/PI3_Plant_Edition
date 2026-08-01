@@ -9,6 +9,7 @@ closure still requires review + approval on the Approval & Review screen.
 
 import streamlit as st
 
+from access_control import can_use_page
 from db import CONFIDENCE_LEVELS, AdjustmentConclusion, TrialRecord, get_session, init_db
 from auth import current_user, logout_button, require_login
 from helpers import (
@@ -17,6 +18,7 @@ from helpers import (
     delete_with_confirm,
     page_setup,
     render_function_action_intro,
+    view_only_notice,
 )
 from tenant_scope import apply_scope, company_picker, run_ids_for_company
 
@@ -45,6 +47,9 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+page_usable = can_use_page("adjustment_conclusion", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice()
 company, _all_companies = company_picker(
     st, session, user["is_platform_owner"], user["company_id"], key="adj_company_filter"
 )
@@ -79,8 +84,8 @@ with st.form(f"add_adjustment_{trial.id}"):
     confidence_level = st.selectbox("Confidence level", CONFIDENCE_LEVELS, index=2)
     follow_up_required = st.checkbox("Follow-up required?")
     created_by = st.text_input("Logged by")
-    submitted = st.form_submit_button("Save adjustment")
-    if submitted:
+    submitted = st.form_submit_button("Save adjustment", disabled=not page_usable)
+    if submitted and page_usable:
         session.add(
             AdjustmentConclusion(
                 production_run_id=trial.production_run_id,
@@ -114,7 +119,7 @@ if trial.adjustment_conclusions:
     ]
     st.caption("Click a row to edit (and optionally delete) that adjustment.")
     idx = clickable_table(adj_rows, key=f"adj_table_{trial.id}")
-    if idx is not None:
+    if idx is not None and idx < len(trial.adjustment_conclusions):
         st.session_state["adj_selected_id"] = trial.adjustment_conclusions[idx].id
     else:
         st.session_state.pop("adj_selected_id", None)
@@ -150,7 +155,7 @@ if trial.adjustment_conclusions:
                 "Follow-up required?", value=selected_adj.follow_up_required, key=f"edit_adj_followup_{selected_adj.id}"
             )
             e_created_by = st.text_input("Logged by", value=selected_adj.created_by or "", key=f"edit_adj_by_{selected_adj.id}")
-            if st.form_submit_button("Save changes"):
+            if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
                 selected_adj.parameter_changed = e_parameter
                 selected_adj.formulation_changed = e_formulation_changed
                 selected_adj.material_changed = e_material_changed
@@ -168,10 +173,13 @@ if trial.adjustment_conclusions:
             _session.commit()
             st.session_state.pop("adj_selected_id", None)
 
-        delete_with_confirm(
-            "this adjustment", _do_delete_adj, key_prefix=f"adj_{selected_adj.id}",
-            extra_warning="This is a leaf record — deleting it has no other effects.",
-        )
+        if page_usable:
+            delete_with_confirm(
+                "this adjustment", _do_delete_adj, key_prefix=f"adj_{selected_adj.id}",
+                extra_warning="This is a leaf record — deleting it has no other effects.",
+            )
+        else:
+            st.caption("View-only access - deleting is restricted for your role.")
 
         if st.button("Clear selection", key="clear_adj_selection"):
             st.session_state.pop("adj_selected_id", None)
@@ -191,8 +199,8 @@ with st.form(f"closeout_{trial.id}"):
     )
     conclusion = st.text_area("Conclusion *", value=trial.conclusion or "")
     reuse_recommendation = st.text_area("Reuse recommendation *", value=trial.reuse_recommendation or "")
-    submitted = st.form_submit_button("Save closeout narrative")
-    if submitted:
+    submitted = st.form_submit_button("Save closeout narrative", disabled=not page_usable)
+    if submitted and page_usable:
         if not conclusion or not reuse_recommendation:
             st.error("Conclusion and reuse recommendation are both required.")
         else:

@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 import ai_assistant
+from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from db import RAW_MATERIAL_CATEGORIES, Company, RawMaterial, RecipeComponent, Supplier, get_session, init_db
 from helpers import (
@@ -22,6 +23,7 @@ from helpers import (
     render_function_action_intro,
     set_pending_banner,
     show_pending_banner,
+    view_only_notice,
 )
 
 
@@ -123,6 +125,9 @@ session = get_session()
 user = current_user()
 is_platform_owner = user["is_platform_owner"]
 own_company_id = user["company_id"]
+page_usable = can_use_page("raw_materials", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice()
 
 all_companies = session.query(Company).order_by(Company.name).all()
 if is_platform_owner:
@@ -156,207 +161,219 @@ tab_manual, tab_tds, tab_import, tab_suppliers = st.tabs(
 )
 
 with tab_manual:
-    manual_target_company = _target_company("add_rawmat_company")
-    add_supplier_choice = _supplier_picker(
-        session, manual_target_company.id if manual_target_company else None, key_prefix="add_rawmat"
-    )
-    with st.form("add_raw_material"):
-        name = st.text_input("Raw material name *")
-        c1, c3 = st.columns(2)
-        category = c1.selectbox("Category", RAW_MATERIAL_CATEGORIES)
-        cost_per_kg = c3.number_input(
-            "Cost per kg",
-            min_value=0.0,
-            step=0.01,
-            value=0.0,
-            help="Leave at 0 if not known yet - recipe cost calculations skip materials with no cost recorded "
-            "rather than treating them as free.",
+    if not page_usable:
+        st.caption("View-only access - adding a raw material is restricted for your role.")
+    else:
+        manual_target_company = _target_company("add_rawmat_company")
+        add_supplier_choice = _supplier_picker(
+            session, manual_target_company.id if manual_target_company else None, key_prefix="add_rawmat"
         )
-        notes = st.text_area("Notes")
-        active = st.checkbox("Active", value=True)
-        submitted = st.form_submit_button("Save raw material")
-        if submitted:
-            if not name.strip():
-                st.error("Raw material name is required.")
-            elif not manual_target_company:
-                st.error("Pick a company for this raw material.")
-            else:
-                _ensure_supplier_exists(session, manual_target_company.id, add_supplier_choice)
-                session.add(
-                    RawMaterial(
-                        company_id=manual_target_company.id,
-                        name=name.strip(),
-                        category=category,
-                        default_supplier=add_supplier_choice,
-                        cost_per_kg=cost_per_kg or None,
-                        notes=notes,
-                        active=active,
+        with st.form("add_raw_material"):
+            name = st.text_input("Raw material name *")
+            c1, c3 = st.columns(2)
+            category = c1.selectbox("Category", RAW_MATERIAL_CATEGORIES)
+            cost_per_kg = c3.number_input(
+                "Cost per kg",
+                min_value=0.0,
+                step=0.01,
+                value=0.0,
+                help="Leave at 0 if not known yet - recipe cost calculations skip materials with no cost recorded "
+                "rather than treating them as free.",
+            )
+            notes = st.text_area("Notes")
+            active = st.checkbox("Active", value=True)
+            submitted = st.form_submit_button("Save raw material")
+            if submitted:
+                if not name.strip():
+                    st.error("Raw material name is required.")
+                elif not manual_target_company:
+                    st.error("Pick a company for this raw material.")
+                else:
+                    _ensure_supplier_exists(session, manual_target_company.id, add_supplier_choice)
+                    session.add(
+                        RawMaterial(
+                            company_id=manual_target_company.id,
+                            name=name.strip(),
+                            category=category,
+                            default_supplier=add_supplier_choice,
+                            cost_per_kg=cost_per_kg or None,
+                            notes=notes,
+                            active=active,
+                        )
                     )
-                )
-                session.commit()
-                st.success(f"Raw material '{name}' added.")
-                st.rerun()
+                    session.commit()
+                    st.success(f"Raw material '{name}' added.")
+                    st.rerun()
 
 with tab_tds:
-    st.caption(
-        "Upload a supplier technical data sheet (TDS) to prefill the fields below instead of "
-        "retyping them. An SDS is optional and only adds handling/hazard notes."
-    )
-    tds_file = st.file_uploader("Technical data sheet (PDF) *", type=["pdf"], key="tds_upload")
-    sds_file = st.file_uploader("Safety data sheet (PDF, optional)", type=["pdf"], key="sds_upload")
-
-    if tds_file is not None:
-        if st.button("Extract from document(s)", key="extract_tds_btn"):
-            tds_text = _extract_pdf_text(tds_file)
-            sds_text = _extract_pdf_text(sds_file) if sds_file is not None else None
-            if not tds_text.strip():
-                st.warning(
-                    "Could not read any text from this PDF (it may be a scanned image). "
-                    "Use Manual entry instead."
-                )
-            elif ai_assistant.openai_key_configured():
-                with st.spinner("Using PI3 to read the document..."):
-                    extracted = ai_assistant.extract_raw_material_from_tds(tds_text, sds_text)
-                if extracted:
-                    st.session_state["tds_extracted"] = extracted
-                    st.success("Extracted - review and adjust the fields below, then save.")
-            else:
-                # No OpenAI key configured: hand the operator the raw text to
-                # copy from by hand rather than offering a feature that can't run.
-                st.session_state["tds_extracted"] = {
-                    "name": "",
-                    "category": "",
-                    "default_supplier": "",
-                    "notes": tds_text[:2000],
-                }
-                st.info(
-                    "PI3 isn't configured on this deployment, so fields can't be auto-filled. "
-                    "The extracted document text is in Notes below for you to copy from."
-                )
-
-    tds_extracted = st.session_state.get("tds_extracted", {})
-    tds_target_company = _target_company("tds_rawmat_company")
-    t_supplier = _supplier_picker(
-        session, tds_target_company.id if tds_target_company else None,
-        key_prefix="tds_rawmat", current_value=tds_extracted.get("default_supplier", ""),
-    )
-    with st.form("add_raw_material_from_tds"):
-        t_name = st.text_input("Raw material name *", value=tds_extracted.get("name", ""))
-        tds_category = tds_extracted.get("category", "")
-        t_category = st.selectbox(
-            "Category",
-            RAW_MATERIAL_CATEGORIES,
-            index=RAW_MATERIAL_CATEGORIES.index(tds_category) if tds_category in RAW_MATERIAL_CATEGORIES else 0,
+    if not page_usable:
+        st.caption("View-only access - adding a raw material is restricted for your role.")
+    else:
+        st.caption(
+            "Upload a supplier technical data sheet (TDS) to prefill the fields below instead of "
+            "retyping them. An SDS is optional and only adds handling/hazard notes."
         )
-        t_cost = st.number_input(
-            "Cost per kg",
-            min_value=0.0,
-            step=0.01,
-            value=0.0,
-            help="A TDS doesn't carry pricing - enter it here if you know it, or leave at 0 and add it later.",
-        )
-        t_notes = st.text_area("Notes", value=tds_extracted.get("notes", ""), height=150)
-        t_active = st.checkbox("Active", value=True, key="tds_active")
-        if st.form_submit_button("Save raw material (from TDS)"):
-            if not t_name.strip():
-                st.error("Raw material name is required.")
-            elif not tds_target_company:
-                st.error("Pick a company for this raw material.")
-            else:
-                _ensure_supplier_exists(session, tds_target_company.id, t_supplier)
-                session.add(
-                    RawMaterial(
-                        company_id=tds_target_company.id,
-                        name=t_name.strip(),
-                        category=t_category,
-                        default_supplier=t_supplier,
-                        cost_per_kg=t_cost or None,
-                        notes=t_notes,
-                        active=t_active,
+        tds_file = st.file_uploader("Technical data sheet (PDF) *", type=["pdf"], key="tds_upload")
+        sds_file = st.file_uploader("Safety data sheet (PDF, optional)", type=["pdf"], key="sds_upload")
+
+        if tds_file is not None:
+            if st.button("Extract from document(s)", key="extract_tds_btn"):
+                tds_text = _extract_pdf_text(tds_file)
+                sds_text = _extract_pdf_text(sds_file) if sds_file is not None else None
+                if not tds_text.strip():
+                    st.warning(
+                        "Could not read any text from this PDF (it may be a scanned image). "
+                        "Use Manual entry instead."
                     )
-                )
-                session.commit()
-                st.session_state.pop("tds_extracted", None)
-                st.success(f"Raw material '{t_name}' added.")
-                st.rerun()
+                elif ai_assistant.openai_key_configured():
+                    with st.spinner("Using PI3 to read the document..."):
+                        extracted = ai_assistant.extract_raw_material_from_tds(tds_text, sds_text)
+                    if extracted:
+                        st.session_state["tds_extracted"] = extracted
+                        st.success("Extracted - review and adjust the fields below, then save.")
+                else:
+                    # No OpenAI key configured: hand the operator the raw text to
+                    # copy from by hand rather than offering a feature that can't run.
+                    st.session_state["tds_extracted"] = {
+                        "name": "",
+                        "category": "",
+                        "default_supplier": "",
+                        "notes": tds_text[:2000],
+                    }
+                    st.info(
+                        "PI3 isn't configured on this deployment, so fields can't be auto-filled. "
+                        "The extracted document text is in Notes below for you to copy from."
+                    )
+
+        tds_extracted = st.session_state.get("tds_extracted", {})
+        tds_target_company = _target_company("tds_rawmat_company")
+        t_supplier = _supplier_picker(
+            session, tds_target_company.id if tds_target_company else None,
+            key_prefix="tds_rawmat", current_value=tds_extracted.get("default_supplier", ""),
+        )
+        with st.form("add_raw_material_from_tds"):
+            t_name = st.text_input("Raw material name *", value=tds_extracted.get("name", ""))
+            tds_category = tds_extracted.get("category", "")
+            t_category = st.selectbox(
+                "Category",
+                RAW_MATERIAL_CATEGORIES,
+                index=RAW_MATERIAL_CATEGORIES.index(tds_category) if tds_category in RAW_MATERIAL_CATEGORIES else 0,
+            )
+            t_cost = st.number_input(
+                "Cost per kg",
+                min_value=0.0,
+                step=0.01,
+                value=0.0,
+                help="A TDS doesn't carry pricing - enter it here if you know it, or leave at 0 and add it later.",
+            )
+            t_notes = st.text_area("Notes", value=tds_extracted.get("notes", ""), height=150)
+            t_active = st.checkbox("Active", value=True, key="tds_active")
+            if st.form_submit_button("Save raw material (from TDS)"):
+                if not t_name.strip():
+                    st.error("Raw material name is required.")
+                elif not tds_target_company:
+                    st.error("Pick a company for this raw material.")
+                else:
+                    _ensure_supplier_exists(session, tds_target_company.id, t_supplier)
+                    session.add(
+                        RawMaterial(
+                            company_id=tds_target_company.id,
+                            name=t_name.strip(),
+                            category=t_category,
+                            default_supplier=t_supplier,
+                            cost_per_kg=t_cost or None,
+                            notes=t_notes,
+                            active=t_active,
+                        )
+                    )
+                    session.commit()
+                    st.session_state.pop("tds_extracted", None)
+                    st.success(f"Raw material '{t_name}' added.")
+                    st.rerun()
 
 with tab_import:
-    import_target_company = _target_company("import_rawmat_company")
-    show_pending_banner("rawmat_import_msg")
-    df, filename = csv_excel_uploader(RAW_MATERIAL_REQUIRED_COLUMNS, RAW_MATERIAL_OPTIONAL_COLUMNS, key="rawmat_upload")
-    if df is not None and not import_target_company:
-        st.error("Pick a company above before importing.")
-    elif df is not None:
-        existing_query = session.query(RawMaterial).filter(RawMaterial.company_id == import_target_company.id)
-        existing_names = {m.name.strip().lower() for m in existing_query.all()}
-        good_rows, dup_rows = [], []
-        for _, row in df.iterrows():
-            name_val = str(row.get("name", "") or "").strip()
-            if not name_val:
-                continue
-            if name_val.lower() in existing_names:
-                dup_rows.append(row)
-            else:
-                good_rows.append(row)
-                existing_names.add(name_val.lower())
+    if not page_usable:
+        st.caption("View-only access - importing raw materials is restricted for your role.")
+    else:
+        import_target_company = _target_company("import_rawmat_company")
+        show_pending_banner("rawmat_import_msg")
+        df, filename = csv_excel_uploader(RAW_MATERIAL_REQUIRED_COLUMNS, RAW_MATERIAL_OPTIONAL_COLUMNS, key="rawmat_upload")
+        if df is not None and not import_target_company:
+            st.error("Pick a company above before importing.")
+        elif df is not None:
+            existing_query = session.query(RawMaterial).filter(RawMaterial.company_id == import_target_company.id)
+            existing_names = {m.name.strip().lower() for m in existing_query.all()}
+            good_rows, dup_rows = [], []
+            for _, row in df.iterrows():
+                name_val = str(row.get("name", "") or "").strip()
+                if not name_val:
+                    continue
+                if name_val.lower() in existing_names:
+                    dup_rows.append(row)
+                else:
+                    good_rows.append(row)
+                    existing_names.add(name_val.lower())
 
-        st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged as duplicates: **{len(dup_rows)}**")
-        if dup_rows:
-            st.warning("These rows match a raw material name already in the list and were skipped.")
-            render_data_table(pd.DataFrame(dup_rows), max_height="400px")
+            st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged as duplicates: **{len(dup_rows)}**")
+            if dup_rows:
+                st.warning("These rows match a raw material name already in the list and were skipped.")
+                render_data_table(pd.DataFrame(dup_rows), max_height="400px")
 
-        if good_rows and st.button("Confirm import", key="confirm_rawmat_import"):
-            for row in good_rows:
-                cat = str(row.get("category", "") or "").strip()
-                cost_val = row.get("cost_per_kg")
-                supplier_val = str(row.get("default_supplier", "") or "").strip()
-                _ensure_supplier_exists(session, import_target_company.id, supplier_val)
-                session.add(
-                    RawMaterial(
-                        company_id=import_target_company.id,
-                        name=str(row["name"]).strip(),
-                        category=cat if cat in RAW_MATERIAL_CATEGORIES else (cat or "Other"),
-                        default_supplier=supplier_val,
-                        cost_per_kg=float(cost_val) if not pd.isna(cost_val) else None,
-                        notes=str(row.get("notes", "") or ""),
-                        active=True if pd.isna(row.get("active")) else parse_bool(row.get("active")),
+            if good_rows and st.button("Confirm import", key="confirm_rawmat_import"):
+                for row in good_rows:
+                    cat = str(row.get("category", "") or "").strip()
+                    cost_val = row.get("cost_per_kg")
+                    supplier_val = str(row.get("default_supplier", "") or "").strip()
+                    _ensure_supplier_exists(session, import_target_company.id, supplier_val)
+                    session.add(
+                        RawMaterial(
+                            company_id=import_target_company.id,
+                            name=str(row["name"]).strip(),
+                            category=cat if cat in RAW_MATERIAL_CATEGORIES else (cat or "Other"),
+                            default_supplier=supplier_val,
+                            cost_per_kg=float(cost_val) if not pd.isna(cost_val) else None,
+                            notes=str(row.get("notes", "") or ""),
+                            active=True if pd.isna(row.get("active")) else parse_bool(row.get("active")),
+                        )
                     )
-                )
-            session.commit()
-            set_pending_banner("rawmat_import_msg", f"Imported {len(good_rows)} raw material(s) from {filename}.")
-            st.rerun()
+                session.commit()
+                set_pending_banner("rawmat_import_msg", f"Imported {len(good_rows)} raw material(s) from {filename}.")
+                st.rerun()
 
 with tab_suppliers:
     st.caption(
         "Master list of suppliers offered in the 'Default supplier' dropdown above. Keeping this list "
         "curated avoids near-duplicate entries (e.g. 'Jiahua' vs a mistyped 'Yiahua') across raw materials."
     )
-    supplier_target_company = _target_company("add_supplier_company")
-    with st.form("add_supplier"):
-        new_supplier_name = st.text_input("Supplier name *")
-        new_supplier_notes = st.text_area("Notes", help="Optional - e.g. the actual distributor purchases go through.")
-        if st.form_submit_button("Add supplier"):
-            if not new_supplier_name.strip():
-                st.error("Supplier name is required.")
-            elif not supplier_target_company:
-                st.error("Pick a company for this supplier.")
-            elif (
-                session.query(Supplier)
-                .filter(Supplier.name == new_supplier_name.strip(), Supplier.company_id == supplier_target_company.id)
-                .first()
-            ):
-                st.error(f"'{new_supplier_name.strip()}' is already in the list.")
-            else:
-                session.add(
-                    Supplier(
-                        company_id=supplier_target_company.id,
-                        name=new_supplier_name.strip(),
-                        notes=new_supplier_notes,
+    if not page_usable:
+        st.caption("View-only access - adding a supplier is restricted for your role.")
+    else:
+        supplier_target_company = _target_company("add_supplier_company")
+        with st.form("add_supplier"):
+            new_supplier_name = st.text_input("Supplier name *")
+            new_supplier_notes = st.text_area("Notes", help="Optional - e.g. the actual distributor purchases go through.")
+            if st.form_submit_button("Add supplier"):
+                if not new_supplier_name.strip():
+                    st.error("Supplier name is required.")
+                elif not supplier_target_company:
+                    st.error("Pick a company for this supplier.")
+                elif (
+                    session.query(Supplier)
+                    .filter(Supplier.name == new_supplier_name.strip(), Supplier.company_id == supplier_target_company.id)
+                    .first()
+                ):
+                    st.error(f"'{new_supplier_name.strip()}' is already in the list.")
+                else:
+                    session.add(
+                        Supplier(
+                            company_id=supplier_target_company.id,
+                            name=new_supplier_name.strip(),
+                            notes=new_supplier_notes,
+                        )
                     )
-                )
-                session.commit()
-                st.success(f"Supplier '{new_supplier_name}' added.")
-                st.rerun()
+                    session.commit()
+                    st.success(f"Supplier '{new_supplier_name}' added.")
+                    st.rerun()
 
     st.divider()
     suppliers_query = session.query(Supplier)
@@ -379,7 +396,7 @@ with tab_suppliers:
         )
         st.caption(f"{len(suppliers)} supplier(s). Click a row to edit or delete.")
         sidx = clickable_table(supplier_df.to_dict("records"), key="supplier_table")
-        if sidx is not None:
+        if sidx is not None and sidx < len(suppliers):
             st.session_state["supplier_selected_id"] = suppliers[sidx].id
         else:
             st.session_state.pop("supplier_selected_id", None)
@@ -389,65 +406,68 @@ with tab_suppliers:
 
         if sel_supplier:
             st.subheader(f"Edit: {sel_supplier.name}")
-            with st.form(f"edit_supplier_{sel_supplier.id}"):
-                if is_platform_owner:
-                    es_company = st.selectbox(
-                        "Company *", all_companies,
-                        index=next((i for i, c in enumerate(all_companies) if c.id == sel_supplier.company_id), 0),
-                        format_func=lambda c: c.name, key=f"edit_supplier_company_{sel_supplier.id}",
+            if not page_usable:
+                st.caption("View-only access - editing and deleting is restricted for your role.")
+            else:
+                with st.form(f"edit_supplier_{sel_supplier.id}"):
+                    if is_platform_owner:
+                        es_company = st.selectbox(
+                            "Company *", all_companies,
+                            index=next((i for i, c in enumerate(all_companies) if c.id == sel_supplier.company_id), 0),
+                            format_func=lambda c: c.name, key=f"edit_supplier_company_{sel_supplier.id}",
+                        )
+                    else:
+                        es_company = company_filter
+                    es_name = st.text_input("Supplier name *", value=sel_supplier.name, key=f"edit_supplier_name_{sel_supplier.id}")
+                    es_notes = st.text_area("Notes", value=sel_supplier.notes or "", key=f"edit_supplier_notes_{sel_supplier.id}")
+                    es_active = st.checkbox("Active", value=sel_supplier.active, key=f"edit_supplier_active_{sel_supplier.id}")
+                    if st.form_submit_button("Save changes"):
+                        if not es_name.strip():
+                            st.error("Supplier name is required.")
+                        else:
+                            old_name = sel_supplier.name
+                            old_company_id = sel_supplier.company_id
+                            sel_supplier.company_id = es_company.id if es_company else sel_supplier.company_id
+                            sel_supplier.name = es_name.strip()
+                            sel_supplier.notes = es_notes
+                            sel_supplier.active = es_active
+                            if old_name != sel_supplier.name:
+                                # Keep existing raw materials (same company) pointed
+                                # at this supplier consistent with the rename, since
+                                # default_supplier is a text snapshot, not an FK.
+                                session.query(RawMaterial).filter(
+                                    RawMaterial.default_supplier == old_name,
+                                    RawMaterial.company_id == old_company_id,
+                                ).update({"default_supplier": sel_supplier.name}, synchronize_session="fetch")
+                            session.commit()
+                            st.success("Supplier updated.")
+                            st.rerun()
+
+                linked_rawmats = (
+                    session.query(RawMaterial)
+                    .filter(
+                        RawMaterial.default_supplier == sel_supplier.name,
+                        RawMaterial.company_id == sel_supplier.company_id,
+                    )
+                    .count()
+                )
+                if linked_rawmats:
+                    warning = (
+                        f"{linked_rawmats} raw material(s) currently list this as their default supplier. "
+                        "Deleting it only removes it from the dropdown - those raw materials keep the supplier "
+                        "name as free text."
                     )
                 else:
-                    es_company = company_filter
-                es_name = st.text_input("Supplier name *", value=sel_supplier.name, key=f"edit_supplier_name_{sel_supplier.id}")
-                es_notes = st.text_area("Notes", value=sel_supplier.notes or "", key=f"edit_supplier_notes_{sel_supplier.id}")
-                es_active = st.checkbox("Active", value=sel_supplier.active, key=f"edit_supplier_active_{sel_supplier.id}")
-                if st.form_submit_button("Save changes"):
-                    if not es_name.strip():
-                        st.error("Supplier name is required.")
-                    else:
-                        old_name = sel_supplier.name
-                        old_company_id = sel_supplier.company_id
-                        sel_supplier.company_id = es_company.id if es_company else sel_supplier.company_id
-                        sel_supplier.name = es_name.strip()
-                        sel_supplier.notes = es_notes
-                        sel_supplier.active = es_active
-                        if old_name != sel_supplier.name:
-                            # Keep existing raw materials (same company) pointed
-                            # at this supplier consistent with the rename, since
-                            # default_supplier is a text snapshot, not an FK.
-                            session.query(RawMaterial).filter(
-                                RawMaterial.default_supplier == old_name,
-                                RawMaterial.company_id == old_company_id,
-                            ).update({"default_supplier": sel_supplier.name}, synchronize_session="fetch")
-                        session.commit()
-                        st.success("Supplier updated.")
-                        st.rerun()
+                    warning = "No raw materials currently use this supplier - deleting it is safe."
 
-            linked_rawmats = (
-                session.query(RawMaterial)
-                .filter(
-                    RawMaterial.default_supplier == sel_supplier.name,
-                    RawMaterial.company_id == sel_supplier.company_id,
+                def _do_delete_supplier(_session=session, _id=sel_supplier.id):
+                    _session.query(Supplier).filter(Supplier.id == _id).delete(synchronize_session=False)
+                    _session.commit()
+                    st.session_state.pop("supplier_selected_id", None)
+
+                delete_with_confirm(
+                    sel_supplier.name, _do_delete_supplier, key_prefix=f"supplier_{sel_supplier.id}", extra_warning=warning
                 )
-                .count()
-            )
-            if linked_rawmats:
-                warning = (
-                    f"{linked_rawmats} raw material(s) currently list this as their default supplier. "
-                    "Deleting it only removes it from the dropdown - those raw materials keep the supplier "
-                    "name as free text."
-                )
-            else:
-                warning = "No raw materials currently use this supplier - deleting it is safe."
-
-            def _do_delete_supplier(_session=session, _id=sel_supplier.id):
-                _session.query(Supplier).filter(Supplier.id == _id).delete(synchronize_session=False)
-                _session.commit()
-                st.session_state.pop("supplier_selected_id", None)
-
-            delete_with_confirm(
-                sel_supplier.name, _do_delete_supplier, key_prefix=f"supplier_{sel_supplier.id}", extra_warning=warning
-            )
 
             if st.button("Clear selection", key="clear_supplier_selection"):
                 st.session_state.pop("supplier_selected_id", None)
@@ -510,7 +530,7 @@ else:
         "Click a row to edit (and optionally delete) that material."
     )
     idx = clickable_table(filtered_df.to_dict("records"), key="rawmat_table")
-    if idx is not None:
+    if idx is not None and idx < len(filtered_materials):
         st.session_state["rawmat_selected_id"] = filtered_materials[idx].id
     else:
         st.session_state.pop("rawmat_selected_id", None)
@@ -521,75 +541,77 @@ else:
     if selected:
         st.divider()
         st.subheader(f"Edit: {selected.name}")
-        e_supplier = _supplier_picker(
-            session, selected.company_id, key_prefix=f"edit_rawmat_{selected.id}",
-            current_value=selected.default_supplier or "",
-        )
-        with st.form(f"edit_rawmat_{selected.id}"):
-            if is_platform_owner:
-                e_company = st.selectbox(
-                    "Company *", all_companies,
-                    index=next((i for i, c in enumerate(all_companies) if c.id == selected.company_id), 0),
-                    format_func=lambda c: c.name, key=f"edit_rawmat_company_{selected.id}",
+        if not page_usable:
+            st.caption("View-only access - editing and deleting is restricted for your role.")
+        else:
+            e_supplier = _supplier_picker(
+                session, selected.company_id, key_prefix=f"edit_rawmat_{selected.id}",
+                current_value=selected.default_supplier or "",
+            )
+            with st.form(f"edit_rawmat_{selected.id}"):
+                if is_platform_owner:
+                    e_company = st.selectbox(
+                        "Company *", all_companies,
+                        index=next((i for i, c in enumerate(all_companies) if c.id == selected.company_id), 0),
+                        format_func=lambda c: c.name, key=f"edit_rawmat_company_{selected.id}",
+                    )
+                else:
+                    e_company = company_filter
+                e_name = st.text_input("Raw material name *", value=selected.name, key=f"edit_rawmat_name_{selected.id}")
+                ec1, ec2 = st.columns(2)
+                e_category = ec1.selectbox(
+                    "Category",
+                    RAW_MATERIAL_CATEGORIES,
+                    index=RAW_MATERIAL_CATEGORIES.index(selected.category) if selected.category in RAW_MATERIAL_CATEGORIES else 0,
+                    key=f"edit_rawmat_category_{selected.id}",
+                )
+                e_cost = ec2.number_input(
+                    "Cost per kg", min_value=0.0, step=0.01, value=float(selected.cost_per_kg or 0.0),
+                    key=f"edit_rawmat_cost_{selected.id}",
+                )
+                e_notes = st.text_area("Notes", value=selected.notes or "", key=f"edit_rawmat_notes_{selected.id}")
+                e_active = st.checkbox("Active", value=selected.active, key=f"edit_rawmat_active_{selected.id}")
+                if st.form_submit_button("Save changes"):
+                    if not e_name.strip():
+                        st.error("Raw material name is required.")
+                    else:
+                        target_company_id = e_company.id if e_company else selected.company_id
+                        _ensure_supplier_exists(session, target_company_id, e_supplier)
+                        selected.company_id = target_company_id
+                        selected.name = e_name.strip()
+                        selected.category = e_category
+                        selected.default_supplier = e_supplier
+                        selected.cost_per_kg = e_cost or None
+                        selected.notes = e_notes
+                        selected.active = e_active
+                        session.commit()
+                        st.success("Raw material updated.")
+                        st.rerun()
+
+            linked_components = (
+                session.query(RecipeComponent).filter(RecipeComponent.raw_material_id == selected.id).count()
+            )
+            if linked_components:
+                warning = (
+                    f"{linked_components} recipe component(s) reference this raw material. Deleting it will unlink "
+                    "them (their component name/role stays, but the raw-material link is cleared) rather than "
+                    "deleting those recipe components."
                 )
             else:
-                e_company = company_filter
-            e_name = st.text_input("Raw material name *", value=selected.name, key=f"edit_rawmat_name_{selected.id}")
-            ec1, ec2 = st.columns(2)
-            e_category = ec1.selectbox(
-                "Category",
-                RAW_MATERIAL_CATEGORIES,
-                index=RAW_MATERIAL_CATEGORIES.index(selected.category) if selected.category in RAW_MATERIAL_CATEGORIES else 0,
-                key=f"edit_rawmat_category_{selected.id}",
-            )
-            e_cost = ec2.number_input(
-                "Cost per kg", min_value=0.0, step=0.01, value=float(selected.cost_per_kg or 0.0),
-                key=f"edit_rawmat_cost_{selected.id}",
-            )
-            e_notes = st.text_area("Notes", value=selected.notes or "", key=f"edit_rawmat_notes_{selected.id}")
-            e_active = st.checkbox("Active", value=selected.active, key=f"edit_rawmat_active_{selected.id}")
-            if st.form_submit_button("Save changes"):
-                if not e_name.strip():
-                    st.error("Raw material name is required.")
-                else:
-                    target_company_id = e_company.id if e_company else selected.company_id
-                    _ensure_supplier_exists(session, target_company_id, e_supplier)
-                    selected.company_id = target_company_id
-                    selected.name = e_name.strip()
-                    selected.category = e_category
-                    selected.default_supplier = e_supplier
-                    selected.cost_per_kg = e_cost or None
-                    selected.notes = e_notes
-                    selected.active = e_active
-                    session.commit()
-                    st.success("Raw material updated.")
-                    st.rerun()
+                warning = "No recipe components reference this raw material — deleting it is safe."
 
-        linked_components = (
-            session.query(RecipeComponent).filter(RecipeComponent.raw_material_id == selected.id).count()
-        )
-        if linked_components:
-            warning = (
-                f"{linked_components} recipe component(s) reference this raw material. Deleting it will unlink "
-                "them (their component name/role stays, but the raw-material link is cleared) rather than "
-                "deleting those recipe components."
-            )
-        else:
-            warning = "No recipe components reference this raw material — deleting it is safe."
+            def _do_delete_rawmat(_session=session, _id=selected.id):
+                _session.query(RecipeComponent).filter(RecipeComponent.raw_material_id == _id).update(
+                    {"raw_material_id": None}, synchronize_session="fetch"
+                )
+                _session.query(RawMaterial).filter(RawMaterial.id == _id).delete(synchronize_session=False)
+                _session.commit()
+                st.session_state.pop("rawmat_selected_id", None)
 
-        def _do_delete_rawmat(_session=session, _id=selected.id):
-            _session.query(RecipeComponent).filter(RecipeComponent.raw_material_id == _id).update(
-                {"raw_material_id": None}, synchronize_session="fetch"
+            delete_with_confirm(
+                selected.name, _do_delete_rawmat, key_prefix=f"rawmat_{selected.id}", extra_warning=warning
             )
-            _session.query(RawMaterial).filter(RawMaterial.id == _id).delete(synchronize_session=False)
-            _session.commit()
-            st.session_state.pop("rawmat_selected_id", None)
-
-        delete_with_confirm(
-            selected.name, _do_delete_rawmat, key_prefix=f"rawmat_{selected.id}", extra_warning=warning
-        )
 
         if st.button("Clear selection", key="clear_rawmat_selection"):
             st.session_state.pop("rawmat_selected_id", None)
             st.rerun()
-

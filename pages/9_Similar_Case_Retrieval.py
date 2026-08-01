@@ -13,6 +13,7 @@ conditions, and target properties.").
 import streamlit as st
 
 import ai_assistant
+from access_control import can_use_page
 from db import (
     FoamGrade,
     ProductFamily,
@@ -23,7 +24,7 @@ from db import (
     init_db,
 )
 from auth import current_user, logout_button, require_login
-from helpers import confidence_badge, page_setup, render_function_action_intro
+from helpers import confidence_badge, page_setup, render_function_action_intro, view_only_notice
 from tenant_scope import (
     apply_scope,
     company_picker,
@@ -60,6 +61,9 @@ st.info(
 )
 session = get_session()
 user = current_user()
+page_usable = can_use_page("similar_case_retrieval", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice(action="using PI3 and saving similar-case links")
 company, _all_companies = company_picker(
     st, session, user["is_platform_owner"], user["company_id"], key="scr_company_filter"
 )
@@ -91,6 +95,7 @@ ask_ai = False
 if ai_available:
     ask_ai = st.checkbox(
         "Also use PI3 (semantic search over expert notes & closed-case history)",
+        disabled=not page_usable,
         help=(
             "Uses PI3 to search beyond exact keyword matches — it can surface relevant "
             "expert notes and past cases even when the wording differs. Optional, "
@@ -126,7 +131,7 @@ if st.button("Search similar cases", type="primary"):
     results = [t for t in trials if matches(t)]
     st.session_state["similar_case_results"] = [t.id for t in results]
 
-    if ask_ai and ai_available:
+    if ask_ai and ai_available and page_usable:
         prompt = (
             "You are helping a technical reviewer at a flexible slabstock foam "
             "manufacturer find similar historical cases for their own review. Search "
@@ -211,8 +216,8 @@ if len(closed_trials) >= 2:
         )
         similarity_basis = st.text_input("Similarity basis (e.g. foam grade, issue type, recipe version)")
         notes = st.text_area("Notes")
-        submitted = st.form_submit_button("Save link")
-        if submitted:
+        submitted = st.form_submit_button("Save link", disabled=not page_usable)
+        if submitted and page_usable:
             if source.id == target.id:
                 st.error("Choose two different trials.")
             else:

@@ -14,6 +14,7 @@ but always belongs to a production run first and foremost.
 
 import streamlit as st
 
+from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from db import (
     AdjustmentConclusion,
@@ -25,7 +26,13 @@ from db import (
     get_session,
     init_db,
 )
-from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
+from helpers import (
+    clickable_table,
+    delete_with_confirm,
+    page_setup,
+    render_function_action_intro,
+    view_only_notice,
+)
 from tenant_scope import apply_scope, company_picker, run_ids_for_company
 
 page_setup("Trial / Experiment")
@@ -51,6 +58,9 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+page_usable = can_use_page("trial_experiment", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice()
 company, _all_companies = company_picker(
     st, session, user["is_platform_owner"], user["company_id"], key="trial_company_filter"
 )
@@ -77,8 +87,8 @@ with st.expander("Flag a run as a trial / experiment", expanded=False):
         hypothesis = st.text_area("Hypothesis")
         what_changed = st.text_area("What changed vs. baseline")
         responsible_person = st.text_input("Responsible person")
-        submitted = st.form_submit_button("Save trial")
-        if submitted:
+        submitted = st.form_submit_button("Save trial", disabled=not page_usable)
+        if submitted and page_usable:
             if not objective:
                 st.error("Trial objective is required.")
             else:
@@ -125,7 +135,7 @@ else:
     ]
     st.caption("Click a row to edit (and optionally delete) that trial.")
     idx = clickable_table(trial_rows, key="trials_table")
-    if idx is not None:
+    if idx is not None and idx < len(trials):
         st.session_state["trial_selected_id"] = trials[idx].id
     else:
         st.session_state.pop("trial_selected_id", None)
@@ -162,7 +172,7 @@ else:
             e_responsible = st.text_input(
                 "Responsible person", value=selected_trial.responsible_person or "", key=f"edit_trial_resp_{selected_trial.id}"
             )
-            if st.form_submit_button("Save changes"):
+            if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
                 if not e_objective.strip():
                     st.error("Trial objective is required.")
                 else:
@@ -207,10 +217,13 @@ else:
             _session.commit()
             st.session_state.pop("trial_selected_id", None)
 
-        delete_with_confirm(
-            f"Trial #{selected_trial.id}", _do_delete_trial, key_prefix=f"trial_{selected_trial.id}",
-            extra_warning=warning,
-        )
+        if page_usable:
+            delete_with_confirm(
+                f"Trial #{selected_trial.id}", _do_delete_trial, key_prefix=f"trial_{selected_trial.id}",
+                extra_warning=warning,
+            )
+        else:
+            st.caption("View-only access - deleting is restricted for your role.")
 
         if st.button("Clear selection", key="clear_trial_selection"):
             st.session_state.pop("trial_selected_id", None)

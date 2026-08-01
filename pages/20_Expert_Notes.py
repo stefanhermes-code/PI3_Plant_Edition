@@ -23,6 +23,7 @@ import streamlit as st
 
 import ai_assistant
 import reports
+from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from db import CONFIDENCE_LEVELS, ExpertNote, FoamGrade, ProductionRun, TrialRecord, get_session, init_db
 from helpers import (
@@ -33,6 +34,7 @@ from helpers import (
     expert_note_plant_id_for_link,
     page_setup,
     render_function_action_intro,
+    view_only_notice,
 )
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company, run_ids_for_company
 
@@ -63,6 +65,9 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+page_usable = can_use_page("expert_notes", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice()
 company, _all_companies = company_picker(
     st, session, user["is_platform_owner"], user["company_id"], key="expert_notes_company_filter"
 )
@@ -125,8 +130,8 @@ with st.form("add_expert_note"):
     note_text = st.text_area("Note *")
     confidence_level = st.selectbox("Confidence level", CONFIDENCE_LEVELS, index=2)
     author = st.text_input("Author", value=user["display_name"])
-    submitted = st.form_submit_button("Save note")
-    if submitted:
+    submitted = st.form_submit_button("Save note", disabled=not page_usable)
+    if submitted and page_usable:
         if not entity:
             st.error("Nothing to link to - add a trial or foam grade first.")
         elif not note_text.strip():
@@ -192,7 +197,7 @@ else:
     ]
     st.caption("Click a row to edit (and optionally delete) that note.")
     idx = clickable_table(note_rows, key="expert_notes_table")
-    if idx is not None:
+    if idx is not None and idx < len(notes):
         st.session_state["note_selected_id"] = notes[idx].id
     else:
         st.session_state.pop("note_selected_id", None)
@@ -233,7 +238,7 @@ else:
                 key=f"edit_note_conf_{selected.id}",
             )
             e_author = st.text_input("Author", value=selected.author or "", key=f"edit_note_author_{selected.id}")
-            if st.form_submit_button("Save changes"):
+            if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
                 if not e_text.strip():
                     st.error("Note text is required.")
                 else:
@@ -263,13 +268,16 @@ else:
             _session.commit()
             st.session_state.pop("note_selected_id", None)
 
-        delete_with_confirm(
-            "this expert note", _do_delete_note, key_prefix=f"note_{selected.id}",
-            extra_warning=(
-                "This is a leaf record — deleting it has no other effects (its copy in "
-                "PI3, if any, is removed too)."
-            ),
-        )
+        if page_usable:
+            delete_with_confirm(
+                "this expert note", _do_delete_note, key_prefix=f"note_{selected.id}",
+                extra_warning=(
+                    "This is a leaf record — deleting it has no other effects (its copy in "
+                    "PI3, if any, is removed too)."
+                ),
+            )
+        else:
+            st.caption("View-only access - deleting is restricted for your role.")
 
         if st.button("Clear selection", key="clear_note_selection"):
             st.session_state.pop("note_selected_id", None)

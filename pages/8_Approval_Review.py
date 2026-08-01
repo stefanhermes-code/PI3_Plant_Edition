@@ -10,9 +10,16 @@ import datetime as dt
 
 import streamlit as st
 
+from access_control import can_use_page
 from db import APPROVAL_STATUSES, ApprovalRecord, TrialRecord, get_session, init_db
 from auth import current_user, logout_button, require_login
-from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
+from helpers import (
+    clickable_table,
+    delete_with_confirm,
+    page_setup,
+    render_function_action_intro,
+    view_only_notice,
+)
 from tenant_scope import apply_scope, company_picker, run_ids_for_company
 
 page_setup("Approval & Review")
@@ -37,6 +44,9 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+page_usable = can_use_page("approval_review", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice()
 company, _all_companies = company_picker(
     st, session, user["is_platform_owner"], user["company_id"], key="approval_company_filter"
 )
@@ -81,8 +91,8 @@ with st.form("approval_form"):
     review_notes = st.text_area("Review notes")
     date_reviewed = st.date_input("Date reviewed", value=dt.date.today())
     date_approved = st.date_input("Date approved", value=dt.date.today())
-    submitted = st.form_submit_button("Save review")
-    if submitted:
+    submitted = st.form_submit_button("Save review", disabled=not page_usable)
+    if submitted and page_usable:
         if not reviewed_by or not approved_by:
             st.error("Reviewed by and approved by are both required.")
         else:
@@ -112,7 +122,7 @@ if still_missing:
     st.error(f"Cannot close — missing: {', '.join(still_missing)}")
     st.button("Close trial", disabled=True)
 else:
-    if st.button("Close trial", type="primary"):
+    if st.button("Close trial", type="primary", disabled=not page_usable) and page_usable:
         trial.date_closed = dt.date.today()
         trial.status = "Closed"
         session.commit()
@@ -135,7 +145,7 @@ if trial.approval_records:
     ]
     st.caption("Click a row to edit (and optionally delete) that review record.")
     idx = clickable_table(approval_rows, key=f"approval_table_{trial.id}")
-    if idx is not None:
+    if idx is not None and idx < len(trial.approval_records):
         st.session_state["approval_selected_id"] = trial.approval_records[idx].id
     else:
         st.session_state.pop("approval_selected_id", None)
@@ -166,7 +176,7 @@ if trial.approval_records:
             e_date_approved = st.date_input(
                 "Date approved", value=selected_approval.date_approved or dt.date.today(), key=f"edit_appr_da_{selected_approval.id}"
             )
-            if st.form_submit_button("Save changes"):
+            if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
                 if not e_reviewed_by or not e_approved_by:
                     st.error("Reviewed by and approved by are both required.")
                 else:
@@ -185,13 +195,16 @@ if trial.approval_records:
             _session.commit()
             st.session_state.pop("approval_selected_id", None)
 
-        delete_with_confirm(
-            "this review record", _do_delete_approval, key_prefix=f"approval_{selected_approval.id}",
-            extra_warning=(
-                "This is a leaf record — deleting it has no other effects (it does not revert the "
-                "trial's reviewed_by/approved_by fields or its closed status)."
-            ),
-        )
+        if page_usable:
+            delete_with_confirm(
+                "this review record", _do_delete_approval, key_prefix=f"approval_{selected_approval.id}",
+                extra_warning=(
+                    "This is a leaf record — deleting it has no other effects (it does not revert the "
+                    "trial's reviewed_by/approved_by fields or its closed status)."
+                ),
+            )
+        else:
+            st.caption("View-only access - deleting is restricted for your role.")
 
         if st.button("Clear selection", key="clear_approval_selection"):
             st.session_state.pop("approval_selected_id", None)

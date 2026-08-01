@@ -20,6 +20,7 @@ import pandas as pd
 import streamlit as st
 
 import ai_assistant
+from access_control import can_use_page
 from analytics import (
     pass_rate,
     property_results_dataframe,
@@ -36,6 +37,7 @@ from helpers import (
     render_function_action_intro,
     render_pi3_docx_download,
     render_save_to_expert_notes_button,
+    view_only_notice,
 )
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company
 
@@ -71,6 +73,9 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+page_usable = can_use_page("recipe_optimization", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice(action="using PI3 and saving to Expert Notes")
 company, _all_companies = company_picker(
     st, session, user["is_platform_owner"], user["company_id"], key="recipe_opt_company_filter"
 )
@@ -399,7 +404,7 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
     if st.button(
         "Get PI3 recommendation",
         key=f"ask_pi3_recipe_opt_{grade.id}",
-        disabled=not target_properties.strip(),
+        disabled=not target_properties.strip() or not page_usable,
     ):
         composition_lines = [
             f"Version {v.version_label} ({v.approval_status}): "
@@ -540,6 +545,7 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
                 question_label=ro_question_label,
                 link_type="foam_grade",
                 entity_id=grade.id,
+                disabled=not page_usable,
             )
 elif ai_assistant.availability_status(session, plant_id) == "not_configured":
     st.caption(
@@ -568,6 +574,7 @@ render_ask_pi3_section(
         f"Have there been any quality issues reported for {grade.grade_name} recently?",
     ],
     key_prefix=f"ask_pi3_freeform_recipe_{grade.id}",
+    disabled=not page_usable,
 )
 
 # ---------------------------------------------------------------------------

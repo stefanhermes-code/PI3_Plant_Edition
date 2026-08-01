@@ -44,16 +44,26 @@ this order by `page_visible()`:
    owner - sets what new companies start with) and the User Roles page
    (per company) via current_access_states()/save_access_states() below.
 
-   Enforcing view-only INSIDE a page (hiding its own write controls) is a
-   page-by-page opt-in, not automatic just because the row exists - a page
-   checks its own usability with page_key in usable_page_keys(...) (or
-   the single-page can_use_page() shortcut) and conditionally skips
-   rendering its forms/buttons. As of 2026-07-31 this is rolled out on:
-   (none yet - the model and admin UI shipped first; per-page enforcement
-   is a following batch). Every other page currently ignores can_use and
-   behaves as "Full access" for anyone who can view it, same as before
-   this three-state model existed - view-only for those pages currently
-   only degrades as far as "the page is still fully interactive."
+   Enforcing view-only INSIDE a page (hiding/disabling its own write
+   controls) is a page-by-page opt-in, not automatic just because the row
+   exists - a page checks its own usability with can_use_page() (or the
+   set-based usable_page_keys_denied() for pages with several independent
+   write actions to gate) and conditionally disables/skips rendering its
+   forms and action buttons. As of 2026-08-01 this is rolled out on every
+   operational page with a write action: Plant & Foam Equipment Overview,
+   Product Family & Foam Grade, Recipes, Production Run, Quality Test
+   Result, Quality Issue, Adjustment & Conclusion, Approval & Review,
+   Trial / Experiment, Raw Materials, Similar Case Retrieval, Expert
+   Notes, Recipe Optimization, Trend Analysis, Machine Settings
+   Correlation, Root-Cause Assistant, and Machine Settings Optimization
+   (its "Ask PI3"/"Save to Expert Notes" actions). The Report page is
+   deliberately NOT gated - every control on it is a preview or a
+   PDF/Excel download, nothing writes to the database, so there is
+   nothing for view-only to restrict. The 4 platform-only pages
+   (Companies, Subscription Types, PI3 Connectivity, plus the two
+   role-name-gated admin pages User Roles/User Accounts) are also
+   unaffected - those are gated by page_visible()'s platform-only rule or
+   a literal admin role-name check, not by can_use.
 
 PAGE_CATALOG is the single source of truth for page_key -> display title,
 used both to build app.py's nav and to render the permission grid on the
@@ -188,13 +198,18 @@ def usable_page_keys_denied(session, role_id):
     return {r.page_key for r in rows}
 
 
-def can_use_page(page_key, *, is_platform_owner, role_id, session):
+def can_use_page(page_key, *, role_id, session):
     """Single-page convenience wrapper around usable_page_keys_denied() for
-    a page that just wants one yes/no answer at the top of its script.
-    Platform owners always get full use (same precedent as PLATFORM_ONLY_KEYS
-    elsewhere in this module)."""
-    if is_platform_owner:
-        return True
+    a page that just wants one yes/no answer at the top of its script, to
+    decide whether to render its own Add/Edit/Delete forms and action
+    buttons. No is_platform_owner special-case here on purpose: unlike
+    page_visible()'s PLATFORM_ONLY_KEYS gate (which is about cross-company
+    SCOPE - seeing every company's data), being the platform owner's own
+    staff doesn't exempt a "viewer"-equivalent role from view-only
+    restrictions on ordinary operational pages. A role_id of None (the
+    legacy secrets.toml fallback, or AUTH_DISABLED dev mode) has no
+    RolePagePermission rows to deny anything, so it naturally resolves to
+    full use, same as before this three-state model existed."""
     return page_key not in usable_page_keys_denied(session, role_id)
 
 

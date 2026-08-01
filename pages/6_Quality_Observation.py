@@ -13,6 +13,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
+from access_control import can_use_page
 from db import CONFIDENCE_LEVELS, ProductionRun, QualityObservation, TrialRecord, get_session, init_db
 from auth import current_user, logout_button, require_login
 from helpers import (
@@ -26,6 +27,7 @@ from helpers import (
     render_function_action_intro,
     set_pending_banner,
     show_pending_banner,
+    view_only_notice,
 )
 from tenant_scope import apply_scope, company_picker, run_ids_for_company
 
@@ -60,6 +62,9 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+page_usable = can_use_page("quality_issue", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice()
 company, _all_companies = company_picker(
     st, session, user["is_platform_owner"], user["company_id"], key="qi_company_filter"
 )
@@ -106,8 +111,8 @@ with tab_obs_manual:
             customer_impact = st.text_area("Customer impact")
             notes = st.text_area("Notes")
             observed_at = st.date_input("Observed on", value=dt.date.today())
-            submitted = st.form_submit_button("Save issue")
-            if submitted:
+            submitted = st.form_submit_button("Save issue", disabled=not page_usable)
+            if submitted and page_usable:
                 if not observation_type:
                     st.error("Issue type is required.")
                 else:
@@ -166,7 +171,7 @@ with tab_obs_import:
             )
             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
-        if good_rows and st.button("Confirm import", key="confirm_observation_import"):
+        if good_rows and st.button("Confirm import", key="confirm_observation_import", disabled=not page_usable):
             existing_keys = {
                 (o.production_run_id, o.observation_type.strip().lower(), o.observed_at)
                 for o in session.query(QualityObservation).all()
@@ -240,7 +245,7 @@ else:
     ]
     st.caption("Click a row to edit (and optionally delete) that quality issue.")
     idx = clickable_table(obs_rows, key="obs_table")
-    if idx is not None:
+    if idx is not None and idx < len(observations):
         st.session_state["obs_selected_id"] = observations[idx].id
     else:
         st.session_state.pop("obs_selected_id", None)
@@ -292,7 +297,7 @@ else:
             e_customer_impact = st.text_area("Customer impact", value=selected.customer_impact or "", key=f"edit_obs_cimpact_{selected.id}")
             e_notes = st.text_area("Notes", value=selected.notes or "", key=f"edit_obs_notes_{selected.id}")
             e_observed_at = st.date_input("Observed on", value=selected.observed_at or dt.date.today(), key=f"edit_obs_observed_{selected.id}")
-            if st.form_submit_button("Save changes"):
+            if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
                 if not e_type.strip():
                     st.error("Issue type is required.")
                 else:
@@ -316,10 +321,13 @@ else:
             _session.commit()
             st.session_state.pop("obs_selected_id", None)
 
-        delete_with_confirm(
-            "this quality issue", _do_delete_obs, key_prefix=f"obs_{selected.id}",
-            extra_warning="This is a leaf record — deleting it has no other effects.",
-        )
+        if page_usable:
+            delete_with_confirm(
+                "this quality issue", _do_delete_obs, key_prefix=f"obs_{selected.id}",
+                extra_warning="This is a leaf record — deleting it has no other effects.",
+            )
+        else:
+            st.caption("View-only access - deleting is restricted for your role.")
 
         if st.button("Clear selection", key="clear_obs_selection"):
             st.session_state.pop("obs_selected_id", None)

@@ -10,6 +10,7 @@ technical review (see the advisory boundary at the bottom of this page).
 import streamlit as st
 
 import ai_assistant
+from access_control import can_use_page
 from analytics import PHASE_SETTING_LABELS, run_settings_dataframe
 from auth import current_user, logout_button, require_login
 from db import QualityObservation, get_session, init_db
@@ -20,6 +21,7 @@ from helpers import (
     render_function_action_intro,
     render_pi3_docx_download,
     render_save_to_expert_notes_button,
+    view_only_notice,
 )
 
 page_setup("Root-Cause Assistant")
@@ -45,6 +47,9 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+page_usable = can_use_page("root_cause_assistant", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice(action="using PI3 and saving to Expert Notes")
 company, _all_companies = company_picker(
     st, session, user["is_platform_owner"], user["company_id"], key="rca_company_filter"
 )
@@ -126,7 +131,11 @@ else:
 
 if ai_assistant.is_enabled_for_plant(session, run.plant_id):
     st.divider()
-    if st.button("Use PI3 to reason about this", key=f"ask_pi3_root_cause_{obs.id}"):
+    if st.button(
+        "Use PI3 to reason about this",
+        key=f"ask_pi3_root_cause_{obs.id}",
+        disabled=not page_usable,
+    ):
         change_summary = (
             "\n".join(f"- {c}" for c in changes)
             if changes
@@ -230,6 +239,7 @@ if ai_assistant.is_enabled_for_plant(session, run.plant_id):
                 question_label=rc_question_label,
                 link_type="production_run",
                 entity_id=run.id,
+                disabled=not page_usable,
             )
 
 st.divider()
@@ -250,5 +260,6 @@ render_ask_pi3_section(
     key_prefix=f"ask_pi3_freeform_root_cause_{obs.id}",
     note_link_type="production_run",
     note_entity_id=run.id,
+    disabled=not page_usable,
 )
 

@@ -16,6 +16,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
+from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from db import (
     CONDITIONING_TYPE_DEFAULTS,
@@ -45,6 +46,7 @@ from helpers import (
     render_function_action_intro,
     set_pending_banner,
     show_pending_banner,
+    view_only_notice,
 )
 from tenant_scope import apply_scope, company_picker, run_ids_for_company
 
@@ -81,6 +83,9 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+page_usable = can_use_page("quality_test_result", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice()
 company, _all_companies = company_picker(
     st, session, user["is_platform_owner"], user["company_id"], key="qtr_company_filter"
 )
@@ -117,8 +122,8 @@ with st.expander("Add sample", expanded=False):
         sample_ts = combine_date_time("Sample extraction time", "sample_ts")
         cure_age_hours = st.number_input("Cure age at sampling (hours)", min_value=0.0, step=0.5)
         notes = st.text_area("Notes")
-        submitted = st.form_submit_button("Save sample")
-        if submitted:
+        submitted = st.form_submit_button("Save sample", disabled=not page_usable)
+        if submitted and page_usable:
             phases_for_run = (
                 session.query(ProductionPhase)
                 .filter(ProductionPhase.production_run_id == run_for_sample.id)
@@ -167,7 +172,7 @@ with st.expander("Bulk import samples (CSV / Excel)", expanded=False):
             st.warning("These rows have a production_run_id that doesn't exist, or a blank zone_label.")
             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
-        if good_rows and st.button("Confirm import", key="confirm_sample_import"):
+        if good_rows and st.button("Confirm import", key="confirm_sample_import", disabled=not page_usable):
             existing_keys = {
                 (s.production_run_id, s.zone_label.strip().lower()) for s in session.query(Sample).all()
             }
@@ -238,7 +243,7 @@ if samples:
                     value=float(selected_sample.cure_age_hours or 0.0), key=f"edit_sample_cure_{selected_sample.id}",
                 )
                 e_notes = st.text_area("Notes", value=selected_sample.notes or "", key=f"edit_sample_notes_{selected_sample.id}")
-                if st.form_submit_button("Save changes"):
+                if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
                     phases_for_edit_run = (
                         session.query(ProductionPhase)
                         .filter(ProductionPhase.production_run_id == selected_sample.production_run_id)
@@ -285,10 +290,13 @@ if samples:
                 _session.commit()
                 st.session_state.pop("sample_selected_id", None)
 
-            delete_with_confirm(
-                f"sample #{selected_sample.id}", _do_delete_sample, key_prefix=f"sample_{selected_sample.id}",
-                extra_warning=warning,
-            )
+            if page_usable:
+                delete_with_confirm(
+                    f"sample #{selected_sample.id}", _do_delete_sample, key_prefix=f"sample_{selected_sample.id}",
+                    extra_warning=warning,
+                )
+            else:
+                st.caption("View-only access - deleting is restricted for your role.")
 
             if st.button("Clear selection", key="clear_sample_selection"):
                 st.session_state.pop("sample_selected_id", None)
@@ -331,8 +339,8 @@ else:
             segment_start = combine_date_time("Segment start", "cond_start")
             segment_end = combine_date_time("Segment end", "cond_end")
             notes = st.text_area("Notes", key="cond_notes")
-            submitted = st.form_submit_button("Save conditioning segment")
-            if submitted:
+            submitted = st.form_submit_button("Save conditioning segment", disabled=not page_usable)
+            if submitted and page_usable:
                 final_condition_type = (
                     (condition_other or "").strip() if condition_choice == "Other (specify)" else condition_choice
                 )
@@ -416,7 +424,7 @@ else:
                         default_time=selected_cond.segment_end.time() if selected_cond.segment_end else None,
                     )
                     e_notes = st.text_area("Notes", value=selected_cond.notes or "", key=f"edit_cond_notes_{selected_cond.id}")
-                    if st.form_submit_button("Save changes"):
+                    if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
                         if not e_condition_type.strip():
                             st.error("Specify a condition type.")
                         elif e_end < e_start:
@@ -437,10 +445,13 @@ else:
                     _session.commit()
                     st.session_state.pop("cond_selected_id", None)
 
-                delete_with_confirm(
-                    f"conditioning segment #{selected_cond.id}", _do_delete_cond, key_prefix=f"cond_{selected_cond.id}",
-                    extra_warning="This is a leaf record — deleting it has no other effects.",
-                )
+                if page_usable:
+                    delete_with_confirm(
+                        f"conditioning segment #{selected_cond.id}", _do_delete_cond, key_prefix=f"cond_{selected_cond.id}",
+                        extra_warning="This is a leaf record — deleting it has no other effects.",
+                    )
+                else:
+                    st.caption("View-only access - deleting is restricted for your role.")
 
                 if st.button("Clear selection", key="clear_cond_selection"):
                     st.session_state.pop("cond_selected_id", None)
@@ -538,8 +549,8 @@ with tab_result_manual:
         replicate_no = st.number_input("Replicate no.", min_value=1, step=1, value=1)
         tested_at = st.date_input("Tested on", value=dt.date.today())
         notes = st.text_area("Notes (e.g. specimen geometry, orientation, deflection, temperature)")
-        submitted = st.form_submit_button("Save result")
-        if submitted:
+        submitted = st.form_submit_button("Save result", disabled=not page_usable)
+        if submitted and page_usable:
             final_method = method_other.strip() or (method_choice.method_code if method_choice else "")
             final_unit = uom_other.strip() or (uom_choice.unit_label if uom_choice else "")
             if not property_def:
@@ -629,7 +640,7 @@ with tab_result_import:
             )
             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
-        if good_rows and st.button("Confirm import", key="confirm_result_import"):
+        if good_rows and st.button("Confirm import", key="confirm_result_import", disabled=not page_usable):
             existing_keys = {
                 (r.production_run_id, r.property_definition_id, r.sample_id, r.replicate_no)
                 for r in session.query(PhysicalPropertyResult).all()
@@ -789,7 +800,7 @@ if selected_result:
             "Tested on", value=selected_result.tested_at or dt.date.today(), key=f"edit_result_tested_{selected_result.id}"
         )
         e_notes = st.text_area("Notes", value=selected_result.notes or "", key=f"edit_result_notes_{selected_result.id}")
-        if st.form_submit_button("Save changes"):
+        if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
             if not e_method.strip():
                 st.error("A measuring method is required.")
             else:
@@ -817,10 +828,13 @@ if selected_result:
         _session.commit()
         st.session_state.pop("result_selected_id", None)
 
-    delete_with_confirm(
-        f"result #{selected_result.id}", _do_delete_result, key_prefix=f"result_{selected_result.id}",
-        extra_warning="This is a leaf record — deleting it has no other effects.",
-    )
+    if page_usable:
+        delete_with_confirm(
+            f"result #{selected_result.id}", _do_delete_result, key_prefix=f"result_{selected_result.id}",
+            extra_warning="This is a leaf record — deleting it has no other effects.",
+        )
+    else:
+        st.caption("View-only access - deleting is restricted for your role.")
 
     if st.button("Clear selection", key="clear_result_selection"):
         st.session_state.pop("result_selected_id", None)

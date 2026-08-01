@@ -324,6 +324,16 @@ def page_access_grid(current_states, key_prefix):
     return selections
 
 
+def view_only_notice(action="adding, editing, and deleting"):
+    """Standard banner shown once near the top of a page when
+    access_control.can_use_page() says this role has View only access -
+    i.e. it can see this page's data but shouldn't get any of its write
+    controls. `action` can be customized for pages whose only "use" isn't
+    add/edit/delete (e.g. an analysis page's Ask PI3 box, or Report's
+    generate/download buttons)."""
+    st.info(f"You have view-only access to this page - {action} is restricted for your role.")
+
+
 def show_pending_banner(key):
     """Show a one-shot success banner stashed in session_state by an action
     that immediately called st.rerun() right after it. A plain st.success()
@@ -437,7 +447,9 @@ def render_pi3_docx_download(
     )
 
 
-def render_save_to_expert_notes_button(session, key_prefix, answer, question_label, link_type, entity_id, tool_log=None):
+def render_save_to_expert_notes_button(
+    session, key_prefix, answer, question_label, link_type, entity_id, tool_log=None, disabled=False,
+):
     """Shared 'Save to Expert Notes' button for any PI3-generated answer -
     lets the reviewer explicitly keep an answer worth remembering, rather
     than every PI3 interaction being saved automatically (which would fill
@@ -463,7 +475,7 @@ def render_save_to_expert_notes_button(session, key_prefix, answer, question_lab
     if saved_id:
         st.caption("✓ Saved to Expert Notes.")
         return
-    if st.button("Save to Expert Notes", key=f"{key_prefix}_save_note_btn"):
+    if st.button("Save to Expert Notes", key=f"{key_prefix}_save_note_btn", disabled=disabled):
         plant_id = expert_note_plant_id_for_link(link_type, entity_id, session)
         note = ExpertNote(
             linked_entity_type=link_type,
@@ -489,7 +501,7 @@ def render_save_to_expert_notes_button(session, key_prefix, answer, question_lab
 
 def render_ask_pi3_section(
     session, plant_id, default_foam_grade_id, page_context, sample_questions, key_prefix,
-    note_link_type="foam_grade", note_entity_id=None,
+    note_link_type="foam_grade", note_entity_id=None, disabled=False,
 ):
     """Free-form 'ask PI3 anything about this plant's data' box, shared by
     Recipe Optimization, Machine Settings vs Physical Properties
@@ -549,7 +561,7 @@ def render_ask_pi3_section(
 
     question = st.text_area("Your question", key=question_key)
 
-    if st.button("Ask PI3", key=f"{key_prefix}_ask_btn", disabled=not question.strip()):
+    if st.button("Ask PI3", key=f"{key_prefix}_ask_btn", disabled=disabled or not question.strip()):
         with st.spinner("Using PI3..."):
             answer, tool_log = ai_assistant.ask_plant_question(
                 session,
@@ -592,4 +604,5 @@ def render_ask_pi3_section(
                 link_type=note_link_type,
                 entity_id=note_entity_id if note_entity_id is not None else default_foam_grade_id,
                 tool_log=tool_log,
+                disabled=disabled,
             )

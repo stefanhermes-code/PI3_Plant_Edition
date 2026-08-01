@@ -22,6 +22,7 @@ import pandas as pd
 import streamlit as st
 
 import ai_assistant
+from access_control import can_use_page
 from analytics import (
     capability_analysis,
     control_chart_analysis,
@@ -41,6 +42,7 @@ from helpers import (
     render_function_action_intro,
     render_pi3_docx_download,
     render_save_to_expert_notes_button,
+    view_only_notice,
 )
 
 page_setup("Trend Analysis")
@@ -72,6 +74,9 @@ render_function_action_intro(
 )
 session = get_session()
 user = current_user()
+page_usable = can_use_page("trend_analysis", role_id=user["role_id"], session=session)
+if not page_usable:
+    view_only_notice(action="using PI3 and saving to Expert Notes")
 company, _all_companies = company_picker(
     st, session, user["is_platform_owner"], user["company_id"], key="trend_company_filter"
 )
@@ -338,7 +343,11 @@ plant_id = grade.product_family.plant_id if grade.product_family else None
 if ai_assistant.is_enabled_for_plant(session, plant_id):
     st.divider()
     st.subheader("Ask PI3 to interpret this pattern")
-    if st.button("Get PI3 interpretation", key=f"ask_pi3_trend_{grade.id}_{property_name}"):
+    if st.button(
+        "Get PI3 interpretation",
+        key=f"ask_pi3_trend_{grade.id}_{property_name}",
+        disabled=not page_usable,
+    ):
         if chart_result["ready"]:
             if chart_result["in_control"]:
                 control_summary = "In control - no control-chart rule violations."
@@ -444,6 +453,7 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
                 question_label=trend_question_label,
                 link_type="foam_grade",
                 entity_id=grade.id,
+                disabled=not page_usable,
             )
 elif ai_assistant.availability_status(session, plant_id) == "not_configured":
     st.caption(
@@ -471,4 +481,5 @@ render_ask_pi3_section(
         f"What changed around the time {property_name} started drifting for {grade.grade_name}?",
     ],
     key_prefix=f"ask_pi3_freeform_trend_{grade.id}_{property_name}",
+    disabled=not page_usable,
 )
