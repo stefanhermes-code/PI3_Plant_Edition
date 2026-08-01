@@ -465,8 +465,13 @@ class RecipeVersion(Base):
     # tracks whether it's the version currently in production use for its
     # foam grade. A version can be Approved but no longer active (it was
     # superseded by a later revision) - only one version per foam grade
-    # should be active at a time, enforced in application code (see
-    # helpers.activate_recipe_version), not a DB constraint.
+    # should be active at a time. Enforced in application code (see
+    # helpers.activate_recipe_version) AND, since 2026-08-01 (PI3_Gaps_and_
+    # Ambiguities.docx finding 1.5), at the database level too: a partial
+    # unique index (ux_recipe_version_one_active_per_grade, on
+    # (foam_grade_id) WHERE is_active) means a direct SQL write that would
+    # leave a grade with two active versions now fails outright rather than
+    # silently succeeding. Zero active versions per grade is still allowed.
     is_active = Column(Boolean, default=True)
 
     foam_grade = relationship("FoamGrade", back_populates="recipe_versions")
@@ -1048,11 +1053,28 @@ class PI3AIConnectionSetting(Base):
 # ---------------------------------------------------------------------------
 # 16. maintenance_and_license_records
 # ---------------------------------------------------------------------------
+# NOTE (corrected 2026-08-01, PI3_Gaps_and_Ambiguities.docx finding 1.1):
+# this list previously omitted the entire multi-tenant/access-control layer
+# (SubscriptionType, Company, Role, RolePagePermission, User) plus
+# FoamGradeTargetProperty - 6 of the app's 34 mapped model classes. Confirmed
+# by a repo-wide search that ALL_MODELS is not imported or referenced
+# anywhere else in the codebase (init_db()'s Base.metadata.create_all()
+# discovers every mapped class automatically via SQLAlchemy's own
+# declarative registry, independent of this list), so the omission had zero
+# runtime effect - table creation, migrations, and everything else already
+# covered all 34 tables regardless. Completed here purely so this list is
+# accurate if something is ever built against it later.
 ALL_MODELS = [
+    SubscriptionType,
+    Company,
+    Role,
+    RolePagePermission,
+    User,
     Plant,
     Machine,
     ProductFamily,
     FoamGrade,
+    FoamGradeTargetProperty,
     Supplier,
     RawMaterial,
     RecipeVersion,

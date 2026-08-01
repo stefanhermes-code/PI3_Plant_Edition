@@ -158,6 +158,15 @@ with tab_create:
                         change_note=change_note,
                         approval_status=approval_status,
                         created_by=created_by,
+                        # Explicitly False at creation, not the column's own
+                        # True default: the DB now enforces at most one
+                        # active version per foam grade (see db.py's
+                        # RecipeVersion.is_active comment), so this row must
+                        # not be flushed as active while the grade's current
+                        # version is still active too - activate_recipe_
+                        # version() below deactivates that one first, then
+                        # flips this one on.
+                        is_active=False,
                     )
                     session.add(new_version)
                     session.flush()
@@ -239,6 +248,11 @@ with tab_edit:
                             change_note=new_change_note,
                             approval_status=new_status,
                             created_by=new_created_by,
+                            # See the identical note in the Create tab above:
+                            # must not flush as active while this grade's
+                            # current version still is - the DB now enforces
+                            # at most one active version per grade.
+                            is_active=False,
                         )
                         session.add(new_version)
                         session.flush()
