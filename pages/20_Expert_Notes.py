@@ -30,6 +30,7 @@ from auth import current_user, logout_button, require_login
 from db import CONFIDENCE_LEVELS, ExpertNote, FoamGrade, ProductionRun, TrialRecord, get_session, init_db
 from helpers import (
     clickable_table,
+    company_id_for_plant,
     delete_with_confirm,
     expert_note_foam_grade_id_for_link,
     expert_note_link_label,
@@ -166,7 +167,11 @@ with st.form("add_expert_note"):
                     f"Confidence: {confidence_level}\nAuthor: {author or '—'}\n\n{note_text.strip()}"
                 )
                 note.vector_store_file_id = ai_assistant.push_document_to_vector_store(
-                    link_label, doc_text, metadata={"plant_id": plant_id} if plant_id else None
+                    link_label,
+                    doc_text,
+                    metadata={"plant_id": plant_id, "company_id": company_id_for_plant(plant_id, session)}
+                    if plant_id
+                    else None,
                 )
             session.add(note)
             session.commit()
@@ -271,7 +276,11 @@ else:
                             f"Confidence: {e_confidence}\nAuthor: {e_author or '—'}\n\n{e_text.strip()}"
                         )
                         selected.vector_store_file_id = ai_assistant.push_document_to_vector_store(
-                            link_label, doc_text, metadata={"plant_id": plant_id} if plant_id else None
+                            link_label,
+                            doc_text,
+                            metadata={"plant_id": plant_id, "company_id": company_id_for_plant(plant_id, session)}
+                            if plant_id
+                            else None,
                         )
                     selected.note_text = e_text.strip()
                     selected.confidence_level = e_confidence

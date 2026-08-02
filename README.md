@@ -140,6 +140,29 @@ Without a `DATABASE_URL` secret or environment variable, the app falls back
 to a local SQLite file (`pi3_local.db`) for convenience — do not rely on
 this for the deployed app.
 
+## Required one-time step: backfill PI3 vector store tenant tags (2026-08-02)
+
+PI3's semantic search (file_search) is now scoped so a company only sees
+its own pushed documents (Expert Notes) plus a shared general reference
+library — see `ai_assistant._file_search_filters()` and
+`ai_assistant.push_document_to_vector_store()`'s docstring (fixes Gate 3,
+Item 21 of the Duroflex pilot readiness list). This only works for vector
+store files that carry the right tags, and files pushed before this fix
+don't yet carry them. Run this once, right after deploying this change,
+against the real production vector store:
+
+```
+python backfill_vector_store_tenant_tags.py          # dry run - prints what would change
+python backfill_vector_store_tenant_tags.py --apply   # writes the changes
+```
+
+Safe to re-run (already-tagged files are skipped). Needs `OPENAI_API_KEY`,
+`PI3_VECTOR_STORE_ID`, and `DATABASE_URL` available the same way the app
+itself reads them (Streamlit secrets or environment variables). Anything
+the script flags as "NEEDS ATTENTION" was left untouched on purpose — see
+the script's own docstring for why guessing on those would be worse than
+leaving them for a human to check.
+
 ## Troubleshooting: sidebar reverts to a plain page list
 
 Symptom: the sidebar shows a flat, alphabetical/numeric list of page names

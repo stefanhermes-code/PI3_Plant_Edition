@@ -262,7 +262,7 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "to change a setting to a specific value."
         )
         with st.spinner("Using PI3..."):
-            answer = ai_assistant.ask_assistant(prompt)
+            answer = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
         if answer:
             st.session_state[f"optimization_ai_answer_{unit['state_key']}_{property_name}"] = answer
 

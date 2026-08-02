@@ -73,7 +73,7 @@ import streamlit as st
 
 import analytics
 import pi3_query_tool
-from db import RAW_MATERIAL_CATEGORIES, FoamGrade, PI3AIConnectionSetting
+from db import RAW_MATERIAL_CATEGORIES, FoamGrade, PI3AIConnectionSetting, Plant
 
 # Balances answer quality against cost for a fairly detailed, rule-heavy
 # system prompt (SYSTEM_PROMPT below has many formatting/structure
@@ -414,39 +414,49 @@ def push_document_to_vector_store(title, text, metadata=None):
     plant/trial-specific document be told apart from the general,
     non-plant-specific knowledge (customer questions, TDS documents,
     formulation science) that also lives in this same shared store. This
-    app's own callers should pass {"plant_id": <int>} here for anything
-    tied to one specific plant (see the two call sites in
-    pages/20_Expert_Notes.py) - documents with no natural plant dimension
-    should keep passing metadata=None, which is correct, not an oversight.
+    app's own callers should pass {"plant_id": <int>, "company_id": <int>}
+    here for anything tied to one specific plant (see the two call sites
+    in pages/20_Expert_Notes.py and helpers.render_save_to_expert_notes_button)
+    - documents with no natural plant dimension should keep passing
+    metadata=None, which is correct, not an oversight (see the "shared"
+    tag note below for how those stay searchable under the filter).
 
-    Note: none of this app's current file_search calls (ask_assistant(),
-    ask_plant_question()) actually filter by this attribute yet - the
-    plant-scoped question tool deliberately searches the whole shared
-    store, since general expertise is meant to inform every plant's
-    answers (see PLANT_QUERY_SYSTEM_PROMPT). Tagging happens here so that
-    filtering is possible wherever it's actually wanted later (e.g. a
-    future "only this plant's own history" mode), without needing to
-    backfill every previously-pushed document's attributes retroactively.
+    company_id is the key both ask_assistant() and ask_plant_question()
+    now filter on (see _file_search_filters() below) - always include it
+    alongside plant_id, not just plant_id alone, so a pushed document is
+    actually excluded from a different company's searches rather than
+    only carrying a plant tag that nothing filters on.
 
-    OPEN ITEM (PI3_Gaps_and_Ambiguities.docx, finding 3.1, flagged
-    2026-08-01): because query-time filtering doesn't exist yet, a
-    plant-tagged document (an Expert Note from one plant) IS currently
-    returned by file_search when a different
-    plant asks a question - a real cross-plant (and, depending on
-    deployment, potentially cross-tenant) data-isolation gap in this
-    semantic-search layer specifically. The structured-data path
+    FIXED 2026-08-02 (Gate 3, Item 21 of the Duroflex pilot readiness
+    list; originally flagged as PI3_Gaps_and_Ambiguities.docx finding 3.1,
+    2026-08-01): both ask_assistant() and ask_plant_question() now pass a
+    `filters` parameter on the file_search tool (OpenAI's Responses API
+    ComparisonFilter/CompoundFilter - see
+    developers.openai.com/api/docs/guides/retrieval#attribute-filtering,
+    confirmed current 2026-08-02) that restricts results to documents
+    tagged company_id=<the asking company> OR tagged shared=True - see
+    _file_search_filters() below. The structured-data path
     (pi3_query_tool.py's SQL views/guard, and get_verified_analysis's
-    _grade_in_plant check) is separately scoped by plant_id and is NOT
-    affected. Deliberately not fixed same-day as this comment was added:
-    the fix requires a live-tested `filters` parameter on the file_search
-    tool (OpenAI's Responses API supports ComparisonFilter/CompoundFilter
-    - see platform.openai.com/docs/guides/retrieval) plus a backfill pass
-    for already-pushed documents that predate this tagging, and neither
-    was safe to ship untested immediately before a live demo. Confirmed
-    2026-08-01 that only one company/one plant currently exist in
-    production, so there is no live customer data actually exposed by
-    this gap today - but it should be fixed and verified against a real
-    vector store before a second plant/company is onboarded.
+    _grade_in_plant check) was already separately scoped by plant_id and
+    was never affected by this gap.
+
+    REQUIRED ONE-TIME STEP: this filter only works for documents that
+    already carry one of those two tags. Every document pushed through
+    this function from now on gets company_id automatically (as long as
+    callers follow the convention above), but documents pushed before
+    this fix - the pre-existing general reference library (uploaded
+    directly via OpenAI, never through this function, so it has no
+    attributes at all) and any Expert Notes saved before 2026-08-02
+    (tagged with plant_id only, no company_id) - are NOT covered
+    retroactively by this code change alone. Run
+    backfill_vector_store_tenant_tags.py once against production (see
+    that script's own docstring) to tag the existing library shared=True
+    and backfill company_id onto existing plant-tagged files from this
+    app's own Plant.company_id column. Until that script has been run,
+    older documents matching neither condition will stop appearing in
+    filtered search results (fail closed, not open - they go missing
+    rather than leak, which is the safe direction for this gap to fail
+    in, but still worth doing promptly so nothing useful goes dark).
 
     Returns the new OpenAI file id (str) on success - callers that can
     store it (e.g. ExpertNote.vector_store_file_id) should, so a later
@@ -493,7 +503,35 @@ def delete_document_from_vector_store(file_id):
         st.warning("Saved, but couldn't remove the old copy from PI3. It may still appear in search results.")
 
 
-def ask_assistant(prompt):
+def _file_search_filters(company_id):
+    """The `filters` argument for the file_search tool (OpenAI Responses
+    API ComparisonFilter/CompoundFilter - see
+    developers.openai.com/api/docs/guides/retrieval#attribute-filtering)
+    that scopes semantic search to the asking company: documents tagged
+    company_id=<company_id> (this app's own Expert Notes - see
+    push_document_to_vector_store), OR documents tagged shared=True (the
+    pre-existing general reference library, meant to inform every
+    company's answers - see backfill_vector_store_tenant_tags.py).
+
+    Returns None (meaning "no filter", i.e. today's fully-open behavior)
+    if company_id is unknown - every current caller can resolve one, but
+    a caller that genuinely can't should never be made worse off by this
+    change than it was before. Fixes Gate 3, Item 21 of the Duroflex
+    pilot readiness list (cross-company semantic-search leak - see
+    push_document_to_vector_store's docstring for the full history and
+    the required one-time backfill step)."""
+    if company_id is None:
+        return None
+    return {
+        "type": "or",
+        "filters": [
+            {"type": "eq", "key": "company_id", "value": company_id},
+            {"type": "eq", "key": "shared", "value": True},
+        ],
+    }
+
+
+def ask_assistant(prompt, company_id=None):
     """Send a prompt to PI3 (file_search over the configured vector store,
     via the Responses API) and return its text response, or None (with an
     st.error already shown) on failure/timeout.
@@ -505,6 +543,13 @@ def ask_assistant(prompt):
     always restates PI3 Plant Edition's own advisory-boundary requirement
     (historical reference only, never an instruction) - see the module
     docstring for why that ordering matters and must not be dropped.
+
+    `company_id` scopes file_search to this company's own tagged
+    documents plus the shared general library - see
+    _file_search_filters(). Every current caller (pages 15-19) already
+    has this in scope as `active_company_id` from company_picker(); pass
+    it through rather than defaulting to None, or this call goes back to
+    searching every company's documents.
     """
     if not prompt or not prompt.strip():
         return None
@@ -515,11 +560,16 @@ def ask_assistant(prompt):
         vector_store_id = _get_secret("PI3_VECTOR_STORE_ID")
         model = _get_secret("PI3_MODEL") or DEFAULT_MODEL
 
+        file_search_tool = {"type": "file_search", "vector_store_ids": [vector_store_id]}
+        filters = _file_search_filters(company_id)
+        if filters is not None:
+            file_search_tool["filters"] = filters
+
         response = client.responses.create(
             model=model,
             instructions=SYSTEM_PROMPT,
             input=prompt,
-            tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+            tools=[file_search_tool],
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
         return response.output_text or None
@@ -551,12 +601,17 @@ def ask_assistant(prompt):
 #   Postgres role, with the plant filter injected server-side regardless
 #   of what the query itself does or doesn't filter on - see
 #   pi3_query_tool.py for the full reasoning.
-# file_search stays available on both, unscoped by plant on purpose - see
+# file_search stays available on both, unscoped by PLANT on purpose - see
 # the project discussion: general expertise (customer questions, TDS
 # documents, formulation science) isn't plant-specific and should inform
-# every plant's answers; only this app's own plant/trial-specific pushes
-# (Expert Notes) carry a plant tag (see
-# push_document_to_vector_store's plant_id parameter).
+# every plant within the same company's answers. It IS now scoped by
+# COMPANY (see _file_search_filters() below, fixed 2026-08-02) - a
+# different paying customer's Expert Notes should never surface in this
+# company's answers, which unscoped file_search allowed before this fix.
+# This app's own plant/trial-specific pushes (Expert Notes) carry both a
+# plant tag and a company tag (see push_document_to_vector_store's
+# metadata parameter); the pre-existing general library carries a
+# shared=True tag instead, so it keeps showing up for every company.
 
 PLANT_QUERY_SYSTEM_PROMPT = """You are PI3, answering a technical reviewer's question about ONE specific plant's own production data at a flexible slabstock foam manufacturer.
 
@@ -803,8 +858,21 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
 
     vector_store_id = _get_secret("PI3_VECTOR_STORE_ID")
     model = _get_secret("PI3_MODEL") or DEFAULT_MODEL
+
+    # Derive company_id from plant_id (Plant.company_id is a direct FK - see
+    # db.py) so this function scopes file_search to the asking company
+    # without requiring every caller to also pass company_id explicitly -
+    # they already pass plant_id, which is enough. See _file_search_filters().
+    plant = session.get(Plant, plant_id)
+    company_id = plant.company_id if plant else None
+
+    file_search_tool = {"type": "file_search", "vector_store_ids": [vector_store_id]}
+    filters = _file_search_filters(company_id)
+    if filters is not None:
+        file_search_tool["filters"] = filters
+
     tools = [
-        {"type": "file_search", "vector_store_ids": [vector_store_id]},
+        file_search_tool,
         _QUERY_PLANT_DATA_TOOL,
         _GET_VERIFIED_ANALYSIS_TOOL,
     ]

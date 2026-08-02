@@ -207,7 +207,7 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "instructions to change a setting."
         )
         with st.spinner("Using PI3..."):
-            answer = ai_assistant.ask_assistant(prompt)
+            answer = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
         if answer:
             st.session_state[f"correlation_ai_answer_{unit['state_key']}_{property_name}"] = answer
             st.session_state.pop(f"correlation_fixed_{unit['state_key']}_{property_name}_saved_note_id", None)

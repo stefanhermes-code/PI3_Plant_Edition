@@ -11,7 +11,7 @@ import streamlit as st
 import ai_assistant
 import reports
 from auth import current_user
-from db import ExpertNote, FoamGrade, ProductFamily, ProductionRun, RecipeVersion, TrialRecord, get_session
+from db import ExpertNote, FoamGrade, Plant, ProductFamily, ProductionRun, RecipeVersion, TrialRecord, get_session
 
 
 def expert_note_plant_id_for_link(entity_type, entity_id, session):
@@ -32,6 +32,20 @@ def expert_note_plant_id_for_link(entity_type, entity_id, session):
         f = session.get(ProductFamily, entity_id)
         return f.plant_id if f else None
     return None
+
+
+def company_id_for_plant(plant_id, session):
+    """Plant.company_id for a resolved plant_id (see
+    expert_note_plant_id_for_link above), or None if plant_id is None or
+    doesn't resolve. Used to tag every vector-store push with company_id
+    alongside plant_id, so ai_assistant's file_search filters (see
+    ai_assistant._file_search_filters(), fixed 2026-08-02 for Gate 3 Item
+    21) can actually exclude a different company's notes - a plant_id tag
+    alone isn't filtered on for that purpose, only company_id is."""
+    if plant_id is None:
+        return None
+    plant = session.get(Plant, plant_id)
+    return plant.company_id if plant else None
 
 
 def expert_note_link_label(entity_type, entity_id, session):
@@ -742,8 +756,11 @@ def render_save_to_expert_notes_button(
         if ai_assistant.is_enabled_for_plant(session, plant_id):
             link_label = expert_note_link_label(link_type, entity_id, session)
             doc_text = f"PI3 insight on {link_label}\nQuestion: {question_label}\n\n{answer}"
+            company_id = company_id_for_plant(plant_id, session)
             note.vector_store_file_id = ai_assistant.push_document_to_vector_store(
-                link_label, doc_text, metadata={"plant_id": plant_id} if plant_id else None
+                link_label,
+                doc_text,
+                metadata={"plant_id": plant_id, "company_id": company_id} if plant_id else None,
             )
         session.add(note)
         session.commit()
