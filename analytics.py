@@ -30,7 +30,9 @@ instead.
 
 import numpy as np
 import pandas as pd
+import streamlit as st
 from scipy import stats as scipy_stats
+from sqlalchemy.orm import joinedload
 
 from db import (
     ComponentStreamReading,
@@ -38,8 +40,27 @@ from db import (
     ProductionPhase,
     ProductionRun,
     RawMaterial,
+    RecipeVersion,
 )
 from quality_standards import compute_pass_fail
+
+# Cache TTL for the three DB-loading functions below (run_settings_dataframe,
+# property_results_dataframe, actual_usage_dataframe). Fixed 2026-08-02: these
+# were being re-queried from scratch on every Streamlit rerun - which happens
+# on every widget click on a page, not just on navigation - and each one is
+# used by every Industrial Intelligence page, several of them multiple times
+# per rerun (once to check which grades have data for a dropdown, again for
+# the selected grade, again inside ranking/correlation helpers). Caching them
+# turns most of those repeat calls within a single page visit into a
+# dict-lookup instead of a round trip to Supabase. 30s is short enough that
+# entering new data and immediately switching to an analysis page won't look
+# stale for long, but long enough to absorb the burst of reruns a reviewer
+# generates while adjusting selectboxes on one page. Keyed only on
+# foam_grade_id/property_name (the session argument is prefixed with `_` so
+# Streamlit doesn't try to hash the SQLAlchemy Session object itself) - safe
+# across users because a foam_grade_id already scopes to one company, so
+# there's no cross-tenant leak risk in sharing this cache.
+_DATA_CACHE_TTL = 30
 
 
 def _grade_id_list(foam_grade_id):
@@ -83,25 +104,46 @@ PHASE_SETTING_LABELS = {
 }
 
 
-def run_settings_dataframe(session, foam_grade_id=None):
+@st.cache_data(ttl=_DATA_CACHE_TTL, show_spinner=False)
+def run_settings_dataframe(_session, foam_grade_id=None):
     """One row per production run: identifying info (grade, recipe version,
     machine) plus its Finalized-phase process settings (falls back to the
     Setup phase if no Finalized phase has been recorded yet for that run).
     `foam_grade_id` accepts a single id or a list of ids (a foam family's
     grades pooled together) - see _grade_id_list above.
+
+    Cached (see _DATA_CACHE_TTL) and eager-loads foam_grade/recipe_version/
+    machine plus all of this batch of runs' ProductionPhase rows in one
+    query each - fixed 2026-08-02, previously issued one query per run just
+    for its phases (N+1), which got slower as more production runs were
+    recorded. The `_session` parameter name (leading underscore) tells
+    Streamlit's cache not to try to hash the SQLAlchemy Session object -
+    the cache key is just foam_grade_id.
     """
-    q = session.query(ProductionRun)
+    q = _session.query(ProductionRun).options(
+        joinedload(ProductionRun.foam_grade),
+        joinedload(ProductionRun.recipe_version),
+        joinedload(ProductionRun.machine),
+    )
     grade_ids = _grade_id_list(foam_grade_id)
     if grade_ids:
         q = q.filter(ProductionRun.foam_grade_id.in_(grade_ids))
     runs = q.order_by(ProductionRun.run_date).all()
 
+    run_ids = [run.id for run in runs]
+    phases_by_run = {}
+    if run_ids:
+        all_phases = (
+            _session.query(ProductionPhase)
+            .filter(ProductionPhase.production_run_id.in_(run_ids))
+            .all()
+        )
+        for p in all_phases:
+            phases_by_run.setdefault(p.production_run_id, {})[p.phase_name] = p
+
     rows = []
     for run in runs:
-        phase_rows = (
-            session.query(ProductionPhase).filter(ProductionPhase.production_run_id == run.id).all()
-        )
-        by_name = {p.phase_name: p for p in phase_rows}
+        by_name = phases_by_run.get(run.id, {})
         phase = by_name.get("Finalized") or by_name.get("Setup")
 
         row = {
@@ -121,7 +163,8 @@ def run_settings_dataframe(session, foam_grade_id=None):
     return pd.DataFrame(rows)
 
 
-def property_results_dataframe(session, foam_grade_id=None, property_name=None):
+@st.cache_data(ttl=_DATA_CACHE_TTL, show_spinner=False)
+def property_results_dataframe(_session, foam_grade_id=None, property_name=None):
     """One row per physical property result, joined with the run's grade,
     recipe version, and machine - the base table for trend/correlation
     work. `foam_grade_id` accepts a single id or a list of ids (a foam
@@ -133,8 +176,27 @@ def property_results_dataframe(session, foam_grade_id=None, property_name=None):
     moment it was written, so every consumer of this dataframe (Recipe
     Optimization, Trend Analysis, Process-Property Correlation, Root-Cause
     Assistant, Machine Settings Optimization) needs the current rule, not
-    a historical snapshot of it."""
-    q = session.query(PhysicalPropertyResult).join(ProductionRun)
+    a historical snapshot of it.
+
+    Cached (see _DATA_CACHE_TTL) and eager-loads each result's production
+    run plus that run's foam_grade/recipe_version/machine in the same
+    query - fixed 2026-08-02, previously touched each of those 3
+    relationships as a separate lazy-loaded query PER RESULT ROW (roughly
+    1 + 4x the number of results), which is the main reason this got
+    slower as more quality data was recorded. The `_session` parameter
+    name (leading underscore) tells Streamlit's cache not to try to hash
+    the SQLAlchemy Session object - the cache key is just foam_grade_id/
+    property_name."""
+    run_load = joinedload(PhysicalPropertyResult.production_run)
+    q = (
+        _session.query(PhysicalPropertyResult)
+        .join(ProductionRun)
+        .options(
+            run_load.joinedload(ProductionRun.foam_grade),
+            run_load.joinedload(ProductionRun.recipe_version),
+            run_load.joinedload(ProductionRun.machine),
+        )
+    )
     grade_ids = _grade_id_list(foam_grade_id)
     if grade_ids:
         q = q.filter(ProductionRun.foam_grade_id.in_(grade_ids))
@@ -494,7 +556,8 @@ def recipe_version_diff(version_a, version_b):
 # many times.
 
 
-def actual_usage_dataframe(session, foam_grade_id=None):
+@st.cache_data(ttl=_DATA_CACHE_TTL, show_spinner=False)
+def actual_usage_dataframe(_session, foam_grade_id=None):
     """One row per (production run, raw-material stream): that stream's
     actual delivered quantity for the run's Finalized phase, re-expressed as
     an actual-php-equivalent using the run's own Base-polyol stream reading
@@ -503,30 +566,50 @@ def actual_usage_dataframe(session, foam_grade_id=None):
     batch instead of from the recipe. Runs with no Finalized-phase stream
     readings, or with no identifiable Base-polyol reading to normalize
     against, are skipped rather than guessed at. `foam_grade_id` accepts a
-    single id or a list of ids (a foam family's grades pooled together)."""
-    q = session.query(ProductionRun)
+    single id or a list of ids (a foam family's grades pooled together).
+
+    Cached (see _DATA_CACHE_TTL) and batch-loads this grade's Finalized
+    phases and their stream readings in two queries total instead of one
+    query per run plus one query per phase - fixed 2026-08-02, same N+1
+    pattern as run_settings_dataframe/property_results_dataframe above."""
+    q = _session.query(ProductionRun).options(
+        joinedload(ProductionRun.recipe_version).joinedload(RecipeVersion.components)
+    )
     grade_ids = _grade_id_list(foam_grade_id)
     if grade_ids:
         q = q.filter(ProductionRun.foam_grade_id.in_(grade_ids))
     runs = q.all()
 
-    rows = []
-    for run in runs:
-        phase = (
-            session.query(ProductionPhase)
+    run_ids = [run.id for run in runs]
+    phase_by_run = {}
+    if run_ids:
+        phases = (
+            _session.query(ProductionPhase)
             .filter(
-                ProductionPhase.production_run_id == run.id,
+                ProductionPhase.production_run_id.in_(run_ids),
                 ProductionPhase.phase_name == "Finalized",
             )
-            .first()
-        )
-        if phase is None:
-            continue
-        readings = (
-            session.query(ComponentStreamReading)
-            .filter(ComponentStreamReading.production_phase_id == phase.id)
             .all()
         )
+        phase_by_run = {p.production_run_id: p for p in phases}
+
+    readings_by_phase = {}
+    phase_ids = [p.id for p in phase_by_run.values()]
+    if phase_ids:
+        all_readings = (
+            _session.query(ComponentStreamReading)
+            .filter(ComponentStreamReading.production_phase_id.in_(phase_ids))
+            .all()
+        )
+        for r in all_readings:
+            readings_by_phase.setdefault(r.production_phase_id, []).append(r)
+
+    rows = []
+    for run in runs:
+        phase = phase_by_run.get(run.id)
+        if phase is None:
+            continue
+        readings = readings_by_phase.get(phase.id, [])
         if not readings:
             continue
 
