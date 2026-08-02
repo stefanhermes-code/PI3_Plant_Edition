@@ -71,6 +71,7 @@ from db import (
     RecipeComponent,
     TrialRecord,
 )
+from quality_standards import compute_pass_fail
 
 STYLES = getSampleStyleSheet()
 
@@ -228,7 +229,9 @@ def build_run_report_data(session, run_id):
             "Target": r.target_value,
             "Actual": r.actual_value,
             "Unit": r.unit or "",
-            "Pass/Fail": r.pass_fail or "—",
+            # Recomputed live rather than trusted from the stored pass_fail
+            # column - see the same note in analytics.property_results_dataframe.
+            "Pass/Fail": compute_pass_fail(r.property_name, r.target_value, r.actual_value) or "—",
             "Tested": r.tested_at,
         }
         for r in session.query(PhysicalPropertyResult)
@@ -367,8 +370,12 @@ def build_period_summary_data(session, plant_id=None, product_family_id=None, da
         .filter(PhysicalPropertyResult.production_run_id.in_(run_ids)).all()
         if run_ids else []
     )
-    pass_count = len([r for r in results if r.pass_fail == "Pass"])
-    fail_count = len([r for r in results if r.pass_fail == "Fail"])
+    # Recomputed live rather than trusted from each result's stored
+    # pass_fail column - see the same note in
+    # analytics.property_results_dataframe.
+    computed_verdicts = [compute_pass_fail(r.property_name, r.target_value, r.actual_value) for r in results]
+    pass_count = computed_verdicts.count("Pass")
+    fail_count = computed_verdicts.count("Fail")
     total_scored = pass_count + fail_count
     pass_rate = round(100 * pass_count / total_scored) if total_scored else None
 

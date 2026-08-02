@@ -247,8 +247,7 @@ st.caption(
     "recipe (not older versions - which version was running earlier doesn't matter here): did we "
     "achieve the required property, and if not, does the actual metered dosage of a raw material "
     "explain why. Pass/Fail per result is judged against the industry accepted tolerance for that "
-    "property (a percentage of the target value, not a fixed amount in its own unit) - see the "
-    "Tolerance column below."
+    "property - see the Tolerance column below."
 )
 
 current_version_results = results_df[results_df["recipe_version_id"] == current_version.id]

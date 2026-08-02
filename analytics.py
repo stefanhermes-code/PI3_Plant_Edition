@@ -39,6 +39,7 @@ from db import (
     ProductionRun,
     RawMaterial,
 )
+from quality_standards import compute_pass_fail
 
 
 def _grade_id_list(foam_grade_id):
@@ -124,7 +125,15 @@ def property_results_dataframe(session, foam_grade_id=None, property_name=None):
     """One row per physical property result, joined with the run's grade,
     recipe version, and machine - the base table for trend/correlation
     work. `foam_grade_id` accepts a single id or a list of ids (a foam
-    family's grades pooled together)."""
+    family's grades pooled together).
+
+    pass_fail is recomputed live via quality_standards.compute_pass_fail()
+    rather than read from the result's stored pass_fail column - a stored
+    verdict only reflects whatever tolerance rule was in effect at the
+    moment it was written, so every consumer of this dataframe (Recipe
+    Optimization, Trend Analysis, Process-Property Correlation, Root-Cause
+    Assistant, Machine Settings Optimization) needs the current rule, not
+    a historical snapshot of it."""
     q = session.query(PhysicalPropertyResult).join(ProductionRun)
     grade_ids = _grade_id_list(foam_grade_id)
     if grade_ids:
@@ -153,7 +162,7 @@ def property_results_dataframe(session, foam_grade_id=None, property_name=None):
                 "target_value": r.target_value,
                 "actual_value": r.actual_value,
                 "unit": r.unit,
-                "pass_fail": r.pass_fail,
+                "pass_fail": compute_pass_fail(r.property_name, r.target_value, r.actual_value),
                 "tested_at": r.tested_at,
             }
         )

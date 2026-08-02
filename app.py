@@ -31,6 +31,7 @@ from db import (
     init_db,
 )
 from helpers import page_setup, render_data_table, render_function_action_intro
+from quality_standards import compute_pass_fail
 from version import APP_VERSION
 
 LOGO_PATH = "assets/htc_global_logo_blue_steel.png"
@@ -146,9 +147,17 @@ def render_overview():
     recurring_observations = (
         session.query(QualityObservation).filter(QualityObservation.frequency == "Recurring").all()
     )
-    all_results = session.query(PhysicalPropertyResult).filter(PhysicalPropertyResult.pass_fail.isnot(None)).all()
-    pass_count = len([r for r in all_results if r.pass_fail == "Pass"])
-    pass_rate = f"{round(100 * pass_count / len(all_results))}%" if all_results else "—"
+    all_results = session.query(PhysicalPropertyResult).all()
+    # Recomputed live via compute_pass_fail() rather than trusted from each
+    # result's stored pass_fail column - see the same note in
+    # analytics.property_results_dataframe. Keeps this KPI in sync with the
+    # current tolerance rules immediately, with no separate recompute step.
+    computed_verdicts = [
+        compute_pass_fail(r.property_name, r.target_value, r.actual_value) for r in all_results
+    ]
+    known_verdicts = [v for v in computed_verdicts if v is not None]
+    pass_count = known_verdicts.count("Pass")
+    pass_rate = f"{round(100 * pass_count / len(known_verdicts))}%" if known_verdicts else "—"
     active_trials = session.query(TrialRecord).filter(TrialRecord.status != "Closed").count()
 
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)

@@ -368,7 +368,10 @@ for r_run in runs:
                 "Target": r.target_value,
                 "Actual": r.actual_value,
                 "Unit": r.unit,
-                "Pass/Fail": r.pass_fail,
+                # Recomputed live rather than trusted from the stored
+                # pass_fail column - see the same note in
+                # analytics.property_results_dataframe.
+                "Pass/Fail": compute_pass_fail(r.property_name, r.target_value, r.actual_value),
                 "Sample": f"#{r.sample_id} ({r.sample.zone_label})" if r.sample else "—",
                 "Trial": f"#{r.trial_record_id}" if r.trial_record_id else "—",
                 "Method": r.test_method,
