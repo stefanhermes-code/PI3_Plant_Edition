@@ -201,26 +201,26 @@ logout_button()
 st.title("Production Run")
 render_function_action_intro(
     function_text=(
-        "This is the primary record of everything that happens on a batch: which recipe and "
-        "machine it ran on, its Setup and Finalized process-phase settings (mixer rpm, conveyor "
-        "speed, air injection, ratio/index, ambient temperature/humidity, and so on), the "
-        "per-material flow-meter readings for that batch, any production events logged against "
-        "it (alarms, interventions, grade changes), and line-speed runtime data. Quality test "
-        "results and issues are captured on separate pages but always key back to the run "
-        "created here. A run doesn't need to be framed as an experiment - that's optional and "
-        "lives on the Trial / Experiment page for runs that are a deliberate change "
-        "investigation."
+        "This is the master record for a production batch. It stores the recipe and machine the "
+        "batch ran on, its Setup and Finalized process settings, the metered material flows, any "
+        "production events, and the runtime data. Quality test results and issues are captured on "
+        "separate pages but always link back to the run created here. Framing a run as an "
+        "experiment is optional and handled on the Trial / Experiment page."
     ),
-    action_text=(
-        "Start on the Production Runs tab to create the batch record (foam grade, recipe version, "
-        "machine, run date - the batch reference is generated automatically). Then work through "
-        "the other tabs for that same run: log its Setup and Finalized phase settings under "
-        "Process Phases (including ambient temperature/humidity), its metered material flows "
-        "under Component Stream Readings (readings always attach to the Finalized phase), any "
-        "alarms or interventions under Production Events, and line-speed conditions under "
-        "Runtime Data. Every tab other than Production Runs opens with the same run selector, so "
-        "pick the run once and work through its tabs in turn - manual entry and CSV/Excel bulk "
-        "import are both available wherever heavy data entry is expected."
+    action_steps=[
+        "Open the **Production Runs** tab and create the batch record: pick the foam grade, "
+        "recipe version, machine and run date. The batch reference is generated automatically.",
+        "Open the **Process Phases** tab and log the Setup and Finalized settings for this run, "
+        "including ambient temperature and humidity.",
+        "Open the **Component Stream Readings** tab and log the metered material flows. Readings "
+        "always attach to the Finalized phase.",
+        "Open the **Production Events** tab and log any alarms, interventions or grade changes.",
+        "Open the **Runtime Data** tab and log the line-speed conditions.",
+    ],
+    action_note=(
+        "Every tab except Production Runs opens with the same run selector - pick the run once, "
+        "then step through its tabs in order. Manual entry and CSV/Excel import are both "
+        "available throughout."
     ),
 )
 session = get_session()

@@ -151,15 +151,31 @@ def page_setup(title: str):
     pass
 
 
-def render_function_action_intro(function_text: str, action_text: str):
+def render_function_action_intro(function_text: str, action_text: str = None, action_steps=None, action_note: str = None):
     """Renders a page's opening explanation as a bordered 'Function / Action'
     box instead of a single caption line: Function is what this page lets
     you do, Action is what you actually need to do on it here, so both are
     stated explicitly instead of blended into one paragraph. Call this
-    right after st.title(), in place of a plain st.caption() intro."""
+    right after st.title(), in place of a plain st.caption() intro.
+
+    Pass action_text for a plain one-paragraph Action (the original format).
+    Pass action_steps (a list of strings) instead, when the page has a clear
+    sequence to follow - each item is rendered as its own numbered "Step N."
+    line instead of one dense paragraph, which reads much faster on pages
+    with several tabs or a multi-part workflow. action_note is an optional
+    closing line rendered under the steps (e.g. a tip that applies to every
+    step, such as "manual entry and CSV/Excel import are both available
+    throughout")."""
     with st.container(border=True):
         st.markdown(f"**Function:** {function_text}")
-        st.markdown(f"**Action:** {action_text}")
+        if action_steps:
+            st.markdown("**Action:**")
+            for i, step in enumerate(action_steps, start=1):
+                st.markdown(f"**Step {i}.** {step}")
+            if action_note:
+                st.markdown(action_note)
+        else:
+            st.markdown(f"**Action:** {action_text}")
 
 
 CHART_ZOOM_HINT = "Tip: scroll to zoom in/out, click-and-drag to pan."
