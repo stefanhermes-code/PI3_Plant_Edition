@@ -221,21 +221,72 @@ def activate_recipe_version(session, foam_grade_id, new_version):
 
 
 def next_version_label(current_label, existing_count):
-    """Best-effort auto-generated label for the next recipe version: if
-    the current label ends in a number (e.g. "28-MH-05"), increments that
-    number (preserving its zero-padding width), matching the meaningful
+    """Auto-generated label for the next recipe version: if the current
+    label ends in a number (e.g. "28-MH-05"), increments that number
+    (preserving its zero-padding width), matching the meaningful
     product-code style labels this app's users already use. Falls back to
-    appending "-v{n}" if no trailing number is found. Always shown to the
-    user as an editable suggestion, never silently applied - two versions
-    for the same grade could otherwise collide on a generated label."""
-    import re
-
+    appending "-v{n}" if no trailing number is found. Applied directly to
+    the new version - editing a recipe is not the place to be naming
+    things by hand."""
     match = re.search(r"(\d+)$", current_label or "")
     if match:
         num = match.group(1)
         next_num = str(int(num) + 1).zfill(len(num))
         return current_label[: match.start()] + next_num
     return f"{(current_label or 'v').strip()}-v{existing_count + 1}"
+
+
+def summarize_recipe_component_changes(old_components, new_rows, name_key="Raw material", php_key="php"):
+    """Auto-generates a one-line "what changed" change note by comparing a
+    recipe version's current components against the edited rows about to
+    become its replacement - added/removed ingredients and any php changes,
+    by name. Editing a recipe should not require writing a justification
+    from scratch: the ingredient diff itself already is the record of what
+    changed, exactly as the version history and Recipe Optimization's
+    version-diff tool show it row-by-row - this just condenses that same
+    comparison into the change_note field automatically.
+
+    old_components: RecipeComponent objects (raw_material_name, php).
+    new_rows: iterable of dict-like rows (e.g. a DataFrame's iterrows()
+    values) with name_key/php_key columns. Returns "No ingredient
+    changes." if the two ingredient lists are identical."""
+    old_by_key = {
+        c.raw_material_name.strip().lower(): (c.raw_material_name.strip(), c.php)
+        for c in old_components
+        if (c.raw_material_name or "").strip()
+    }
+    new_by_key = {}
+    for row in new_rows:
+        name = str(row.get(name_key) or "").strip()
+        if not name:
+            continue
+        php_raw = row.get(php_key)
+        php = float(php_raw) if pd.notna(php_raw) else None
+        new_by_key[name.lower()] = (name, php)
+
+    added, removed, changed = [], [], []
+    for key, (name, new_php) in new_by_key.items():
+        if key not in old_by_key:
+            added.append(f"{name} ({new_php:.2f} php)" if new_php is not None else name)
+        else:
+            _, old_php = old_by_key[key]
+            if round(old_php or 0, 2) != round(new_php or 0, 2):
+                if old_php is not None and new_php is not None:
+                    changed.append(f"{name} {old_php:.2f} -> {new_php:.2f} php")
+                else:
+                    changed.append(name)
+    for key, (name, _old_php) in old_by_key.items():
+        if key not in new_by_key:
+            removed.append(name)
+
+    parts = []
+    if added:
+        parts.append("Added " + ", ".join(added))
+    if removed:
+        parts.append("Removed " + ", ".join(removed))
+    if changed:
+        parts.append("Changed " + ", ".join(changed))
+    return ("; ".join(parts) + ".") if parts else "No ingredient changes."
 
 
 def render_data_table(df, max_height=None):

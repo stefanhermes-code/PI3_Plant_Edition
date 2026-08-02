@@ -40,6 +40,7 @@ from helpers import (
     render_function_action_intro,
     set_pending_banner,
     show_pending_banner,
+    summarize_recipe_component_changes,
     view_only_notice,
 )
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company
@@ -243,25 +244,26 @@ with tab_edit:
                 )
 
                 suggested_label = next_version_label(active_version.version_label, len(edit_grade.recipe_versions))
+                st.caption(f"Saving creates version **{suggested_label}** and retires the current one.")
                 with st.form(f"edit_recipe_{edit_grade.id}"):
-                    new_label = st.text_input("New version label *", value=suggested_label)
                     new_effective = st.date_input("Effective date", value=dt.date.today())
-                    new_change_note = st.text_area("Change note * (what changed and why)")
                     new_status = st.selectbox("Approval status", APPROVAL_STATUSES, index=0)
-                    new_created_by = st.text_input("Created by")
                     save_edit = st.form_submit_button("Save as new version")
                     if save_edit:
                         clean_rows = [
                             row for _, row in edited_df.iterrows() if str(row.get("Raw material") or "").strip()
                         ]
-                        if not new_label.strip() or not new_change_note.strip():
-                            st.error("Version label and change note are required.")
-                        elif not clean_rows:
+                        if not clean_rows:
                             st.error("At least one ingredient is required.")
                         else:
+                            new_label = suggested_label
+                            new_change_note = summarize_recipe_component_changes(
+                                active_version.components, clean_rows
+                            )
+                            new_created_by = user["display_name"] or user["username"] or ""
                             new_version = RecipeVersion(
                                 foam_grade_id=edit_grade.id,
-                                version_label=new_label.strip(),
+                                version_label=new_label,
                                 effective_date=new_effective,
                                 change_note=new_change_note,
                                 approval_status=new_status,
