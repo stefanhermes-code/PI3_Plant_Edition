@@ -43,6 +43,19 @@ Required secret: PI3_READONLY_DATABASE_URL - a connection string for the
 pi3_readonly role (Session Pooler recommended, matching the app's main
 DATABASE_URL convention - see db.py). This is a SEPARATE secret from
 DATABASE_URL; the app's normal read/write connection is never used here.
+
+5. pass_fail freshness. v_pi3_property_results (the view backing quality
+   test result questions) carries a pass_fail column that mirrors
+   PhysicalPropertyResult.pass_fail - a value stored once, in this app's
+   own database, at the moment each result was written (see the "recompute
+   live, don't trust a stored verdict" note in quality_standards.py). That
+   staleness problem can't be fixed by editing this view from here, since
+   the view itself lives directly in Supabase, not in this repo. Instead,
+   _recompute_live_pass_fail() below overwrites pass_fail in Python, after
+   the SQL has already run, using this app's own
+   quality_standards.compute_pass_fail() - the exact same tolerance rules
+   every other pass rate in the app uses, with no LLM arithmetic involved
+   and no Supabase migration ever required when a tolerance changes.
 """
 
 import os
@@ -50,6 +63,8 @@ import re
 
 import streamlit as st
 from sqlalchemy import create_engine, text
+
+from quality_standards import compute_pass_fail
 
 ALLOWED_VIEWS = (
     "v_pi3_production_runs",
@@ -152,6 +167,23 @@ def _validate_select(sql):
     return stripped
 
 
+def _recompute_live_pass_fail(rows):
+    """Overwrites each row's pass_fail with a live verdict from
+    quality_standards.compute_pass_fail(), instead of the value the
+    Supabase view returned - see point 5 in the module docstring for why.
+    Only touches rows that came from v_pi3_property_results with
+    property_name/target_value/actual_value all selected (typically via
+    SELECT * or an explicit column list that includes them); rows missing
+    any of the three, or without a pass_fail column at all, are left
+    exactly as returned. Mutates and returns the same list."""
+    for row in rows:
+        if "pass_fail" in row and {"property_name", "target_value", "actual_value"} <= row.keys():
+            row["pass_fail"] = compute_pass_fail(
+                row["property_name"], row["target_value"], row["actual_value"]
+            )
+    return rows
+
+
 def run_plant_query(sql, plant_id, max_rows=MAX_ROWS):
     """Validate and execute a PI3-generated SELECT against the curated
     views, hard-scoped to exactly one plant regardless of what the query
@@ -186,6 +218,7 @@ def run_plant_query(sql, plant_id, max_rows=MAX_ROWS):
                 text(wrapped), {"pi3_plant_id": plant_id, "pi3_max_rows": max_rows}
             )
             rows = [dict(row._mapping) for row in result]
+            rows = _recompute_live_pass_fail(rows)
     except QueryRejected:
         raise
     except Exception as exc:
