@@ -23,6 +23,7 @@ from auth import current_user, logout_button, require_login
 from db import FoamGrade, get_session, init_db
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company
 from helpers import (
+    analysis_unit_picker,
     page_setup,
     render_ask_pi3_section,
     render_data_table,
@@ -49,12 +50,12 @@ render_function_action_intro(
         "plain-language read for the technical team."
     ),
     action_text=(
-        "Pick the foam grade and the property you want to explain, then read down the ranked "
-        "table - the setting at the top has the strongest statistical association with that "
-        "outcome across this grade's recorded runs. Treat it as a lead to investigate, not a "
-        "cause on its own: review it against current raw materials and process conditions before "
-        "treating it as causal. Use 'Ask PI3' if you want the ranked pattern turned into a "
-        "plain-language interpretation."
+        "Choose whether to analyze one foam grade or a whole foam family (its grades pooled "
+        "together) and the property you want to explain, then read down the ranked table - the "
+        "setting at the top has the strongest statistical association with that outcome across "
+        "the recorded runs. Treat it as a lead to investigate, not a cause on its own: review it "
+        "against current raw materials and process conditions before treating it as causal. Use "
+        "'Ask PI3' if you want the ranked pattern turned into a plain-language interpretation."
     ),
 )
 session = get_session()
@@ -82,15 +83,24 @@ if not grades:
     )
     st.stop()
 
-c1, c2 = st.columns(2)
-grade = c1.selectbox("Foam grade", grades, format_func=lambda g: g.grade_name)
+unit = analysis_unit_picker(grades, key_prefix="ppc")
+pooling_grades = unit["mode"] == "family"
+if pooling_grades:
+    st.caption(
+        f"Pooling {len(unit['grade_ids'])} grade(s) in foam family **{unit['label']}**: "
+        f"{', '.join(unit['member_grade_names'])}. Because grades in a family can have different "
+        "target values for the same property, the correlation below is computed against **% of "
+        "each run's own target** instead of the property's raw unit - this is what keeps pooling "
+        "grades together from reading a plain grade-to-grade target difference as a false "
+        "correlation."
+    )
 
-grade_results_df = property_results_dataframe(session, foam_grade_id=grade.id)
+grade_results_df = property_results_dataframe(session, foam_grade_id=unit["grade_ids"])
 available_properties = sorted(grade_results_df["property_name"].dropna().unique())
 
-property_name = c2.selectbox("Property", available_properties)
+property_name = st.selectbox("Property", available_properties)
 
-ranked = rank_setting_correlations(session, grade.id, property_name)
+ranked = rank_setting_correlations(session, unit["grade_ids"], property_name, normalize_pct_of_target=pooling_grades)
 ranked_with_data = ranked.dropna(subset=["correlation"])
 
 if ranked_with_data.empty:
@@ -138,9 +148,10 @@ setting_field = st.selectbox(
     format_func=lambda f: PHASE_SETTING_LABELS.get(f, f),
 )
 
-merged = merged_run_property_dataframe(session, grade.id, property_name)
+merged = merged_run_property_dataframe(session, unit["grade_ids"], property_name, normalize_pct_of_target=pooling_grades)
 merged = merged.dropna(subset=[setting_field, "actual_value"])
 
+property_axis_label = property_name if not pooling_grades else f"{property_name} (% of target)"
 if len(merged) < 2:
     st.info(
         "Not enough runs with both this process setting and this property recorded yet to "
@@ -148,21 +159,28 @@ if len(merged) < 2:
     )
 else:
     chart_df = merged[[setting_field, "actual_value"]].rename(
-        columns={setting_field: PHASE_SETTING_LABELS.get(setting_field, setting_field), "actual_value": property_name}
+        columns={setting_field: PHASE_SETTING_LABELS.get(setting_field, setting_field), "actual_value": property_axis_label}
     )
-    render_scatter_chart_no_zero(chart_df, x=PHASE_SETTING_LABELS.get(setting_field, setting_field), y=property_name)
-    render_data_table(
-        merged[["run_id", "run_date", "machine", setting_field, "actual_value", "target_value"]],
-        max_height="400px",
+    render_scatter_chart_no_zero(
+        chart_df, x=PHASE_SETTING_LABELS.get(setting_field, setting_field), y=property_axis_label
     )
+    drill_columns = ["run_id", "run_date", "machine", setting_field, "actual_value", "target_value"]
+    if pooling_grades:
+        drill_columns.insert(2, "foam_grade")
+    render_data_table(merged[drill_columns], max_height="400px")
 
-plant_id = grade.product_family.plant_id if grade.product_family else None
+plant_id = unit["plant_id"]
+subject_desc = (
+    f"foam grade {unit['label']}" if unit["mode"] == "grade"
+    else f"foam family {unit['label']} (pooling grades: {', '.join(unit['member_grade_names'])})"
+)
+docx_grade_id = unit["entity_id"] if unit["mode"] == "grade" else None
 if ai_assistant.is_enabled_for_plant(session, plant_id):
     st.divider()
     st.subheader("Ask PI3 to interpret this pattern")
     if st.button(
         "Get PI3 interpretation",
-        key=f"ask_pi3_correlation_{grade.id}_{property_name}",
+        key=f"ask_pi3_correlation_{unit['state_key']}_{property_name}",
         disabled=not page_usable,
     ):
         ranking_summary = "\n".join(
@@ -173,11 +191,16 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
         )
         prompt = (
             "You are helping a technical reviewer at a flexible slabstock foam manufacturer "
-            f"understand which process settings are associated with {property_name} for foam "
-            f"grade {grade.grade_name}. Below is a ranked list of every recorded process setting's "
-            "correlation with this property across this grade's production history.\n\n"
+            f"understand which process settings are associated with {property_name} for "
+            f"{subject_desc}. Below is a ranked list of every recorded process setting's "
+            "correlation with this property across this production history.\n\n"
             f"{ranking_summary}\n\n"
-            "Using this ranking plus any relevant expert notes or historical cases in the connected "
+            + (
+                "Note: because this pools multiple foam grades, the property values shown are "
+                "expressed as a percentage of each run's own target, not the raw unit.\n\n"
+                if pooling_grades else ""
+            )
+            + "Using this ranking plus any relevant expert notes or historical cases in the connected "
             "knowledge base, explain in plain language which setting(s) most likely matter and why, "
             "and what this means practically. This is a historical pattern for the reviewer's own "
             "investigation, not a directive - phrase it as observations and hypotheses, not "
@@ -186,10 +209,10 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
         with st.spinner("Using PI3..."):
             answer = ai_assistant.ask_assistant(prompt)
         if answer:
-            st.session_state[f"correlation_ai_answer_{grade.id}_{property_name}"] = answer
-            st.session_state.pop(f"correlation_fixed_{grade.id}_{property_name}_saved_note_id", None)
+            st.session_state[f"correlation_ai_answer_{unit['state_key']}_{property_name}"] = answer
+            st.session_state.pop(f"correlation_fixed_{unit['state_key']}_{property_name}_saved_note_id", None)
 
-    ai_answer = st.session_state.get(f"correlation_ai_answer_{grade.id}_{property_name}")
+    ai_answer = st.session_state.get(f"correlation_ai_answer_{unit['state_key']}_{property_name}")
     if ai_answer:
         st.subheader("🤖 PI3 interpretation")
         st.caption(
@@ -197,25 +220,25 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "historical cases. Confirm through your own investigation before acting on it."
         )
         st.write(ai_answer)
-        corr_question_label = f"PI3 interpretation of process-setting correlation for {property_name}, {grade.grade_name}"
+        corr_question_label = f"PI3 interpretation of process-setting correlation for {property_name}, {unit['label']}"
         corr_dl_col, corr_save_col = st.columns([1, 1])
         with corr_dl_col:
             render_pi3_docx_download(
                 session,
                 plant_id,
-                key_prefix=f"correlation_fixed_{grade.id}_{property_name}",
+                key_prefix=f"correlation_fixed_{unit['state_key']}_{property_name}",
                 question_label=corr_question_label,
                 answer=ai_answer,
-                foam_grade_id=grade.id,
+                foam_grade_id=docx_grade_id,
             )
         with corr_save_col:
             render_save_to_expert_notes_button(
                 session,
-                key_prefix=f"correlation_fixed_{grade.id}_{property_name}",
+                key_prefix=f"correlation_fixed_{unit['state_key']}_{property_name}",
                 answer=ai_answer,
                 question_label=corr_question_label,
-                link_type="foam_grade",
-                entity_id=grade.id,
+                link_type=unit["link_type"],
+                entity_id=unit["entity_id"],
                 disabled=not page_usable,
             )
 elif user["is_platform_owner"]:
@@ -239,18 +262,20 @@ st.divider()
 render_ask_pi3_section(
     session,
     plant_id,
-    default_foam_grade_id=grade.id,
+    default_foam_grade_id=docx_grade_id,
     page_context=(
         f"The reviewer is on the Machine Settings vs Physical Properties Correlation page, looking "
         f"at '{property_name}' "
-        f"for foam grade '{grade.grade_name}' (id {grade.id})."
+        f"for {subject_desc}."
     ),
     sample_questions=[
-        f"Which process setting correlates most strongly with {property_name} for {grade.grade_name}?",
-        f"Which ingredient's dosage correlates most with {property_name} for {grade.grade_name}?",
-        f"Have there been any quality issues reported for {grade.grade_name} recently?",
+        f"Which process setting correlates most strongly with {property_name} for {unit['label']}?",
+        f"Which ingredient's dosage correlates most with {property_name} for {unit['label']}?",
+        f"Have there been any quality issues reported for {unit['label']} recently?",
     ],
-    key_prefix=f"ask_pi3_freeform_correlation_{grade.id}_{property_name}",
+    note_link_type=unit["link_type"],
+    note_entity_id=unit["entity_id"],
+    key_prefix=f"ask_pi3_freeform_correlation_{unit['state_key']}_{property_name}",
     disabled=not page_usable,
 )
 

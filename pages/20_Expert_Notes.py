@@ -2,10 +2,13 @@
 
 Captures qualitative expert knowledge - the kind of thing that lives in a
 technical person's head or a stray email, not a structured measurement -
-linked to a production run (the common case), a trial/experiment, or a
-foam grade. This is the raw material PI3 needs: when PI3 connectivity is
-enabled for the relevant plant, saving a note here also feeds it into
-PI3 so future Root-Cause Assistant reasoning can retrieve it.
+linked to a production run (the common case), a trial/experiment, a foam
+grade, or a foam family (added 2026-08-02, alongside "analyze by foam
+family" on Trend Analysis/Process-Property Correlation/Machine Settings
+Optimization - see helpers.analysis_unit_picker). This is the raw material
+PI3 needs: when PI3 connectivity is enabled for the relevant plant, saving
+a note here also feeds it into PI3 so future Root-Cause Assistant reasoning
+can retrieve it.
 
 Also shows PI3-sourced notes - insights a reviewer explicitly chose to
 keep via a "Save to Expert Notes" button on Recipe Optimization, Trend
@@ -55,7 +58,7 @@ render_function_action_intro(
         "Case Retrieval searches and Root-Cause Assistant comparisons can retrieve it."
     ),
     action_text=(
-        "Pick what the note is about (a production run, trial, or foam grade), write it, set a "
+        "Pick what the note is about (a production run, trial, foam grade, or foam family), write it, set a "
         "confidence level, and save - there's no other structured field to fill in, so use this "
         "for anything worth remembering that the rest of the app has no place for. Click a "
         "PI3-sourced note to re-download its original Word report, or edit/delete any note the "
@@ -78,6 +81,7 @@ LINK_TYPES = {
     "Production Run": "production_run",
     "Trial / Experiment": "trial_record",
     "Foam Grade": "foam_grade",
+    "Foam Family": "product_family",
 }
 
 
@@ -96,6 +100,12 @@ grades = (
     .order_by(FoamGrade.grade_name)
     .all()
 )
+# Foam families offered here are derived from this same scoped grades list
+# (any family with at least one in-scope grade), not a separate company
+# scope query - keeps "what's offered to link to" consistent with the
+# Foam Grade option above rather than a second, possibly-diverging notion
+# of company scope for families specifically.
+families = sorted({g.product_family for g in grades if g.product_family}, key=lambda f: f.name)
 
 st.subheader("Add an expert note")
 # The "Link to" selector lives outside the form on purpose: widgets inside
@@ -122,10 +132,14 @@ with st.form("add_expert_note"):
             "Trial *", trials,
             format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name} ({t.status})",
         )
-    else:
+    elif entity_type == "foam_grade":
         if not grades:
             st.warning("No foam grades yet - create one on the Product Family & Foam Grade page first.")
         entity = st.selectbox("Foam grade *", grades, format_func=lambda g: g.grade_name)
+    else:
+        if not families:
+            st.warning("No foam families yet - create one on the Product Family & Foam Grade page first.")
+        entity = st.selectbox("Foam family *", families, format_func=lambda f: f.name)
     note_text = st.text_area("Note *")
     confidence_level = st.selectbox("Confidence level", CONFIDENCE_LEVELS, index=2)
     author = st.text_input("Author", value=user["display_name"])
@@ -167,17 +181,23 @@ if active_company_id is None:
     notes = all_notes
 else:
     # ExpertNote is polymorphic (linked_entity_type + linked_entity_id can
-    # point at a production run, trial record, or foam grade). Scope each
-    # kind against the id set already computed above for that company.
+    # point at a production run, trial record, foam grade, or foam family).
+    # Scope each kind against the id set already computed above for that
+    # company. Missing the product_family branch here would make any note
+    # PI3 saved from a "foam family" analysis (see analysis_unit_picker,
+    # helpers.py) invisible to the very company that created it - not just
+    # a cosmetic gap, a real "where did my note go" bug.
     scoped_trial_ids = {t.id for t in trials}
     scoped_run_id_set = set(scoped_run_ids) if scoped_run_ids else set()
     scoped_grade_id_set = set(scoped_grade_ids) if scoped_grade_ids else set()
+    scoped_family_id_set = {f.id for f in families}
     notes = [
         n
         for n in all_notes
         if (n.linked_entity_type == "production_run" and n.linked_entity_id in scoped_run_id_set)
         or (n.linked_entity_type == "trial_record" and n.linked_entity_id in scoped_trial_ids)
         or (n.linked_entity_type == "foam_grade" and n.linked_entity_id in scoped_grade_id_set)
+        or (n.linked_entity_type == "product_family" and n.linked_entity_id in scoped_family_id_set)
     ]
 if not notes:
     st.info("No expert notes recorded yet.")

@@ -36,6 +36,7 @@ from db import FoamGrade, QualityObservation, get_session, init_db
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company
 from helpers import (
     CHART_ZOOM_HINT,
+    analysis_unit_picker,
     page_setup,
     render_ask_pi3_section,
     render_data_table,
@@ -53,23 +54,25 @@ logout_button()
 st.title("Trend Analysis")
 render_function_action_intro(
     function_text=(
-        "Runs the standard SPC toolkit against one quality property's history for a foam grade: "
-        "an individuals control chart with real control limits (catches a sudden shift), process "
-        "capability (Cpk) against that property's own tolerance band (catches 'in control but too "
-        "close to spec'), a CUSUM chart (catches a slow drift a control chart is bad at catching "
-        "early - pump wear, catalyst degradation, an off-spec raw-material lot), and a formal "
-        "trend test (replaces an eyeballed first-half-vs-second-half comparison with an actual "
-        "significance test). PI3 is used only after these numbers exist, to help interpret a real "
-        "flag against recipe changes, machine changes, and quality-issue history - never to guess "
-        "whether a trend exists in the first place."
+        "Runs the standard SPC toolkit against one quality property's history for a foam grade (or "
+        "a whole foam family pooled together): an individuals control chart with real control "
+        "limits (catches a sudden shift), process capability (Cpk) against that property's own "
+        "tolerance band (catches 'in control but too close to spec'), a CUSUM chart (catches a "
+        "slow drift a control chart is bad at catching early - pump wear, catalyst degradation, an "
+        "off-spec raw-material lot), and a formal trend test (replaces an eyeballed "
+        "first-half-vs-second-half comparison with an actual significance test). PI3 is used only "
+        "after these numbers exist, to help interpret a real flag against recipe changes, machine "
+        "changes, and quality-issue history - never to guess whether a trend exists in the first "
+        "place."
     ),
     action_text=(
-        "Pick the foam grade and the property you want to track (density, hardness/IFD, tensile, "
-        "and so on). Read the control chart first for sudden shifts, then capability for how much "
-        "margin there is to spec, then CUSUM for a slower drift the control chart might miss, and "
-        "the trend test to confirm whether an apparent trend is statistically real. If something "
-        "flags, use 'Ask PI3' to get it interpreted against this grade's recipe changes, machine "
-        "changes, and quality-issue history before acting on it."
+        "Choose whether to analyze one foam grade or a whole foam family (its grades pooled "
+        "together), pick the property you want to track (density, hardness/IFD, tensile, and so "
+        "on). Read the control chart first for sudden shifts, then capability for how much margin "
+        "there is to spec, then CUSUM for a slower drift the control chart might miss, and the "
+        "trend test to confirm whether an apparent trend is statistically real. If something "
+        "flags, use 'Ask PI3' to get it interpreted against recipe changes, machine changes, and "
+        "quality-issue history before acting on it."
     ),
 )
 session = get_session()
@@ -141,8 +144,8 @@ if not grades:
     st.warning("No foam grade yet has quality test results recorded - add these first before using Trend Analysis.")
     st.stop()
 
-grade = st.selectbox("Foam grade", grades, format_func=lambda g: g.grade_name)
-results_df = property_results_dataframe(session, foam_grade_id=grade.id)
+unit = analysis_unit_picker(grades, key_prefix="trend")
+results_df = property_results_dataframe(session, foam_grade_id=unit["grade_ids"])
 
 properties = sorted(results_df["property_name"].dropna().unique())
 property_name = st.selectbox("Property", properties)
@@ -150,7 +153,7 @@ property_name = st.selectbox("Property", properties)
 c1, c2 = st.columns(2)
 recipe_versions = sorted(results_df["recipe_version"].dropna().unique())
 recipe_filter = c1.selectbox("Recipe version filter", ["All"] + list(recipe_versions))
-# Only offer a machine filter when this grade's runs actually span more
+# Only offer a machine filter when this selection's runs actually span more
 # than one machine - with a single machine (today's actual production
 # state), "Machine filter: All" vs "Machine filter: <the only machine>"
 # is the same noise problem the Company selector had: nothing to choose
@@ -161,7 +164,18 @@ if len(machines) > 1:
 else:
     machine_filter = "All"
 
-series = property_run_series(session, grade.id, property_name)
+pooling_grades = unit["mode"] == "family"
+if pooling_grades:
+    st.caption(
+        f"Pooling {len(unit['grade_ids'])} grade(s) in foam family **{unit['label']}**: "
+        f"{', '.join(unit['member_grade_names'])}. Because grades in a family can have different "
+        f"target values for the same property, everything below is shown as **% of each run's own "
+        f"target** (100% = exactly on target) instead of {property_name}'s raw unit - this is what "
+        "keeps pooling grades together from reading a plain grade-to-grade target difference as a "
+        "false shift, drift, or trend."
+    )
+
+series = property_run_series(session, unit["grade_ids"], property_name, normalize_pct_of_target=pooling_grades)
 if recipe_filter != "All":
     series = series[series["recipe_version"] == recipe_filter]
 if machine_filter != "All":
@@ -172,7 +186,8 @@ if series.empty:
     st.info("No results match these filters.")
     st.stop()
 
-st.caption(f"{len(series)} production run(s) with a {property_name} result, {series['tested_at'].min()} to {series['tested_at'].max()}.")
+value_desc = f"{property_name} result" if not pooling_grades else f"{property_name} result (as % of target)"
+st.caption(f"{len(series)} production run(s) with a {value_desc}, {series['tested_at'].min()} to {series['tested_at'].max()}.")
 
 # ---------------------------------------------------------------------------
 # Control chart
@@ -236,12 +251,14 @@ else:
     m1.metric("Overall margin to spec", f"{cpk:.2f}")
     m2.metric("Margin to upper limit", f"{capability['cpu']:.2f}")
     m3.metric("Margin to lower limit", f"{capability['cpl']:.2f}")
+    spec_unit = "% of target" if pooling_grades else ""
     st.caption(
-        f"Spec range is {capability['lsl']:.3g}-{capability['usl']:.3g} (target "
-        f"{capability['target']:.3g} +/-10%, this app's own pass/fail convention): **{capability_read}**. "
-        "As a guide: a margin score of 1.33 or higher means comfortable room to spec, 1.0-1.33 is "
-        "tight (some risk of results drifting outside spec), and below 1.0 means the process is "
-        "likely already producing some out-of-spec results even without any further drift."
+        f"Spec range is {capability['lsl']:.3g}-{capability['usl']:.3g}{spec_unit} (target "
+        f"{capability['target']:.3g}{spec_unit} +/-10%, this app's own pass/fail convention): "
+        f"**{capability_read}**. As a guide: a margin score of 1.33 or higher means comfortable "
+        "room to spec, 1.0-1.33 is tight (some risk of results drifting outside spec), and below "
+        "1.0 means the process is likely already producing some out-of-spec results even without "
+        "any further drift."
     )
 
 # ---------------------------------------------------------------------------
@@ -365,21 +382,26 @@ else:
 # ---------------------------------------------------------------------------
 st.divider()
 st.subheader("Results")
-render_data_table(
-    series[["tested_at", "run_id", "machine", "actual_value", "target_value", "n_replicates"]],
-    max_height="400px",
-)
+results_columns = ["tested_at", "run_id", "machine", "actual_value", "target_value", "n_replicates"]
+if pooling_grades:
+    results_columns.insert(2, "foam_grade")
+render_data_table(series[results_columns], max_height="400px")
 
 # ---------------------------------------------------------------------------
 # PI3 interpretation, grounded in the SPC results above
 # ---------------------------------------------------------------------------
-plant_id = grade.product_family.plant_id if grade.product_family else None
+plant_id = unit["plant_id"]
+subject_desc = (
+    f"foam grade {unit['label']}" if unit["mode"] == "grade"
+    else f"foam family {unit['label']} (pooling grades: {', '.join(unit['member_grade_names'])})"
+)
+docx_grade_id = unit["entity_id"] if unit["mode"] == "grade" else None
 if ai_assistant.is_enabled_for_plant(session, plant_id):
     st.divider()
     st.subheader("Ask PI3 to interpret this pattern")
     if st.button(
         "Get PI3 interpretation",
-        key=f"ask_pi3_trend_{grade.id}_{property_name}",
+        key=f"ask_pi3_trend_{unit['state_key']}_{property_name}",
         disabled=not page_usable,
     ):
         if chart_result["ready"]:
@@ -426,13 +448,23 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             else "No recipe/machine changes or quality issues recorded across these runs."
         )
 
+        pooling_note = (
+            ""
+            if not pooling_grades
+            else (
+                "\n\nNote: this pools multiple foam grades from the same family together, and every "
+                "number above is expressed as % of each run's own target (100% = on target), not the "
+                "property's raw unit, precisely so grades with different target values can be pooled "
+                "without a plain grade-to-grade target difference looking like a false shift or trend."
+            )
+        )
         prompt = (
             "You are helping a technical reviewer at a flexible slabstock foam manufacturer interpret "
-            f"a statistical process control analysis of {property_name} for foam grade {grade.grade_name} "
+            f"a statistical process control analysis of {property_name} for {subject_desc} "
             f"across {len(series)} production runs. All of the following was computed deterministically "
             "(control chart with control limits and Western Electric/Nelson run rules, process capability, "
             "CUSUM drift detection, and a linear-regression trend test) - your job is to interpret it, not "
-            "to re-derive it.\n\n"
+            f"to re-derive it.{pooling_note}\n\n"
             f"Control chart: {control_summary}\n\n"
             f"Process capability: {capability_summary}\n\n"
             f"CUSUM (slow sustained drift): {cusum_summary}\n\n"
@@ -456,10 +488,10 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
         with st.spinner("Using PI3..."):
             answer = ai_assistant.ask_assistant(prompt)
         if answer:
-            st.session_state[f"trend_ai_answer_{grade.id}_{property_name}"] = answer
-            st.session_state.pop(f"trend_fixed_{grade.id}_{property_name}_saved_note_id", None)
+            st.session_state[f"trend_ai_answer_{unit['state_key']}_{property_name}"] = answer
+            st.session_state.pop(f"trend_fixed_{unit['state_key']}_{property_name}_saved_note_id", None)
 
-    ai_answer = st.session_state.get(f"trend_ai_answer_{grade.id}_{property_name}")
+    ai_answer = st.session_state.get(f"trend_ai_answer_{unit['state_key']}_{property_name}")
     if ai_answer:
         st.subheader("\U0001F916 PI3 interpretation")
         st.caption(
@@ -468,25 +500,25 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "acting on it."
         )
         st.write(ai_answer)
-        trend_question_label = f"PI3 interpretation of {property_name} for {grade.grade_name}"
+        trend_question_label = f"PI3 interpretation of {property_name} for {subject_desc}"
         trend_dl_col, trend_save_col = st.columns([1, 1])
         with trend_dl_col:
             render_pi3_docx_download(
                 session,
                 plant_id,
-                key_prefix=f"trend_fixed_{grade.id}_{property_name}",
+                key_prefix=f"trend_fixed_{unit['state_key']}_{property_name}",
                 question_label=trend_question_label,
                 answer=ai_answer,
-                foam_grade_id=grade.id,
+                foam_grade_id=docx_grade_id,
             )
         with trend_save_col:
             render_save_to_expert_notes_button(
                 session,
-                key_prefix=f"trend_fixed_{grade.id}_{property_name}",
+                key_prefix=f"trend_fixed_{unit['state_key']}_{property_name}",
                 answer=ai_answer,
                 question_label=trend_question_label,
-                link_type="foam_grade",
-                entity_id=grade.id,
+                link_type=unit["link_type"],
+                entity_id=unit["entity_id"],
                 disabled=not page_usable,
             )
 elif user["is_platform_owner"]:
@@ -510,16 +542,17 @@ st.divider()
 render_ask_pi3_section(
     session,
     plant_id,
-    default_foam_grade_id=grade.id,
+    default_foam_grade_id=docx_grade_id,
     page_context=(
-        f"The reviewer is on the Trend Analysis page, looking at '{property_name}' for foam "
-        f"grade '{grade.grade_name}' (id {grade.id})."
+        f"The reviewer is on the Trend Analysis page, looking at '{property_name}' for {subject_desc}."
     ),
     sample_questions=[
-        f"Is there a real trend in {property_name} for {grade.grade_name}, or is it just noise?",
-        f"Has {property_name} for {grade.grade_name} ever gone out of control before?",
-        f"What changed around the time {property_name} started drifting for {grade.grade_name}?",
+        f"Is there a real trend in {property_name} for {unit['label']}, or is it just noise?",
+        f"Has {property_name} for {unit['label']} ever gone out of control before?",
+        f"What changed around the time {property_name} started drifting for {unit['label']}?",
     ],
-    key_prefix=f"ask_pi3_freeform_trend_{grade.id}_{property_name}",
+    note_link_type=unit["link_type"],
+    note_entity_id=unit["entity_id"],
+    key_prefix=f"ask_pi3_freeform_trend_{unit['state_key']}_{property_name}",
     disabled=not page_usable,
 )

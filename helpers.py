@@ -10,7 +10,7 @@ import streamlit as st
 import ai_assistant
 import reports
 from auth import current_user
-from db import ExpertNote, FoamGrade, ProductionRun, RecipeVersion, TrialRecord, get_session
+from db import ExpertNote, FoamGrade, ProductFamily, ProductionRun, RecipeVersion, TrialRecord, get_session
 
 
 def expert_note_plant_id_for_link(entity_type, entity_id, session):
@@ -27,6 +27,9 @@ def expert_note_plant_id_for_link(entity_type, entity_id, session):
     if entity_type == "foam_grade":
         g = session.get(FoamGrade, entity_id)
         return g.product_family.plant_id if g else None
+    if entity_type == "product_family":
+        f = session.get(ProductFamily, entity_id)
+        return f.plant_id if f else None
     return None
 
 
@@ -43,6 +46,9 @@ def expert_note_link_label(entity_type, entity_id, session):
     if entity_type == "foam_grade":
         g = session.get(FoamGrade, entity_id)
         return f"Foam Grade: {g.grade_name}" if g else f"Foam Grade #{entity_id} (deleted)"
+    if entity_type == "product_family":
+        f = session.get(ProductFamily, entity_id)
+        return f"Foam Family: {f.name}" if f else f"Foam Family #{entity_id} (deleted)"
     return f"{entity_type} #{entity_id}"
 
 
@@ -59,6 +65,80 @@ def expert_note_foam_grade_id_for_link(entity_type, entity_id, session):
         t = session.get(TrialRecord, entity_id)
         return t.production_run.foam_grade_id if t else None
     return None
+
+
+def analysis_unit_picker(grades, key_prefix):
+    """Shared "Analyze by: Foam Grade / Foam Family" control for the three
+    Industrial Intelligence pages built on analytics.py's pooled per-grade
+    pipeline (Trend Analysis, Machine Settings vs Physical Properties
+    Correlation, Machine Settings Optimization) - added 2026-08-02 so a
+    reviewer can pool an entire product family's grades into one analysis
+    instead of checking each grade one at a time. Recipe Optimization and
+    Root-Cause Assistant don't use this: their sections (current
+    formulation/cost, version diff, run-vs-prior-run diff) are inherently
+    about one specific grade, not something that pools sensibly.
+
+    `grades` must be the CALLER's already-scoped-and-filtered list of
+    FoamGrade objects (e.g. already restricted to grades with quality test
+    results) - foam families are derived from this same list via groupby,
+    so a family only ever offers the grades that already passed the
+    caller's own filter, and "Foam family X" never silently pulls in a
+    grade that "Foam grade" mode wouldn't have offered on its own.
+
+    Returns a dict:
+    - mode: "grade" or "family"
+    - label: display name (grade_name, or the family's name)
+    - grade_ids: list of foam_grade_id(s) to pass into analytics.py
+      functions (always a list, even in single-grade mode)
+    - plant_id: for ai_assistant.is_enabled_for_plant() / availability_status()
+    - link_type: "foam_grade" or "product_family" - for Expert Notes saving
+      (see expert_note_plant_id_for_link/expert_note_link_label above)
+    - entity_id: the grade's or family's own id, paired with link_type
+    - state_key: unique string for namespacing st.session_state keys across
+      grade/family selections (e.g. "grade-14" vs "family-3") so switching
+      between them doesn't show a stale cached PI3 answer from the other mode
+    - member_grade_names: sorted list of grade_name strings included in
+      this unit (a single-item list in grade mode) - for prompts/captions
+      that want to spell out exactly which grades were pooled
+    """
+    mode_choice = st.radio(
+        "Analyze by", ["Foam grade", "Foam family"], key=f"{key_prefix}_unit_mode", horizontal=True
+    )
+    if mode_choice == "Foam grade":
+        grade = st.selectbox(
+            "Foam grade", grades, format_func=lambda g: g.grade_name, key=f"{key_prefix}_grade_select"
+        )
+        return {
+            "mode": "grade",
+            "label": grade.grade_name,
+            "grade_ids": [grade.id],
+            "plant_id": grade.product_family.plant_id if grade.product_family else None,
+            "link_type": "foam_grade",
+            "entity_id": grade.id,
+            "state_key": f"grade-{grade.id}",
+            "member_grade_names": [grade.grade_name],
+        }
+
+    families = sorted({g.product_family for g in grades if g.product_family}, key=lambda f: f.name)
+    if not families:
+        st.warning("No foam family available for these grades yet.")
+        st.stop()
+    family = st.selectbox(
+        "Foam family", families,
+        format_func=lambda f: f"{f.name} ({sum(1 for g in grades if g.product_family_id == f.id)} grade(s))",
+        key=f"{key_prefix}_family_select",
+    )
+    family_grades = [g for g in grades if g.product_family_id == family.id]
+    return {
+        "mode": "family",
+        "label": family.name,
+        "grade_ids": [g.id for g in family_grades],
+        "plant_id": family.plant_id,
+        "link_type": "product_family",
+        "entity_id": family.id,
+        "state_key": f"family-{family.id}",
+        "member_grade_names": sorted(g.grade_name for g in family_grades),
+    }
 
 
 def page_setup(title: str):

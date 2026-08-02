@@ -10,6 +10,17 @@ Correlation, Root-Cause Assistant, Machine Settings Optimization) starts
 from that same join, so it is built once here rather than five
 slightly-different copies of the same query living in each page.
 
+Every `foam_grade_id` parameter below (see _grade_id_list) accepts either a
+single foam grade's id (the original, most common case) or a list of ids -
+the latter is how "analyze by foam family" works (Trend Analysis,
+Machine Settings vs Physical Properties Correlation, and Machine Settings
+Optimization): a product family's member grades are resolved to their ids
+by helpers.analysis_unit_picker and passed through here as a list, pooling
+every one of those grades' runs into the same analysis. Recipe Optimization
+and Root-Cause Assistant stay single-grade-only - their sections (current
+formulation/cost, version diff, run-vs-prior-run diff) are inherently about
+one specific grade's recipe, not something that pools sensibly.
+
 Note: ProductionRun deliberately has no back-populated .phases/.results
 collections (see the comment on ProductionRun in db.py - it avoids a
 Streamlit/SQLAlchemy deepcopy crash). Every function below queries
@@ -28,6 +39,20 @@ from db import (
     ProductionRun,
     RawMaterial,
 )
+
+
+def _grade_id_list(foam_grade_id):
+    """Every function below that takes `foam_grade_id` accepts either a
+    single id (the original "analyze one foam grade" case) or a list/tuple
+    of ids (analyzing a whole foam family - a product family's grades
+    pooled together, see analysis_unit_picker in helpers.py). Normalizes
+    both shapes to a list (or None) so the caller can always filter with
+    `.in_()`. None/empty means "no grade filter" (every grade)."""
+    if foam_grade_id is None:
+        return None
+    if isinstance(foam_grade_id, (list, tuple, set)):
+        return list(foam_grade_id) or None
+    return [foam_grade_id]
 
 # Machine/process settings captured per phase (see ProductionPhase in
 # db.py). These are the fields every process-vs-quality analysis works
@@ -61,10 +86,13 @@ def run_settings_dataframe(session, foam_grade_id=None):
     """One row per production run: identifying info (grade, recipe version,
     machine) plus its Finalized-phase process settings (falls back to the
     Setup phase if no Finalized phase has been recorded yet for that run).
+    `foam_grade_id` accepts a single id or a list of ids (a foam family's
+    grades pooled together) - see _grade_id_list above.
     """
     q = session.query(ProductionRun)
-    if foam_grade_id:
-        q = q.filter(ProductionRun.foam_grade_id == foam_grade_id)
+    grade_ids = _grade_id_list(foam_grade_id)
+    if grade_ids:
+        q = q.filter(ProductionRun.foam_grade_id.in_(grade_ids))
     runs = q.order_by(ProductionRun.run_date).all()
 
     rows = []
@@ -95,10 +123,12 @@ def run_settings_dataframe(session, foam_grade_id=None):
 def property_results_dataframe(session, foam_grade_id=None, property_name=None):
     """One row per physical property result, joined with the run's grade,
     recipe version, and machine - the base table for trend/correlation
-    work."""
+    work. `foam_grade_id` accepts a single id or a list of ids (a foam
+    family's grades pooled together)."""
     q = session.query(PhysicalPropertyResult).join(ProductionRun)
-    if foam_grade_id:
-        q = q.filter(ProductionRun.foam_grade_id == foam_grade_id)
+    grade_ids = _grade_id_list(foam_grade_id)
+    if grade_ids:
+        q = q.filter(ProductionRun.foam_grade_id.in_(grade_ids))
     if property_name:
         q = q.filter(PhysicalPropertyResult.property_name == property_name)
     results = q.all()
@@ -139,12 +169,54 @@ def pass_rate(series) -> float | None:
     return round((known == "Pass").sum() / len(known), 3)
 
 
-def merged_run_property_dataframe(session, foam_grade_id, property_name):
+def normalize_to_pct_of_target(df):
+    """Re-expresses a dataframe's actual_value/target_value columns on a
+    "percent of target" basis - target becomes 100 for every row,
+    actual_value becomes (actual/target)*100 - instead of the property's
+    own raw unit. This is what makes pooling multiple foam grades into one
+    analysis (see helpers.analysis_unit_picker's "foam family" mode)
+    statistically sound rather than misleading: two grades of the same
+    property (e.g. two different density grades) can have very different
+    target values, so a control chart, capability index, or raw
+    setting-vs-actual_value correlation built from RAW values would read a
+    plain grade-to-grade target difference as a false shift/drift/
+    correlation. Building on % of target instead makes every run's target
+    identical, so pooling grades together no longer confounds "which grade
+    is this run" with the thing actually being measured.
+
+    Only ever applied in foam-family mode - single-grade analyses keep
+    using each property's own raw unit/scale exactly as before (this
+    function is never called for foam_grade_id being a single id), so
+    existing single-grade numbers are completely unaffected by this.
+
+    Rows with a missing or zero target_value are dropped (nothing to
+    normalize against). The original raw values are kept under
+    _raw_actual_value/_raw_target_value in case a caller wants to still
+    display/export the real unit alongside the normalized one. Returns a
+    copy; safe to call on an empty dataframe (returns it unchanged)."""
+    if df.empty:
+        return df
+    out = df.dropna(subset=["target_value"])
+    out = out[out["target_value"] != 0].copy()
+    if out.empty:
+        return out
+    out["_raw_actual_value"] = out["actual_value"]
+    out["_raw_target_value"] = out["target_value"]
+    out["actual_value"] = (out["actual_value"] / out["target_value"]) * 100
+    out["target_value"] = 100.0
+    return out.reset_index(drop=True)
+
+
+def merged_run_property_dataframe(session, foam_grade_id, property_name, normalize_pct_of_target=False):
     """One row per production run for a given grade/property: process
     settings joined to that run's mean result for the chosen property.
     Used by Machine Settings vs Physical Properties Correlation and
     Machine Settings Optimization, which both need "one settings snapshot"
-    per "one quality outcome"."""
+    per "one quality outcome". `normalize_pct_of_target=True` re-expresses
+    actual_value/target_value as percent-of-target before returning (see
+    normalize_to_pct_of_target) - pass this when foam_grade_id is a foam
+    family's list of grade ids, since those grades can have different
+    target values for the same property."""
     settings_df = run_settings_dataframe(session, foam_grade_id=foam_grade_id)
     results_df = property_results_dataframe(session, foam_grade_id=foam_grade_id, property_name=property_name)
     if settings_df.empty or results_df.empty:
@@ -156,18 +228,25 @@ def merged_run_property_dataframe(session, foam_grade_id, property_name):
         .reset_index()
     )
     merged = settings_df.merge(per_run_result, on="run_id", how="inner")
+    if normalize_pct_of_target:
+        merged = normalize_to_pct_of_target(merged)
     return merged
 
 
-def rank_setting_correlations(session, foam_grade_id, property_name):
+def rank_setting_correlations(session, foam_grade_id, property_name, normalize_pct_of_target=False):
     """For EVERY process setting at once, compute its correlation with the
     chosen property's actual value across this grade's runs, ranked by
     |correlation| descending. This is the difference between "intelligence"
     and "a graph you have to already know where to point": instead of
     picking one setting and hoping it's the relevant one, the reviewer sees
     immediately which of the 7 settings actually moves this property, and
-    by how much, before drilling into any single scatter plot."""
-    merged = merged_run_property_dataframe(session, foam_grade_id, property_name)
+    by how much, before drilling into any single scatter plot.
+
+    `normalize_pct_of_target` - see merged_run_property_dataframe - pass
+    True when pooling a foam family's grades together."""
+    merged = merged_run_property_dataframe(
+        session, foam_grade_id, property_name, normalize_pct_of_target=normalize_pct_of_target
+    )
     rows = []
     for field in PHASE_SETTING_FIELDS:
         if merged.empty:
@@ -191,15 +270,26 @@ def rank_setting_correlations(session, foam_grade_id, property_name):
     return ranked
 
 
-def rank_setting_optimization(session, foam_grade_id, property_name):
+def rank_setting_optimization(session, foam_grade_id, property_name, normalize_pct_of_target=False):
     """For EVERY process setting, bucket its values into Low/Medium/High (or
     Low/High) ranges and measure the gap between the best- and
     worst-performing range's average absolute deviation from target. A
     bigger gap means that setting more clearly separates good outcomes from
     bad ones for this grade/property - ranked so the most actionable
     setting surfaces first, instead of the reviewer checking each of the 7
-    settings one at a time to find out which one matters."""
-    merged = merged_run_property_dataframe(session, foam_grade_id, property_name)
+    settings one at a time to find out which one matters.
+
+    `normalize_pct_of_target` - see merged_run_property_dataframe. Note this
+    function's own deviation_pct math below is already scale-invariant
+    under that normalization ((actual-target)/target is unchanged whether
+    actual/target are raw or already expressed as percent-of-target), so
+    passing True here only matters for keeping this function's INPUT
+    consistent with rank_setting_correlations' when both are shown
+    side-by-side for the same foam-family selection - it does not change
+    this function's own ranking numbers."""
+    merged = merged_run_property_dataframe(
+        session, foam_grade_id, property_name, normalize_pct_of_target=normalize_pct_of_target
+    )
     rows = []
     for field in PHASE_SETTING_FIELDS:
         label = PHASE_SETTING_LABELS.get(field, field)
@@ -403,10 +493,12 @@ def actual_usage_dataframe(session, foam_grade_id=None):
     computed here from what the flow meters actually measured for that one
     batch instead of from the recipe. Runs with no Finalized-phase stream
     readings, or with no identifiable Base-polyol reading to normalize
-    against, are skipped rather than guessed at."""
+    against, are skipped rather than guessed at. `foam_grade_id` accepts a
+    single id or a list of ids (a foam family's grades pooled together)."""
     q = session.query(ProductionRun)
-    if foam_grade_id:
-        q = q.filter(ProductionRun.foam_grade_id == foam_grade_id)
+    grade_ids = _grade_id_list(foam_grade_id)
+    if grade_ids:
+        q = q.filter(ProductionRun.foam_grade_id.in_(grade_ids))
     runs = q.all()
 
     rows = []
@@ -526,12 +618,21 @@ def rank_component_actual_correlations(session, foam_grade_id, property_name, mi
 _D2_MOVING_RANGE = 1.128  # control-chart constant for a 2-point moving range (individuals chart)
 
 
-def property_run_series(session, foam_grade_id, property_name):
+def property_run_series(session, foam_grade_id, property_name, normalize_pct_of_target=False):
     """One row per production run (mean of any replicate results) for a
     foam grade/property, sorted chronologically by test date. This is the
     base series every SPC function below works from - a control chart,
     capability index, or trend test needs one point per run, not one point
-    per replicate."""
+    per replicate.
+
+    `normalize_pct_of_target=True` re-expresses actual_value/target_value
+    as percent-of-target (see normalize_to_pct_of_target) before returning
+    - pass this when foam_grade_id is a foam family's list of grade ids, so
+    the control chart/capability/CUSUM/trend-test functions downstream
+    don't mistake a grade-to-grade target difference for a real shift or
+    drift. Every SPC function reads only actual_value/target_value, so
+    normalizing here is sufficient - nothing downstream needs to know
+    whether it's looking at a raw unit or percent-of-target."""
     df = property_results_dataframe(session, foam_grade_id=foam_grade_id, property_name=property_name)
     if df.empty:
         return df
@@ -543,11 +644,14 @@ def property_run_series(session, foam_grade_id, property_name):
             tested_at=("tested_at", "max"),
             recipe_version=("recipe_version", "first"),
             machine=("machine", "first"),
+            foam_grade=("foam_grade", "first"),
             n_replicates=("result_id", "count"),
         )
         .reset_index()
     )
     per_run = per_run.dropna(subset=["tested_at", "actual_value"]).sort_values("tested_at").reset_index(drop=True)
+    if normalize_pct_of_target:
+        per_run = normalize_to_pct_of_target(per_run)
     return per_run
 
 

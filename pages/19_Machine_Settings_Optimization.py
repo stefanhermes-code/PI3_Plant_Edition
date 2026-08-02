@@ -20,6 +20,7 @@ from analytics import (
 from auth import current_user, logout_button, require_login
 from db import FoamGrade, get_session, init_db
 from helpers import (
+    analysis_unit_picker,
     page_setup,
     render_data_table,
     render_function_action_intro,
@@ -43,10 +44,11 @@ render_function_action_intro(
         "then turn the ranked pattern into a plain-language read."
     ),
     action_text=(
-        "Pick the foam grade and property you want to optimize toward, then read the ranked "
-        "table - the setting at the top separates good from bad outcomes most clearly and is the "
-        "one most worth reviewing on the floor. Use the PI3 synthesis further down for a "
-        "plain-language interpretation before proposing any setpoint change to your team."
+        "Pick the foam grade (or a foam family to pool several grades together) and the property "
+        "you want to optimize toward, then read the ranked table - the setting at the top "
+        "separates good from bad outcomes most clearly and is the one most worth reviewing on the "
+        "floor. Use the PI3 synthesis further down for a plain-language interpretation before "
+        "proposing any setpoint change to your team."
     ),
 )
 session = get_session()
@@ -74,15 +76,24 @@ if not grades:
     )
     st.stop()
 
-c1, c2 = st.columns(2)
-grade = c1.selectbox("Foam grade", grades, format_func=lambda g: g.grade_name)
+unit = analysis_unit_picker(grades, key_prefix="mso")
+pooling_grades = unit["mode"] == "family"
+if pooling_grades:
+    st.caption(
+        f"Pooling {len(unit['grade_ids'])} grade(s) in foam family **{unit['label']}**: "
+        f"{', '.join(unit['member_grade_names'])}. Because grades in a family can have different "
+        "target values for the same property, the ranking and drill-down below are computed "
+        "against **% of each run's own target** instead of the property's raw unit - this keeps "
+        "pooling grades together from reading a plain grade-to-grade target difference as a false "
+        "pattern."
+    )
 
-grade_results_df = property_results_dataframe(session, foam_grade_id=grade.id)
+grade_results_df = property_results_dataframe(session, foam_grade_id=unit["grade_ids"])
 available_properties = sorted(grade_results_df["property_name"].dropna().unique())
 
-property_name = c2.selectbox("Property", available_properties)
+property_name = st.selectbox("Property", available_properties)
 
-ranked = rank_setting_optimization(session, grade.id, property_name)
+ranked = rank_setting_optimization(session, unit["grade_ids"], property_name, normalize_pct_of_target=pooling_grades)
 ranked_with_data = ranked.dropna(subset=["spread_pct"])
 
 if ranked_with_data.empty:
@@ -133,12 +144,16 @@ setting_field = st.selectbox(
     format_func=lambda f: PHASE_SETTING_LABELS.get(f, f),
 )
 
-merged = merged_run_property_dataframe(session, grade.id, property_name)
+merged = merged_run_property_dataframe(
+    session, unit["grade_ids"], property_name, normalize_pct_of_target=pooling_grades
+)
 merged = merged.dropna(subset=[setting_field, "actual_value"])
 
 if len(merged) < 3:
     st.info("Need at least 3 runs with both this setting and this property recorded to compare ranges.")
     st.stop()
+
+property_axis_label = property_name if not pooling_grades else f"{property_name} (% of target)"
 
 merged = merged.copy()
 merged["deviation_pct"] = ((merged["actual_value"] - merged["target_value"]) / merged["target_value"]).abs()
@@ -157,8 +172,11 @@ if merged["range"].isna().all() or merged["range"].nunique(dropna=True) < 2:
         f"Not enough variation in {PHASE_SETTING_LABELS.get(setting_field, setting_field)} across these "
         "runs yet to split into ranges — showing the raw data instead."
     )
+    fallback_columns = ["run_id", "run_date", setting_field, "actual_value", "target_value"]
+    if pooling_grades:
+        fallback_columns.insert(2, "foam_grade")
     render_data_table(
-        merged[["run_id", "run_date", setting_field, "actual_value", "target_value"]],
+        merged[fallback_columns],
         max_height="400px",
     )
 else:
@@ -191,17 +209,28 @@ else:
         )
 
     render_scatter_chart_no_zero(
-        merged.rename(columns={setting_field: PHASE_SETTING_LABELS.get(setting_field, setting_field)}),
+        merged.rename(
+            columns={
+                setting_field: PHASE_SETTING_LABELS.get(setting_field, setting_field),
+                "actual_value": property_axis_label,
+            }
+        ),
         x=PHASE_SETTING_LABELS.get(setting_field, setting_field),
-        y="actual_value",
+        y=property_axis_label,
     )
 
-if ai_assistant.is_enabled_for_plant(session, grade.product_family.plant_id if grade.product_family else None):
+plant_id = unit["plant_id"]
+subject_desc = (
+    f"foam grade {unit['label']}" if unit["mode"] == "grade"
+    else f"foam family {unit['label']} (pooling grades: {', '.join(unit['member_grade_names'])})"
+)
+
+if ai_assistant.is_enabled_for_plant(session, plant_id):
     st.divider()
     st.subheader("Ask PI3 to interpret this ranking")
     if st.button(
         "Get PI3 interpretation",
-        key=f"ask_pi3_optimization_{grade.id}_{property_name}",
+        key=f"ask_pi3_optimization_{unit['state_key']}_{property_name}",
         disabled=not page_usable,
     ):
         ranking_summary = "\n".join(
@@ -216,12 +245,17 @@ if ai_assistant.is_enabled_for_plant(session, grade.product_family.plant_id if g
         )
         prompt = (
             "You are helping a technical reviewer at a flexible slabstock foam manufacturer "
-            f"identify which process settings are worth adjusting for {property_name} on foam "
-            f"grade {grade.grade_name}. Below is a ranking of every recorded process setting by "
+            f"identify which process settings are worth adjusting for {property_name} on "
+            f"{subject_desc}. Below is a ranking of every recorded process setting by "
             "how clearly its low/medium/high ranges separate good outcomes from bad ones "
             "historically (bigger gap = more actionable).\n\n"
             f"{ranking_summary}\n\n"
-            "Using this ranking plus any relevant expert notes or historical cases in the "
+            + (
+                "Note: because this pools multiple foam grades, the property values are expressed "
+                "as a percentage of each run's own target, not the raw unit.\n\n"
+                if pooling_grades else ""
+            )
+            + "Using this ranking plus any relevant expert notes or historical cases in the "
             "connected knowledge base, explain in plain language which setting(s) are most worth "
             "reviewing and why. This is a starting point for the reviewer's own investigation, "
             "not a directive - phrase it as observations and hypotheses, never as an instruction "
@@ -230,9 +264,9 @@ if ai_assistant.is_enabled_for_plant(session, grade.product_family.plant_id if g
         with st.spinner("Using PI3..."):
             answer = ai_assistant.ask_assistant(prompt)
         if answer:
-            st.session_state[f"optimization_ai_answer_{grade.id}_{property_name}"] = answer
+            st.session_state[f"optimization_ai_answer_{unit['state_key']}_{property_name}"] = answer
 
-    ai_answer = st.session_state.get(f"optimization_ai_answer_{grade.id}_{property_name}")
+    ai_answer = st.session_state.get(f"optimization_ai_answer_{unit['state_key']}_{property_name}")
     if ai_answer:
         st.subheader("🤖 PI3 interpretation")
         st.caption(
@@ -246,9 +280,7 @@ elif user["is_platform_owner"]:
     # shown a feature they don't know exists (see PI3 Gaps discussion,
     # 2026-08-01: "the customer does not know that they could have this
     # functionality").
-    if ai_assistant.availability_status(
-        session, grade.product_family.plant_id if grade.product_family else None
-    ) == "not_configured":
+    if ai_assistant.availability_status(session, plant_id) == "not_configured":
         st.caption(
             "PI3 isn't configured for this deployment yet (missing API credentials) - contact "
             "your administrator."
