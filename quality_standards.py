@@ -15,10 +15,14 @@ rounds of correction on 2026-08-01/02:
   (5% of 48) = 48 +/- 2.4, i.e. 45.6-50.4.
 - "absolute": the number is a FIXED AMOUNT in the property's own unit,
   independent of the target's magnitude. Example: Density target 25 kg/m3,
-  tolerance 2 -> allowed band is 25 +/- 2.0 kg/m3, i.e. 23.0-27.0. Density
-  is the one property confirmed to work this way (a plant doesn't get a
-  wider allowance just because it's targeting a higher-density grade), not
-  as a percentage of target.
+  tolerance 2 -> allowed band is 25 +/- 2.0 kg/m3, i.e. 23.0-27.0 (a plant
+  doesn't get a wider allowance just because it's targeting a
+  higher-density grade). Compression set works the same way even though
+  the property itself is measured in %: target 8%, tolerance 1 -> allowed
+  band is 8 +/- 1 percentage point, i.e. 7%-9% - NOT 8% of the target
+  value (which would be a far tighter +/- 0.08 band). Confirmed for both
+  properties; Elongation at break and Ball rebound resilience are also
+  %-measured but still use "relative" below pending the same confirmation.
 
 unit_label is retained purely to describe what unit the property's
 target/actual values are themselves measured in for display (e.g. in the
@@ -51,7 +55,7 @@ INDUSTRY_TOLERANCES = {
     "Tensile strength": ("relative", 10.0, "kPa"),
     "Elongation at break": ("relative", 10.0, "%"),
     "Ball rebound resilience": ("relative", 5.0, "%"),
-    "Compression set": ("relative", 1.0, "%"),
+    "Compression set": ("absolute", 1.0, "%"),
     "Airflow / air permeability": ("relative", 10.0, "cfm"),
 }
 
@@ -90,7 +94,7 @@ def tolerance_label(property_name):
         mode, tol_value, unit = entry
         tol_text = f"{tol_value:g}"
         if mode == "absolute":
-            return f"± {tol_text} {unit}"
+            return f"± {tol_text}{unit}" if unit == "%" else f"± {tol_text} {unit}"
         return f"± {tol_text}% of target"
     return "± 10% of target (no industry tolerance published)"
 
