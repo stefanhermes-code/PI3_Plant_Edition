@@ -15,13 +15,24 @@ snapshots, Setup (planned/configured before the run) and Finalized (what
 actually happened, entered at shutdown).
 
 Laid out as one tab per function: Production Runs (overview/edit/delete +
-create), Process Phases, Component Stream Readings, Production Events, and
-Runtime Data. Every function tab (other than Production Runs) opens with a
-production-run selector shared with the other tabs, shows a clickable table
-of that run's related records with edit + delete, and keeps CSV/Excel bulk
-import as its own sub-tab. Raw material lot tracking has been removed from
-this page (not workable — batches get mixed in tanks); the underlying table
-is left untouched in the schema.
+create), Setup, Runtime Data, Component Stream Readings, and Production
+Events. Every function tab (other than Production Runs) opens with a
+production-run selector shared with the other tabs, shows that run's related
+record(s) with edit + delete, and keeps CSV/Excel bulk import as its own
+sub-tab. Raw material lot tracking has been removed from this page (not
+workable — batches get mixed in tanks); the underlying table is left
+untouched in the schema.
+
+Setup and Runtime Data used to be a single generic "Process Phases" tab (a
+phase_name dropdown picking which of the two ProductionPhase snapshots you
+were editing) plus a separate standalone "Runtime Data" tab backed by its
+own RuntimeDataRecord table — the two were doing overlapping work (e.g.
+RuntimeDataRecord.line_speed duplicating ProductionPhase.conveyor_speed).
+Restructured 2026-08-02 into two dedicated tabs instead: Setup (hardcoded to
+the "Setup" ProductionPhase row) and Runtime Data (hardcoded to the
+"Finalized" ProductionPhase row, now also carrying rise_time/curing_notes —
+the two fields RuntimeDataRecord had that nothing else captured). See
+RuntimeDataRecord in db.py for why that table is still there but retired.
 """
 
 import datetime as dt
@@ -34,7 +45,6 @@ from auth import current_user, logout_button, require_login
 from cascades import delete_production_run_cascade, production_run_dependency_counts
 from db import (
     EVENT_TYPES,
-    PHASE_NAMES,
     SEVERITIES,
     AdjustmentConclusion,
     ApprovalRecord,
@@ -51,7 +61,6 @@ from db import (
     RawMaterialLotUse,
     RecipeComponent,
     RecipeVersion,
-    RuntimeDataRecord,
     Sample,
     get_session,
     init_db,
@@ -80,23 +89,21 @@ RUN_OPTIONAL_COLUMNS = [
     "operator_or_team_reference", "notes",
 ]
 
-RUNTIME_REQUIRED_COLUMNS = ["production_run_id"]
-RUNTIME_OPTIONAL_COLUMNS = [
-    "line_speed",
-    "temperature_data",
-    "pressure_data",
-    "rise_time",
-    "curing_notes",
-]
-
-PHASE_REQUIRED_COLUMNS = ["production_run_id", "phase_name"]
-PHASE_OPTIONAL_COLUMNS = [
+# Setup and Runtime Data are both ProductionPhase rows (phase_name "Setup"
+# and "Finalized" respectively) - each tab is hardcoded to its own phase_name,
+# so imports need production_run_id only; phase_name is implied by which tab
+# you're importing into, not a file column.
+SETUP_REQUIRED_COLUMNS = ["production_run_id"]
+SETUP_OPTIONAL_COLUMNS = [
     "phase_start", "phase_end",
     "mixer_rpm", "conveyor_speed", "air_injection_rate", "air_pressure_bar",
     "ratio_index", "laydown_mode", "section_positions_note",
     "sidewall_width_mm", "foam_height_mm",
     "ambient_temperature_c", "ambient_humidity_pct", "notes",
 ]
+
+RUNTIME_REQUIRED_COLUMNS = ["production_run_id"]
+RUNTIME_OPTIONAL_COLUMNS = SETUP_OPTIONAL_COLUMNS + ["rise_time", "curing_notes"]
 
 # Component stream readings are actual measurements taken once production is
 # running, so they only ever attach to a run's Finalized phase — never to
@@ -210,12 +217,14 @@ render_function_action_intro(
     action_steps=[
         "Open the **Production Runs** tab and create the batch record: pick the foam grade, "
         "recipe version, machine and run date. The batch reference is generated automatically.",
-        "Open the **Process Phases** tab and log the Setup and Finalized settings for this run, "
-        "including ambient temperature and humidity.",
+        "Open the **Setup** tab and log the planned/configured settings for this run, including "
+        "ambient temperature and humidity.",
+        "Open the **Runtime Data** tab once the run is finished and log what actually happened - "
+        "the same settings as Setup, plus line-speed, rise time and curing notes. Comparing Setup "
+        "to Runtime Data is the plan-vs-actual read.",
         "Open the **Component Stream Readings** tab and log the metered material flows. Readings "
-        "always attach to the Finalized phase.",
+        "always attach to the Runtime Data (Finalized) snapshot.",
         "Open the **Production Events** tab and log any alarms, interventions or grade changes.",
-        "Open the **Runtime Data** tab and log the line-speed conditions.",
     ],
     action_note=(
         "Every tab except Production Runs opens with the same run selector - pick the run once, "
@@ -246,13 +255,13 @@ runs = (
     .all()
 )
 
-tab_runs, tab_phases, tab_streams, tab_events, tab_runtime = st.tabs(
+tab_runs, tab_setup, tab_runtime, tab_streams, tab_events = st.tabs(
     [
         "📋 Production Runs",
-        "⏱️ Process Phases",
+        "🛠️ Setup",
+        "📊 Runtime Data",
         "🧪 Component Stream Readings",
         "🚨 Production Events",
-        "📊 Runtime Data",
     ]
 )
 
@@ -552,271 +561,238 @@ with tab_runs:
                     st.rerun()
 
 # ---------------------------------------------------------------------------
-# Process phases
+# Setup (planned/configured settings, entered before the run starts)
 # ---------------------------------------------------------------------------
-with tab_phases:
+with tab_setup:
     st.caption(
-        "Two snapshots per run: **Setup** (planned/configured before the run) and **Finalized** "
-        "(what actually happened, entered at shutdown). Enter the same fields at both points — "
-        "comparing Setup to Finalized for a run is the plan-vs-actual read, no separate setpoint "
-        "column needed."
+        "The planned/configured settings for this run, entered before it starts. Compare this to "
+        "the Runtime Data tab (the Finalized/actual snapshot) for the plan-vs-actual read — no "
+        "separate setpoint column needed."
     )
 
     if not runs:
         st.info("Create a production run first (Production Runs tab).")
     else:
-        run = _run_selector(runs, key="phase_tab_run_select")
-        st.caption(f"Showing phases for **{_run_label(run)}**")
+        run = _run_selector(runs, key="setup_tab_run_select")
+        st.caption(f"Showing Setup data for **{_run_label(run)}**")
 
         sub_overview, sub_create, sub_import, sub_fallplate = st.tabs(
             ["Overview & Edit", "Create", "CSV / Excel import", "Fall-plate positions"]
         )
 
-        phases_for_run = (
+        setup_phase = (
             session.query(ProductionPhase)
-            .filter(ProductionPhase.production_run_id == run.id)
-            .order_by(ProductionPhase.phase_start)
-            .all()
+            .filter(ProductionPhase.production_run_id == run.id, ProductionPhase.phase_name == "Setup")
+            .first()
         )
 
         with sub_overview:
-            if not phases_for_run:
-                st.info("No phases recorded yet for this run — use the Create tab.")
+            if not setup_phase:
+                st.info("No Setup data recorded yet for this run — use the Create tab.")
             else:
-                phase_rows = [
-                    {
-                        "Phase": p.phase_name,
-                        "Start": p.phase_start,
-                        "End": p.phase_end,
-                        "Mixer rpm": p.mixer_rpm,
-                        "Conveyor m/min": p.conveyor_speed,
-                        "Ratio/index": p.ratio_index,
-                        "Ambient temp (°C)": p.ambient_temperature_c,
-                        "Ambient humidity (%)": p.ambient_humidity_pct,
-                        "Laydown mode": p.laydown_mode,
-                    }
-                    for p in phases_for_run
-                ]
-                idx = clickable_table(phase_rows, key=f"phases_table_{run.id}")
-                if idx is not None:
-                    st.session_state["pr_selected_phase_id"] = phases_for_run[idx].id
+                st.markdown("##### Edit Setup data")
+                with st.form(f"edit_setup_form_{setup_phase.id}"):
+                    phase_start = combine_date_time(
+                        "Setup start", f"edit_setup_start_{setup_phase.id}",
+                        default_date=setup_phase.phase_start.date() if setup_phase.phase_start else None,
+                        default_time=setup_phase.phase_start.time() if setup_phase.phase_start else None,
+                    )
+                    phase_end = combine_date_time(
+                        "Setup end", f"edit_setup_end_{setup_phase.id}",
+                        default_date=setup_phase.phase_end.date() if setup_phase.phase_end else None,
+                        default_time=setup_phase.phase_end.time() if setup_phase.phase_end else None,
+                    )
+
+                    st.markdown("**Machine settings**")
+                    c1, c2, c3, c4 = st.columns(4)
+                    mixer_rpm = c1.number_input(
+                        "Mixer rpm", min_value=0.0, step=1.0, value=float(setup_phase.mixer_rpm or 0.0),
+                        key=f"edit_setup_mixer_{setup_phase.id}",
+                    )
+                    conveyor_speed = c2.number_input(
+                        "Conveyor speed (m/min)", min_value=0.0, step=0.01,
+                        value=float(setup_phase.conveyor_speed or 0.0), key=f"edit_setup_conveyor_{setup_phase.id}",
+                    )
+                    air_injection_rate = c3.number_input(
+                        "Air injection rate", min_value=0.0, step=0.1,
+                        value=float(setup_phase.air_injection_rate or 0.0), key=f"edit_setup_air_inj_{setup_phase.id}",
+                    )
+                    air_pressure_bar = c4.number_input(
+                        "Air pressure (bar)", min_value=0.0, step=0.05,
+                        value=float(setup_phase.air_pressure_bar or 0.0), key=f"edit_setup_air_pres_{setup_phase.id}",
+                    )
+
+                    c5, c6, c7 = st.columns(3)
+                    sidewall_width_mm = c5.number_input(
+                        "Sidewall width (mm)", min_value=0.0, step=1.0,
+                        value=float(setup_phase.sidewall_width_mm or 0.0), key=f"edit_setup_sidewall_{setup_phase.id}",
+                    )
+                    foam_height_mm = c6.number_input(
+                        "Foam height (mm)", min_value=0.0, step=1.0,
+                        value=float(setup_phase.foam_height_mm or 0.0), key=f"edit_setup_height_{setup_phase.id}",
+                    )
+                    ratio_index = c7.number_input(
+                        "Ratio / index", min_value=0.0, step=0.1,
+                        value=float(setup_phase.ratio_index or 0.0), key=f"edit_setup_ratio_{setup_phase.id}",
+                        help="Stoichiometric ratio/index for this phase.",
+                    )
+
+                    st.markdown("**Ambient conditions**")
+                    c8, c9 = st.columns(2)
+                    ambient_temperature_c = c8.number_input(
+                        "Ambient temperature (°C)", step=0.1,
+                        value=float(setup_phase.ambient_temperature_c or 0.0),
+                        key=f"edit_setup_ambient_temp_{setup_phase.id}",
+                    )
+                    ambient_humidity_pct = c9.number_input(
+                        "Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5,
+                        value=float(setup_phase.ambient_humidity_pct or 0.0),
+                        key=f"edit_setup_ambient_hum_{setup_phase.id}",
+                    )
+
+                    laydown_mode = st.text_input(
+                        "Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)",
+                        value=setup_phase.laydown_mode or "", key=f"edit_setup_laydown_{setup_phase.id}",
+                    )
+                    section_positions_note = st.text_area(
+                        "Other geometry notes (structured fall-plate section positions are entered in the "
+                        "Fall-plate positions sub-tab)",
+                        value=setup_phase.section_positions_note or "", key=f"edit_setup_geom_note_{setup_phase.id}",
+                    )
+                    notes = st.text_area(
+                        "Notes", value=setup_phase.notes or "", key=f"edit_setup_notes_{setup_phase.id}"
+                    )
+
+                    save = st.form_submit_button("Save changes", disabled=not page_usable)
+                    if save and page_usable:
+                        if phase_end < phase_start:
+                            st.error("Setup end must not be before Setup start.")
+                        else:
+                            setup_phase.phase_start = phase_start
+                            setup_phase.phase_end = phase_end
+                            setup_phase.mixer_rpm = mixer_rpm or None
+                            setup_phase.conveyor_speed = conveyor_speed or None
+                            setup_phase.air_injection_rate = air_injection_rate or None
+                            setup_phase.air_pressure_bar = air_pressure_bar or None
+                            setup_phase.ratio_index = ratio_index or None
+                            setup_phase.ambient_temperature_c = ambient_temperature_c or None
+                            setup_phase.ambient_humidity_pct = ambient_humidity_pct or None
+                            setup_phase.laydown_mode = laydown_mode
+                            setup_phase.section_positions_note = section_positions_note
+                            setup_phase.sidewall_width_mm = sidewall_width_mm or None
+                            setup_phase.foam_height_mm = foam_height_mm or None
+                            setup_phase.notes = notes
+                            session.commit()
+                            st.success("Setup data updated.")
+                            st.rerun()
+
+                def _do_delete_setup(_session=session, _phase=setup_phase):
+                    _delete_phase_cascade(_session, _phase)
+
+                if page_usable:
+                    delete_with_confirm(
+                        f"Setup data (Run #{run.id})", _do_delete_setup, key_prefix=f"setup_{setup_phase.id}",
+                        extra_warning=(
+                            "Deleting this also deletes its fall-plate section positions, and unlinks (does "
+                            "not delete) any production events that referenced it."
+                        ),
+                    )
                 else:
-                    st.session_state.pop("pr_selected_phase_id", None)
-
-                sel_phase = next(
-                    (p for p in phases_for_run if p.id == st.session_state.get("pr_selected_phase_id")), None
-                )
-                if sel_phase:
-                    st.markdown(f"##### Edit {sel_phase.phase_name} phase (Run #{run.id})")
-                    with st.form(f"edit_phase_form_{sel_phase.id}"):
-                        phase_name = st.selectbox(
-                            "Phase *", PHASE_NAMES, index=PHASE_NAMES.index(sel_phase.phase_name),
-                            key=f"edit_phase_name_{sel_phase.id}",
-                        )
-                        phase_start = combine_date_time(
-                            "Phase start", f"edit_phase_start_{sel_phase.id}",
-                            default_date=sel_phase.phase_start.date() if sel_phase.phase_start else None,
-                            default_time=sel_phase.phase_start.time() if sel_phase.phase_start else None,
-                        )
-                        phase_end = combine_date_time(
-                            "Phase end", f"edit_phase_end_{sel_phase.id}",
-                            default_date=sel_phase.phase_end.date() if sel_phase.phase_end else None,
-                            default_time=sel_phase.phase_end.time() if sel_phase.phase_end else None,
-                        )
-
-                        st.markdown("**Machine settings for this phase**")
-                        c1, c2, c3, c4 = st.columns(4)
-                        mixer_rpm = c1.number_input(
-                            "Mixer rpm", min_value=0.0, step=1.0, value=float(sel_phase.mixer_rpm or 0.0),
-                            key=f"edit_phase_mixer_{sel_phase.id}",
-                        )
-                        conveyor_speed = c2.number_input(
-                            "Conveyor speed (m/min)", min_value=0.0, step=0.01,
-                            value=float(sel_phase.conveyor_speed or 0.0), key=f"edit_phase_conveyor_{sel_phase.id}",
-                        )
-                        air_injection_rate = c3.number_input(
-                            "Air injection rate", min_value=0.0, step=0.1,
-                            value=float(sel_phase.air_injection_rate or 0.0), key=f"edit_phase_air_inj_{sel_phase.id}",
-                        )
-                        air_pressure_bar = c4.number_input(
-                            "Air pressure (bar)", min_value=0.0, step=0.05,
-                            value=float(sel_phase.air_pressure_bar or 0.0), key=f"edit_phase_air_pres_{sel_phase.id}",
-                        )
-
-                        c5, c6, c7 = st.columns(3)
-                        sidewall_width_mm = c5.number_input(
-                            "Sidewall width (mm)", min_value=0.0, step=1.0,
-                            value=float(sel_phase.sidewall_width_mm or 0.0), key=f"edit_phase_sidewall_{sel_phase.id}",
-                        )
-                        foam_height_mm = c6.number_input(
-                            "Foam height (mm)", min_value=0.0, step=1.0,
-                            value=float(sel_phase.foam_height_mm or 0.0), key=f"edit_phase_height_{sel_phase.id}",
-                        )
-                        ratio_index = c7.number_input(
-                            "Ratio / index", min_value=0.0, step=0.1,
-                            value=float(sel_phase.ratio_index or 0.0), key=f"edit_phase_ratio_{sel_phase.id}",
-                            help="Stoichiometric ratio/index for this phase.",
-                        )
-
-                        st.markdown("**Ambient conditions for this phase**")
-                        c8, c9 = st.columns(2)
-                        ambient_temperature_c = c8.number_input(
-                            "Ambient temperature (°C)", step=0.1,
-                            value=float(sel_phase.ambient_temperature_c or 0.0),
-                            key=f"edit_phase_ambient_temp_{sel_phase.id}",
-                        )
-                        ambient_humidity_pct = c9.number_input(
-                            "Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5,
-                            value=float(sel_phase.ambient_humidity_pct or 0.0),
-                            key=f"edit_phase_ambient_hum_{sel_phase.id}",
-                        )
-
-                        laydown_mode = st.text_input(
-                            "Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)",
-                            value=sel_phase.laydown_mode or "", key=f"edit_phase_laydown_{sel_phase.id}",
-                        )
-                        section_positions_note = st.text_area(
-                            "Other geometry notes (structured fall-plate section positions are entered in the "
-                            "Fall-plate positions sub-tab)",
-                            value=sel_phase.section_positions_note or "", key=f"edit_phase_geom_note_{sel_phase.id}",
-                        )
-                        notes = st.text_area(
-                            "Phase notes", value=sel_phase.notes or "", key=f"edit_phase_notes_{sel_phase.id}"
-                        )
-
-                        save = st.form_submit_button("Save changes", disabled=not page_usable)
-                        if save and page_usable:
-                            if phase_end < phase_start:
-                                st.error("Phase end must not be before phase start.")
-                            else:
-                                sel_phase.phase_name = phase_name
-                                sel_phase.phase_start = phase_start
-                                sel_phase.phase_end = phase_end
-                                sel_phase.mixer_rpm = mixer_rpm or None
-                                sel_phase.conveyor_speed = conveyor_speed or None
-                                sel_phase.air_injection_rate = air_injection_rate or None
-                                sel_phase.air_pressure_bar = air_pressure_bar or None
-                                sel_phase.ratio_index = ratio_index or None
-                                sel_phase.ambient_temperature_c = ambient_temperature_c or None
-                                sel_phase.ambient_humidity_pct = ambient_humidity_pct or None
-                                sel_phase.laydown_mode = laydown_mode
-                                sel_phase.section_positions_note = section_positions_note
-                                sel_phase.sidewall_width_mm = sidewall_width_mm or None
-                                sel_phase.foam_height_mm = foam_height_mm or None
-                                sel_phase.notes = notes
-                                session.commit()
-                                st.success("Phase updated.")
-                                st.rerun()
-
-                    def _do_delete_phase(_session=session, _phase=sel_phase):
-                        _delete_phase_cascade(_session, _phase)
-                        st.session_state.pop("pr_selected_phase_id", None)
-
-                    if page_usable:
-                        delete_with_confirm(
-                            f"{sel_phase.phase_name} phase (Run #{run.id})", _do_delete_phase,
-                            key_prefix=f"phase_{sel_phase.id}",
-                            extra_warning=(
-                                "Deleting this phase also deletes its component stream readings and fall-plate "
-                                "section positions, and unlinks (does not delete) any production events that "
-                                "referenced it."
-                            ),
-                        )
-                    else:
-                        st.caption("View-only access - deleting is restricted for your role.")
-                else:
-                    st.caption("Click a row above to edit (and optionally delete) that phase.")
+                    st.caption("View-only access - deleting is restricted for your role.")
 
         with sub_create:
-            with st.form(f"add_phase_{run.id}"):
-                phase_name = st.selectbox("Phase *", PHASE_NAMES, key=f"new_phase_name_{run.id}")
-                phase_start = combine_date_time("Phase start", f"new_phase_start_{run.id}")
-                phase_end = combine_date_time("Phase end", f"new_phase_end_{run.id}")
+            if setup_phase:
+                st.caption("Setup data already recorded for this run — edit it in the Overview & Edit tab.")
+            else:
+                with st.form(f"add_setup_{run.id}"):
+                    phase_start = combine_date_time("Setup start", f"new_setup_start_{run.id}")
+                    phase_end = combine_date_time("Setup end", f"new_setup_end_{run.id}")
 
-                st.markdown("**Machine settings for this phase**")
-                c1, c2, c3, c4 = st.columns(4)
-                mixer_rpm = c1.number_input("Mixer rpm", min_value=0.0, step=1.0, key=f"new_phase_mixer_{run.id}")
-                conveyor_speed = c2.number_input(
-                    "Conveyor speed (m/min)", min_value=0.0, step=0.01, key=f"new_phase_conveyor_{run.id}"
-                )
-                air_injection_rate = c3.number_input(
-                    "Air injection rate", min_value=0.0, step=0.1, key=f"new_phase_air_inj_{run.id}"
-                )
-                air_pressure_bar = c4.number_input(
-                    "Air pressure (bar)", min_value=0.0, step=0.05, key=f"new_phase_air_pres_{run.id}"
-                )
+                    st.markdown("**Machine settings**")
+                    c1, c2, c3, c4 = st.columns(4)
+                    mixer_rpm = c1.number_input("Mixer rpm", min_value=0.0, step=1.0, key=f"new_setup_mixer_{run.id}")
+                    conveyor_speed = c2.number_input(
+                        "Conveyor speed (m/min)", min_value=0.0, step=0.01, key=f"new_setup_conveyor_{run.id}"
+                    )
+                    air_injection_rate = c3.number_input(
+                        "Air injection rate", min_value=0.0, step=0.1, key=f"new_setup_air_inj_{run.id}"
+                    )
+                    air_pressure_bar = c4.number_input(
+                        "Air pressure (bar)", min_value=0.0, step=0.05, key=f"new_setup_air_pres_{run.id}"
+                    )
 
-                c5, c6, c7 = st.columns(3)
-                sidewall_width_mm = c5.number_input(
-                    "Sidewall width (mm)", min_value=0.0, step=1.0, key=f"new_phase_sidewall_{run.id}"
-                )
-                foam_height_mm = c6.number_input(
-                    "Foam height (mm)", min_value=0.0, step=1.0, key=f"new_phase_height_{run.id}"
-                )
-                ratio_index = c7.number_input(
-                    "Ratio / index", min_value=0.0, step=0.1, key=f"new_phase_ratio_{run.id}",
-                    help="Stoichiometric ratio/index for this phase. Enter the intended value on the Setup "
-                    "row and the reconstructed actual value on the Finalized row — comparing the two is the "
-                    "single strongest diagnostic for explaining density/compression/cure drift.",
-                )
+                    c5, c6, c7 = st.columns(3)
+                    sidewall_width_mm = c5.number_input(
+                        "Sidewall width (mm)", min_value=0.0, step=1.0, key=f"new_setup_sidewall_{run.id}"
+                    )
+                    foam_height_mm = c6.number_input(
+                        "Foam height (mm)", min_value=0.0, step=1.0, key=f"new_setup_height_{run.id}"
+                    )
+                    ratio_index = c7.number_input(
+                        "Ratio / index", min_value=0.0, step=0.1, key=f"new_setup_ratio_{run.id}",
+                        help="Stoichiometric ratio/index for this phase. Enter the intended value here and "
+                        "the reconstructed actual value on the Runtime Data tab — comparing the two is the "
+                        "single strongest diagnostic for explaining density/compression/cure drift.",
+                    )
 
-                st.markdown("**Ambient conditions for this phase**")
-                c8, c9 = st.columns(2)
-                ambient_temperature_c = c8.number_input(
-                    "Ambient temperature (°C)", step=0.1, key=f"new_phase_ambient_temp_{run.id}",
-                )
-                ambient_humidity_pct = c9.number_input(
-                    "Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5,
-                    key=f"new_phase_ambient_hum_{run.id}",
-                )
+                    st.markdown("**Ambient conditions**")
+                    c8, c9 = st.columns(2)
+                    ambient_temperature_c = c8.number_input(
+                        "Ambient temperature (°C)", step=0.1, key=f"new_setup_ambient_temp_{run.id}",
+                    )
+                    ambient_humidity_pct = c9.number_input(
+                        "Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5,
+                        key=f"new_setup_ambient_hum_{run.id}",
+                    )
 
-                laydown_mode = st.text_input(
-                    "Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)",
-                    key=f"new_phase_laydown_{run.id}",
-                )
-                section_positions_note = st.text_area(
-                    "Other geometry notes (structured fall-plate section positions are entered in the "
-                    "Fall-plate positions sub-tab)",
-                    key=f"new_phase_geom_note_{run.id}",
-                )
-                notes = st.text_area("Phase notes", key=f"new_phase_notes_{run.id}")
+                    laydown_mode = st.text_input(
+                        "Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)",
+                        key=f"new_setup_laydown_{run.id}",
+                    )
+                    section_positions_note = st.text_area(
+                        "Other geometry notes (structured fall-plate section positions are entered in the "
+                        "Fall-plate positions sub-tab)",
+                        key=f"new_setup_geom_note_{run.id}",
+                    )
+                    notes = st.text_area("Notes", key=f"new_setup_notes_{run.id}")
 
-                submitted = st.form_submit_button("Save phase", disabled=not page_usable)
-                if submitted and page_usable:
-                    if phase_end < phase_start:
-                        st.error("Phase end must not be before phase start.")
-                    else:
-                        session.add(
-                            ProductionPhase(
-                                production_run_id=run.id,
-                                phase_name=phase_name,
-                                phase_start=phase_start,
-                                phase_end=phase_end,
-                                mixer_rpm=mixer_rpm or None,
-                                conveyor_speed=conveyor_speed or None,
-                                air_injection_rate=air_injection_rate or None,
-                                air_pressure_bar=air_pressure_bar or None,
-                                ratio_index=ratio_index or None,
-                                ambient_temperature_c=ambient_temperature_c or None,
-                                ambient_humidity_pct=ambient_humidity_pct or None,
-                                laydown_mode=laydown_mode,
-                                section_positions_note=section_positions_note,
-                                sidewall_width_mm=sidewall_width_mm or None,
-                                foam_height_mm=foam_height_mm or None,
-                                notes=notes,
-                                source_file_reference="manual entry",
+                    submitted = st.form_submit_button("Save Setup data", disabled=not page_usable)
+                    if submitted and page_usable:
+                        if phase_end < phase_start:
+                            st.error("Setup end must not be before Setup start.")
+                        else:
+                            session.add(
+                                ProductionPhase(
+                                    production_run_id=run.id,
+                                    phase_name="Setup",
+                                    phase_start=phase_start,
+                                    phase_end=phase_end,
+                                    mixer_rpm=mixer_rpm or None,
+                                    conveyor_speed=conveyor_speed or None,
+                                    air_injection_rate=air_injection_rate or None,
+                                    air_pressure_bar=air_pressure_bar or None,
+                                    ratio_index=ratio_index or None,
+                                    ambient_temperature_c=ambient_temperature_c or None,
+                                    ambient_humidity_pct=ambient_humidity_pct or None,
+                                    laydown_mode=laydown_mode,
+                                    section_positions_note=section_positions_note,
+                                    sidewall_width_mm=sidewall_width_mm or None,
+                                    foam_height_mm=foam_height_mm or None,
+                                    notes=notes,
+                                    source_file_reference="manual entry",
+                                )
                             )
-                        )
-                        session.commit()
-                        st.success("Phase saved.")
-                        st.rerun()
+                            session.commit()
+                            st.success("Setup data saved.")
+                            st.rerun()
 
         with sub_import:
+            show_pending_banner("setup_import_msg")
             st.caption(
-                "Required columns: " + ", ".join(PHASE_REQUIRED_COLUMNS) + ". Optional columns: "
-                + ", ".join(PHASE_OPTIONAL_COLUMNS)
+                "Required column: `production_run_id`. Optional columns: " + ", ".join(SETUP_OPTIONAL_COLUMNS)
+                + ". One Setup row per run - a run that already has one is skipped as a duplicate."
             )
-            uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="phase_upload")
+            uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="setup_upload")
             if uploaded and upload_within_size_limit(uploaded):
                 try:
                     df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
@@ -825,43 +801,38 @@ with tab_phases:
                     df = None
 
                 if df is not None and import_within_row_limit(df):
-                    missing_cols = [c for c in PHASE_REQUIRED_COLUMNS if c not in df.columns]
+                    missing_cols = [c for c in SETUP_REQUIRED_COLUMNS if c not in df.columns]
                     if missing_cols:
                         st.error(f"File is missing required column(s): {', '.join(missing_cols)}. Import rejected.")
                     else:
                         valid_run_ids = {r.id for r in runs}
                         good_rows, bad_rows = [], []
                         for _, row in df.iterrows():
-                            if row.get("production_run_id") in valid_run_ids and row.get("phase_name") in PHASE_NAMES:
+                            if row.get("production_run_id") in valid_run_ids:
                                 good_rows.append(row)
                             else:
                                 bad_rows.append(row)
 
                         st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
                         if bad_rows:
-                            st.warning(
-                                "Flagged rows reference an unknown production_run_id or a phase_name outside "
-                                f"the controlled list ({', '.join(PHASE_NAMES)})."
-                            )
+                            st.warning("Flagged rows reference a production_run_id that does not exist and will be skipped.")
                             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
-                        if good_rows and st.button("Confirm import", key="confirm_phase_import", disabled=not page_usable):
-                            # Dedupe on (production_run_id, phase_name): a repeat click of
-                            # this button (e.g. because the previous success message wasn't
-                            # visibly persistent) must not double-insert the same run's phase.
+                        if good_rows and st.button("Confirm import", key="confirm_setup_import", disabled=not page_usable):
+                            # Dedupe on production_run_id: only one Setup row per run.
                             existing_keys = {
-                                (p.production_run_id, p.phase_name)
-                                for p in session.query(ProductionPhase).all()
+                                p.production_run_id
+                                for p in session.query(ProductionPhase).filter(ProductionPhase.phase_name == "Setup").all()
                             }
                             accept, dup = dedupe_import_rows(
                                 good_rows, existing_keys,
-                                key_func=lambda row: (int(row["production_run_id"]), row["phase_name"]),
+                                key_func=lambda row: int(row["production_run_id"]),
                             )
                             for row in accept:
                                 session.add(
                                     ProductionPhase(
                                         production_run_id=int(row["production_run_id"]),
-                                        phase_name=row["phase_name"],
+                                        phase_name="Setup",
                                         phase_start=parse_dt(row.get("phase_start")),
                                         phase_end=parse_dt(row.get("phase_end")),
                                         mixer_rpm=row.get("mixer_rpm"),
@@ -880,39 +851,34 @@ with tab_phases:
                                     )
                                 )
                             session.commit()
-                            msg = f"Imported {len(accept)} phase(s) from {uploaded.name}."
+                            msg = f"Imported {len(accept)} Setup row(s) from {uploaded.name}."
                             if dup:
-                                msg += f" Skipped {len(dup)} row(s) already recorded for that run/phase (likely a repeat click)."
-                            st.success(msg)
+                                msg += f" Skipped {len(dup)} row(s) whose run already has Setup data (likely a repeat click)."
+                            set_pending_banner("setup_import_msg", msg)
                             st.rerun()
 
         with sub_fallplate:
             st.caption(
                 "Structured height/angle per section for fall-plate or pour-plate lines (typically 4-6 "
-                "sections). Requires a phase to exist first."
+                "sections). Requires Setup data to exist first for this run."
             )
-            if not phases_for_run:
-                st.info("Add a phase for this run first (Create tab) before recording section positions.")
+            if not setup_phase:
+                st.info("Add Setup data for this run first (Create tab) before recording section positions.")
             else:
                 sub_fp_manual, sub_fp_import = st.tabs(["Manual entry", "CSV / Excel import"])
 
                 with sub_fp_manual:
-                    phase_for_fp = st.selectbox(
-                        "Phase *", phases_for_run,
-                        format_func=lambda p: f"{p.phase_name} ({p.phase_start})",
-                        key=f"fallplate_phase_select_{run.id}",
-                    )
-                    with st.form(f"add_fallplate_section_{run.id}"):
+                    with st.form(f"add_fallplate_section_setup_{run.id}"):
                         c1, c2 = st.columns(2)
                         section_number = c1.number_input("Section number *", min_value=1, step=1, value=1)
                         position_mm = c2.number_input("Position (mm above conveyor datum)", step=1.0)
                         angle_deg = st.number_input("Angle (degrees, optional)", step=0.5)
-                        fp_notes = st.text_area("Notes", key=f"fp_notes_{run.id}")
+                        fp_notes = st.text_area("Notes", key=f"fp_notes_setup_{run.id}")
                         submitted = st.form_submit_button("Save section position", disabled=not page_usable)
                         if submitted and page_usable:
                             session.add(
                                 FallplateSectionPosition(
-                                    production_phase_id=phase_for_fp.id,
+                                    production_phase_id=setup_phase.id,
                                     section_number=int(section_number),
                                     position_mm=position_mm or None,
                                     angle_deg=angle_deg or None,
@@ -925,10 +891,10 @@ with tab_phases:
 
                 with sub_fp_import:
                     st.caption(
-                        "Required columns: " + ", ".join(FALLPLATE_REQUIRED_COLUMNS) + " (phase_name must match "
-                        "an existing phase on that run). Optional columns: " + ", ".join(FALLPLATE_OPTIONAL_COLUMNS)
+                        "Required columns: " + ", ".join(FALLPLATE_REQUIRED_COLUMNS) + " (phase_name must be "
+                        "'Setup'). Optional columns: " + ", ".join(FALLPLATE_OPTIONAL_COLUMNS)
                     )
-                    uploaded_fp = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="fallplate_upload")
+                    uploaded_fp = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="fallplate_upload_setup")
                     if uploaded_fp and upload_within_size_limit(uploaded_fp):
                         try:
                             df_fp = (
@@ -944,20 +910,15 @@ with tab_phases:
                             if missing_cols:
                                 st.error(f"File is missing required column(s): {', '.join(missing_cols)}. Import rejected.")
                             else:
-                                all_phases_lookup = session.query(ProductionPhase).all()
-                                good_rows, bad_rows, resolved_phase_ids = [], [], []
+                                good_rows, bad_rows = [], []
                                 for _, row in df_fp.iterrows():
-                                    match = next(
-                                        (
-                                            p for p in all_phases_lookup
-                                            if p.production_run_id == row.get("production_run_id")
-                                            and p.phase_name == row.get("phase_name")
-                                        ),
-                                        None,
+                                    match = (
+                                        row.get("production_run_id") == run.id
+                                        and row.get("phase_name") == "Setup"
+                                        and row.get("section_number") is not None
                                     )
-                                    if match and row.get("section_number") is not None:
+                                    if match:
                                         good_rows.append(row)
-                                        resolved_phase_ids.append(match.id)
                                     else:
                                         bad_rows.append(row)
 
@@ -967,33 +928,29 @@ with tab_phases:
                                 )
                                 if bad_rows:
                                     st.warning(
-                                        "Flagged rows reference a production_run_id/phase_name combination with "
-                                        "no matching phase, or are missing section_number."
+                                        f"Flagged rows don't match Run #{run.id}'s Setup phase, or are missing "
+                                        "section_number."
                                     )
                                     render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
-                                if good_rows and st.button("Confirm import", key="confirm_fallplate_import", disabled=not page_usable):
-                                    # Dedupe on (production_phase_id, section_number): a repeat
-                                    # click of this button must not double-insert the same
-                                    # phase's section reading.
+                                if good_rows and st.button("Confirm import", key="confirm_fallplate_import_setup", disabled=not page_usable):
                                     existing_keys = {
                                         (s.production_phase_id, s.section_number)
                                         for s in session.query(FallplateSectionPosition).all()
                                     }
-                                    paired = list(zip(good_rows, resolved_phase_ids))
                                     accept, dup = [], []
-                                    for row, phase_id in paired:
-                                        key = (phase_id, int(row["section_number"]))
+                                    for row in good_rows:
+                                        key = (setup_phase.id, int(row["section_number"]))
                                         if key in existing_keys:
                                             dup.append(row)
                                         else:
                                             existing_keys.add(key)
-                                            accept.append((row, phase_id))
+                                            accept.append(row)
 
-                                    for row, phase_id in accept:
+                                    for row in accept:
                                         session.add(
                                             FallplateSectionPosition(
-                                                production_phase_id=phase_id,
+                                                production_phase_id=setup_phase.id,
                                                 section_number=int(row["section_number"]),
                                                 position_mm=row.get("position_mm"),
                                                 angle_deg=row.get("angle_deg"),
@@ -1003,14 +960,13 @@ with tab_phases:
                                     session.commit()
                                     msg = f"Imported {len(accept)} section position(s) from {uploaded_fp.name}."
                                     if dup:
-                                        msg += f" Skipped {len(dup)} row(s) already recorded for that phase/section (likely a repeat click)."
+                                        msg += f" Skipped {len(dup)} row(s) already recorded for that section (likely a repeat click)."
                                     st.success(msg)
                                     st.rerun()
 
                 recent_fp = (
                     session.query(FallplateSectionPosition)
-                    .join(ProductionPhase)
-                    .filter(ProductionPhase.production_run_id == run.id)
+                    .filter(FallplateSectionPosition.production_phase_id == setup_phase.id)
                     .order_by(FallplateSectionPosition.id.desc())
                     .all()
                 )
@@ -1019,7 +975,6 @@ with tab_phases:
                         pd.DataFrame(
                             [
                                 {
-                                    "Phase": fp.phase.phase_name if fp.phase else "—",
                                     "Section": fp.section_number,
                                     "Position (mm)": fp.position_mm,
                                     "Angle (deg)": fp.angle_deg,
@@ -1037,7 +992,7 @@ with tab_phases:
 with tab_streams:
     st.caption(
         "Per raw-material stream (polyol, isocyanate, water/blowing agent, catalyst, etc.), the flow, "
-        "pressure, and temperature for a given phase (Setup or Finalized). A phase must exist first."
+        "pressure, and temperature — always against the Runtime Data (Finalized) snapshot."
     )
 
     if not runs:
@@ -1050,9 +1005,9 @@ with tab_streams:
         finalized_phase = next((p for p in phases_for_run if p.phase_name == "Finalized"), None)
         if not finalized_phase:
             st.info(
-                f"Add the Finalized phase for {_run_label(run)} first (Process Phases tab). Component "
-                "stream readings are actual measurements, so they only ever attach to the Finalized "
-                "phase, never to Setup."
+                f"Add Runtime Data for {_run_label(run)} first (Runtime Data tab). Component "
+                "stream readings are actual measurements, so they only ever attach to the Runtime "
+                "Data (Finalized) snapshot, never to Setup."
             )
         else:
             st.caption(
@@ -1578,125 +1533,257 @@ with tab_events:
                             st.rerun()
 
 # ---------------------------------------------------------------------------
-# Runtime data (ambient conditions, line speed)
+# Runtime Data (the Finalized snapshot: what actually happened, entered at
+# shutdown - the same settings as Setup, plus line speed/rise time/curing
+# outcomes that only exist once the run has actually happened).
 # ---------------------------------------------------------------------------
 with tab_runtime:
     st.caption(
-        "Ambient and line-speed conditions for a production run. Manual entry, or structured CSV/Excel import."
+        "What actually happened, entered at shutdown - the same settings as Setup, plus rise time and "
+        "curing notes. Compare this to the Setup tab for the plan-vs-actual read. Component stream "
+        "readings and production events both attach to this snapshot, never to Setup."
     )
 
     if not runs:
         st.info("Create a production run first (Production Runs tab).")
     else:
         run = _run_selector(runs, key="runtime_tab_run_select")
-        st.caption(f"Showing runtime data for **{_run_label(run)}**")
+        st.caption(f"Showing Runtime Data for **{_run_label(run)}**")
 
-        sub_overview, sub_create, sub_import = st.tabs(["Overview & Edit", "Create", "CSV / Excel import"])
+        sub_overview, sub_create, sub_import, sub_fallplate = st.tabs(
+            ["Overview & Edit", "Create", "CSV / Excel import", "Fall-plate positions"]
+        )
 
-        runtime_for_run = (
-            session.query(RuntimeDataRecord)
-            .filter(RuntimeDataRecord.production_run_id == run.id)
-            .order_by(RuntimeDataRecord.id.desc())
-            .all()
+        finalized_phase = (
+            session.query(ProductionPhase)
+            .filter(ProductionPhase.production_run_id == run.id, ProductionPhase.phase_name == "Finalized")
+            .first()
         )
 
         with sub_overview:
-            if not runtime_for_run:
-                st.info("No runtime data recorded yet for this run — use the Create tab.")
+            if not finalized_phase:
+                st.info("No Runtime Data recorded yet for this run — use the Create tab.")
             else:
-                runtime_rows = [
-                    {
-                        "Line speed": rt.line_speed,
-                        "Temperature data": rt.temperature_data,
-                        "Pressure data": rt.pressure_data,
-                        "Rise time (s)": rt.rise_time,
-                    }
-                    for rt in runtime_for_run
-                ]
-                idx = clickable_table(runtime_rows, key=f"runtime_table_{run.id}")
-                if idx is not None:
-                    st.session_state["pr_selected_runtime_id"] = runtime_for_run[idx].id
-                else:
-                    st.session_state.pop("pr_selected_runtime_id", None)
+                st.markdown("##### Edit Runtime Data")
+                with st.form(f"edit_runtime_form_{finalized_phase.id}"):
+                    phase_start = combine_date_time(
+                        "Run start", f"edit_runtime_start_{finalized_phase.id}",
+                        default_date=finalized_phase.phase_start.date() if finalized_phase.phase_start else None,
+                        default_time=finalized_phase.phase_start.time() if finalized_phase.phase_start else None,
+                    )
+                    phase_end = combine_date_time(
+                        "Run end", f"edit_runtime_end_{finalized_phase.id}",
+                        default_date=finalized_phase.phase_end.date() if finalized_phase.phase_end else None,
+                        default_time=finalized_phase.phase_end.time() if finalized_phase.phase_end else None,
+                    )
 
-                sel_runtime = next(
-                    (rt for rt in runtime_for_run if rt.id == st.session_state.get("pr_selected_runtime_id")), None
-                )
-                if sel_runtime:
-                    st.markdown("##### Edit runtime data")
-                    with st.form(f"edit_runtime_form_{sel_runtime.id}"):
-                        line_speed = st.number_input(
-                            "Line speed", min_value=0.0, step=0.1, value=float(sel_runtime.line_speed or 0.0),
-                            key=f"edit_runtime_speed_{sel_runtime.id}",
-                        )
-                        temperature_data = st.text_input(
-                            "Temperature data", value=sel_runtime.temperature_data or "",
-                            key=f"edit_runtime_tempdata_{sel_runtime.id}",
-                        )
-                        pressure_data = st.text_input(
-                            "Pressure data (where available)", value=sel_runtime.pressure_data or "",
-                            key=f"edit_runtime_pressdata_{sel_runtime.id}",
-                        )
-                        rise_time = st.number_input(
-                            "Rise time (s)", min_value=0.0, step=1.0, value=float(sel_runtime.rise_time or 0.0),
-                            key=f"edit_runtime_rise_{sel_runtime.id}",
-                        )
-                        curing_notes = st.text_area(
-                            "Curing / cutting timing notes", value=sel_runtime.curing_notes or "",
-                            key=f"edit_runtime_curing_{sel_runtime.id}",
-                        )
-                        save = st.form_submit_button("Save changes", disabled=not page_usable)
-                        if save and page_usable:
-                            sel_runtime.line_speed = line_speed or None
-                            sel_runtime.temperature_data = temperature_data
-                            sel_runtime.pressure_data = pressure_data
-                            sel_runtime.rise_time = rise_time or None
-                            sel_runtime.curing_notes = curing_notes
+                    st.markdown("**Machine settings**")
+                    c1, c2, c3, c4 = st.columns(4)
+                    mixer_rpm = c1.number_input(
+                        "Mixer rpm", min_value=0.0, step=1.0, value=float(finalized_phase.mixer_rpm or 0.0),
+                        key=f"edit_runtime_mixer_{finalized_phase.id}",
+                    )
+                    conveyor_speed = c2.number_input(
+                        "Conveyor speed (m/min)", min_value=0.0, step=0.01,
+                        value=float(finalized_phase.conveyor_speed or 0.0), key=f"edit_runtime_conveyor_{finalized_phase.id}",
+                        help="Also serves as the line speed - no separate field, since the two are the same reading.",
+                    )
+                    air_injection_rate = c3.number_input(
+                        "Air injection rate", min_value=0.0, step=0.1,
+                        value=float(finalized_phase.air_injection_rate or 0.0), key=f"edit_runtime_air_inj_{finalized_phase.id}",
+                    )
+                    air_pressure_bar = c4.number_input(
+                        "Air pressure (bar)", min_value=0.0, step=0.05,
+                        value=float(finalized_phase.air_pressure_bar or 0.0), key=f"edit_runtime_air_pres_{finalized_phase.id}",
+                    )
+
+                    c5, c6, c7 = st.columns(3)
+                    sidewall_width_mm = c5.number_input(
+                        "Sidewall width (mm)", min_value=0.0, step=1.0,
+                        value=float(finalized_phase.sidewall_width_mm or 0.0), key=f"edit_runtime_sidewall_{finalized_phase.id}",
+                    )
+                    foam_height_mm = c6.number_input(
+                        "Foam height (mm)", min_value=0.0, step=1.0,
+                        value=float(finalized_phase.foam_height_mm or 0.0), key=f"edit_runtime_height_{finalized_phase.id}",
+                    )
+                    ratio_index = c7.number_input(
+                        "Ratio / index", min_value=0.0, step=0.1,
+                        value=float(finalized_phase.ratio_index or 0.0), key=f"edit_runtime_ratio_{finalized_phase.id}",
+                        help="Stoichiometric ratio/index for this phase.",
+                    )
+
+                    st.markdown("**Ambient conditions**")
+                    c8, c9 = st.columns(2)
+                    ambient_temperature_c = c8.number_input(
+                        "Ambient temperature (°C)", step=0.1,
+                        value=float(finalized_phase.ambient_temperature_c or 0.0),
+                        key=f"edit_runtime_ambient_temp_{finalized_phase.id}",
+                    )
+                    ambient_humidity_pct = c9.number_input(
+                        "Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5,
+                        value=float(finalized_phase.ambient_humidity_pct or 0.0),
+                        key=f"edit_runtime_ambient_hum_{finalized_phase.id}",
+                    )
+
+                    st.markdown("**Runtime outcomes**")
+                    rise_time = st.number_input(
+                        "Rise time (s)", min_value=0.0, step=1.0, value=float(finalized_phase.rise_time or 0.0),
+                        key=f"edit_runtime_rise_{finalized_phase.id}",
+                    )
+                    curing_notes = st.text_area(
+                        "Curing / cutting timing notes", value=finalized_phase.curing_notes or "",
+                        key=f"edit_runtime_curing_{finalized_phase.id}",
+                    )
+
+                    laydown_mode = st.text_input(
+                        "Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)",
+                        value=finalized_phase.laydown_mode or "", key=f"edit_runtime_laydown_{finalized_phase.id}",
+                    )
+                    section_positions_note = st.text_area(
+                        "Other geometry notes (structured fall-plate section positions are entered in the "
+                        "Fall-plate positions sub-tab)",
+                        value=finalized_phase.section_positions_note or "", key=f"edit_runtime_geom_note_{finalized_phase.id}",
+                    )
+                    notes = st.text_area(
+                        "Notes", value=finalized_phase.notes or "", key=f"edit_runtime_notes_{finalized_phase.id}"
+                    )
+
+                    save = st.form_submit_button("Save changes", disabled=not page_usable)
+                    if save and page_usable:
+                        if phase_end < phase_start:
+                            st.error("Run end must not be before Run start.")
+                        else:
+                            finalized_phase.phase_start = phase_start
+                            finalized_phase.phase_end = phase_end
+                            finalized_phase.mixer_rpm = mixer_rpm or None
+                            finalized_phase.conveyor_speed = conveyor_speed or None
+                            finalized_phase.air_injection_rate = air_injection_rate or None
+                            finalized_phase.air_pressure_bar = air_pressure_bar or None
+                            finalized_phase.ratio_index = ratio_index or None
+                            finalized_phase.ambient_temperature_c = ambient_temperature_c or None
+                            finalized_phase.ambient_humidity_pct = ambient_humidity_pct or None
+                            finalized_phase.rise_time = rise_time or None
+                            finalized_phase.curing_notes = curing_notes
+                            finalized_phase.laydown_mode = laydown_mode
+                            finalized_phase.section_positions_note = section_positions_note
+                            finalized_phase.sidewall_width_mm = sidewall_width_mm or None
+                            finalized_phase.foam_height_mm = foam_height_mm or None
+                            finalized_phase.notes = notes
                             session.commit()
-                            st.success("Runtime data updated.")
+                            st.success("Runtime Data updated.")
                             st.rerun()
 
-                    def _do_delete_runtime(_session=session, _rt=sel_runtime):
-                        _session.delete(_rt)
-                        _session.commit()
-                        st.session_state.pop("pr_selected_runtime_id", None)
+                def _do_delete_runtime(_session=session, _phase=finalized_phase):
+                    _delete_phase_cascade(_session, _phase)
 
-                    if page_usable:
-                        delete_with_confirm(
-                            "this runtime data record", _do_delete_runtime, key_prefix=f"runtime_{sel_runtime.id}"
-                        )
-                    else:
-                        st.caption("View-only access - deleting is restricted for your role.")
+                if page_usable:
+                    delete_with_confirm(
+                        f"Runtime Data (Run #{run.id})", _do_delete_runtime, key_prefix=f"runtime_{finalized_phase.id}",
+                        extra_warning=(
+                            "Deleting this also deletes its component stream readings and fall-plate section "
+                            "positions, and unlinks (does not delete) any production events that referenced it."
+                        ),
+                    )
                 else:
-                    st.caption("Click a row above to edit (and optionally delete) that runtime data record.")
+                    st.caption("View-only access - deleting is restricted for your role.")
 
         with sub_create:
-            with st.form(f"add_runtime_manual_{run.id}"):
-                line_speed = st.number_input("Line speed", min_value=0.0, step=0.1)
-                temperature_data = st.text_input("Temperature data")
-                pressure_data = st.text_input("Pressure data (where available)")
-                rise_time = st.number_input("Rise time (s)", min_value=0.0, step=1.0)
-                curing_notes = st.text_area("Curing / cutting timing notes")
-                submitted = st.form_submit_button("Save runtime data", disabled=not page_usable)
-                if submitted and page_usable:
-                    session.add(
-                        RuntimeDataRecord(
-                            production_run_id=run.id,
-                            line_speed=line_speed or None,
-                            temperature_data=temperature_data,
-                            pressure_data=pressure_data,
-                            rise_time=rise_time or None,
-                            curing_notes=curing_notes,
-                            source_file_reference="manual entry",
-                        )
+            if finalized_phase:
+                st.caption("Runtime Data already recorded for this run — edit it in the Overview & Edit tab.")
+            else:
+                with st.form(f"add_runtime_{run.id}"):
+                    phase_start = combine_date_time("Run start", f"new_runtime_start_{run.id}")
+                    phase_end = combine_date_time("Run end", f"new_runtime_end_{run.id}")
+
+                    st.markdown("**Machine settings**")
+                    c1, c2, c3, c4 = st.columns(4)
+                    mixer_rpm = c1.number_input("Mixer rpm", min_value=0.0, step=1.0, key=f"new_runtime_mixer_{run.id}")
+                    conveyor_speed = c2.number_input(
+                        "Conveyor speed (m/min)", min_value=0.0, step=0.01, key=f"new_runtime_conveyor_{run.id}",
+                        help="Also serves as the line speed - no separate field, since the two are the same reading.",
                     )
-                    session.commit()
-                    st.success("Runtime data saved.")
-                    st.rerun()
+                    air_injection_rate = c3.number_input(
+                        "Air injection rate", min_value=0.0, step=0.1, key=f"new_runtime_air_inj_{run.id}"
+                    )
+                    air_pressure_bar = c4.number_input(
+                        "Air pressure (bar)", min_value=0.0, step=0.05, key=f"new_runtime_air_pres_{run.id}"
+                    )
+
+                    c5, c6, c7 = st.columns(3)
+                    sidewall_width_mm = c5.number_input(
+                        "Sidewall width (mm)", min_value=0.0, step=1.0, key=f"new_runtime_sidewall_{run.id}"
+                    )
+                    foam_height_mm = c6.number_input(
+                        "Foam height (mm)", min_value=0.0, step=1.0, key=f"new_runtime_height_{run.id}"
+                    )
+                    ratio_index = c7.number_input(
+                        "Ratio / index", min_value=0.0, step=0.1, key=f"new_runtime_ratio_{run.id}",
+                        help="Stoichiometric ratio/index for this phase. Compare to the Setup tab's intended "
+                        "value — the single strongest diagnostic for explaining density/compression/cure drift.",
+                    )
+
+                    st.markdown("**Ambient conditions**")
+                    c8, c9 = st.columns(2)
+                    ambient_temperature_c = c8.number_input(
+                        "Ambient temperature (°C)", step=0.1, key=f"new_runtime_ambient_temp_{run.id}",
+                    )
+                    ambient_humidity_pct = c9.number_input(
+                        "Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5,
+                        key=f"new_runtime_ambient_hum_{run.id}",
+                    )
+
+                    st.markdown("**Runtime outcomes**")
+                    rise_time = st.number_input("Rise time (s)", min_value=0.0, step=1.0, key=f"new_runtime_rise_{run.id}")
+                    curing_notes = st.text_area("Curing / cutting timing notes", key=f"new_runtime_curing_{run.id}")
+
+                    laydown_mode = st.text_input(
+                        "Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)",
+                        key=f"new_runtime_laydown_{run.id}",
+                    )
+                    section_positions_note = st.text_area(
+                        "Other geometry notes (structured fall-plate section positions are entered in the "
+                        "Fall-plate positions sub-tab)",
+                        key=f"new_runtime_geom_note_{run.id}",
+                    )
+                    notes = st.text_area("Notes", key=f"new_runtime_notes_{run.id}")
+
+                    submitted = st.form_submit_button("Save Runtime Data", disabled=not page_usable)
+                    if submitted and page_usable:
+                        if phase_end < phase_start:
+                            st.error("Run end must not be before Run start.")
+                        else:
+                            session.add(
+                                ProductionPhase(
+                                    production_run_id=run.id,
+                                    phase_name="Finalized",
+                                    phase_start=phase_start,
+                                    phase_end=phase_end,
+                                    mixer_rpm=mixer_rpm or None,
+                                    conveyor_speed=conveyor_speed or None,
+                                    air_injection_rate=air_injection_rate or None,
+                                    air_pressure_bar=air_pressure_bar or None,
+                                    ratio_index=ratio_index or None,
+                                    ambient_temperature_c=ambient_temperature_c or None,
+                                    ambient_humidity_pct=ambient_humidity_pct or None,
+                                    rise_time=rise_time or None,
+                                    curing_notes=curing_notes,
+                                    laydown_mode=laydown_mode,
+                                    section_positions_note=section_positions_note,
+                                    sidewall_width_mm=sidewall_width_mm or None,
+                                    foam_height_mm=foam_height_mm or None,
+                                    notes=notes,
+                                    source_file_reference="manual entry",
+                                )
+                            )
+                            session.commit()
+                            st.success("Runtime Data saved.")
+                            st.rerun()
 
         with sub_import:
+            show_pending_banner("runtime_import_msg")
             st.caption(
                 "Required column: `production_run_id`. Optional columns: " + ", ".join(RUNTIME_OPTIONAL_COLUMNS)
+                + ". One Runtime Data row per run - a run that already has one is skipped as a duplicate."
             )
             uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="runtime_upload")
             if uploaded and upload_within_size_limit(uploaded):
@@ -1728,11 +1815,10 @@ with tab_runtime:
                             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                         if good_rows and st.button("Confirm import", key="confirm_runtime_import", disabled=not page_usable):
-                            # Dedupe on production_run_id: a repeat click of this button
-                            # must not double-insert the same run's runtime data.
+                            # Dedupe on production_run_id: only one Finalized row per run.
                             existing_keys = {
-                                r.production_run_id
-                                for r in session.query(RuntimeDataRecord).all()
+                                p.production_run_id
+                                for p in session.query(ProductionPhase).filter(ProductionPhase.phase_name == "Finalized").all()
                             }
                             accept, dup = dedupe_import_rows(
                                 good_rows, existing_keys,
@@ -1740,19 +1826,160 @@ with tab_runtime:
                             )
                             for row in accept:
                                 session.add(
-                                    RuntimeDataRecord(
+                                    ProductionPhase(
                                         production_run_id=int(row["production_run_id"]),
-                                        line_speed=row.get("line_speed"),
-                                        temperature_data=str(row.get("temperature_data", "") or ""),
-                                        pressure_data=str(row.get("pressure_data", "") or ""),
+                                        phase_name="Finalized",
+                                        phase_start=parse_dt(row.get("phase_start")),
+                                        phase_end=parse_dt(row.get("phase_end")),
+                                        mixer_rpm=row.get("mixer_rpm"),
+                                        conveyor_speed=row.get("conveyor_speed"),
+                                        air_injection_rate=row.get("air_injection_rate"),
+                                        air_pressure_bar=row.get("air_pressure_bar"),
+                                        ratio_index=row.get("ratio_index"),
+                                        ambient_temperature_c=row.get("ambient_temperature_c"),
+                                        ambient_humidity_pct=row.get("ambient_humidity_pct"),
                                         rise_time=row.get("rise_time"),
                                         curing_notes=str(row.get("curing_notes", "") or ""),
+                                        laydown_mode=str(row.get("laydown_mode", "") or ""),
+                                        section_positions_note=str(row.get("section_positions_note", "") or ""),
+                                        sidewall_width_mm=row.get("sidewall_width_mm"),
+                                        foam_height_mm=row.get("foam_height_mm"),
+                                        notes=str(row.get("notes", "") or ""),
                                         source_file_reference=uploaded.name,
                                     )
                                 )
                             session.commit()
-                            msg = f"Imported {len(accept)} runtime data row(s) from {uploaded.name}."
+                            msg = f"Imported {len(accept)} Runtime Data row(s) from {uploaded.name}."
                             if dup:
-                                msg += f" Skipped {len(dup)} row(s) already recorded for that run (likely a repeat click)."
-                            st.success(msg)
+                                msg += f" Skipped {len(dup)} row(s) whose run already has Runtime Data (likely a repeat click)."
+                            set_pending_banner("runtime_import_msg", msg)
                             st.rerun()
+
+        with sub_fallplate:
+            st.caption(
+                "Structured height/angle per section for fall-plate or pour-plate lines (typically 4-6 "
+                "sections). Requires Runtime Data to exist first for this run."
+            )
+            if not finalized_phase:
+                st.info("Add Runtime Data for this run first (Create tab) before recording section positions.")
+            else:
+                sub_fp_manual, sub_fp_import = st.tabs(["Manual entry", "CSV / Excel import"])
+
+                with sub_fp_manual:
+                    with st.form(f"add_fallplate_section_runtime_{run.id}"):
+                        c1, c2 = st.columns(2)
+                        section_number = c1.number_input("Section number *", min_value=1, step=1, value=1)
+                        position_mm = c2.number_input("Position (mm above conveyor datum)", step=1.0)
+                        angle_deg = st.number_input("Angle (degrees, optional)", step=0.5)
+                        fp_notes = st.text_area("Notes", key=f"fp_notes_runtime_{run.id}")
+                        submitted = st.form_submit_button("Save section position", disabled=not page_usable)
+                        if submitted and page_usable:
+                            session.add(
+                                FallplateSectionPosition(
+                                    production_phase_id=finalized_phase.id,
+                                    section_number=int(section_number),
+                                    position_mm=position_mm or None,
+                                    angle_deg=angle_deg or None,
+                                    notes=fp_notes,
+                                )
+                            )
+                            session.commit()
+                            st.success("Section position saved.")
+                            st.rerun()
+
+                with sub_fp_import:
+                    st.caption(
+                        "Required columns: " + ", ".join(FALLPLATE_REQUIRED_COLUMNS) + " (phase_name must be "
+                        "'Finalized'). Optional columns: " + ", ".join(FALLPLATE_OPTIONAL_COLUMNS)
+                    )
+                    uploaded_fp = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"], key="fallplate_upload_runtime")
+                    if uploaded_fp and upload_within_size_limit(uploaded_fp):
+                        try:
+                            df_fp = (
+                                pd.read_csv(uploaded_fp) if uploaded_fp.name.endswith(".csv")
+                                else pd.read_excel(uploaded_fp)
+                            )
+                        except Exception as exc:
+                            st.error(f"Could not read file: {exc}")
+                            df_fp = None
+
+                        if df_fp is not None and import_within_row_limit(df_fp):
+                            missing_cols = [c for c in FALLPLATE_REQUIRED_COLUMNS if c not in df_fp.columns]
+                            if missing_cols:
+                                st.error(f"File is missing required column(s): {', '.join(missing_cols)}. Import rejected.")
+                            else:
+                                good_rows, bad_rows = [], []
+                                for _, row in df_fp.iterrows():
+                                    match = (
+                                        row.get("production_run_id") == run.id
+                                        and row.get("phase_name") == "Finalized"
+                                        and row.get("section_number") is not None
+                                    )
+                                    if match:
+                                        good_rows.append(row)
+                                    else:
+                                        bad_rows.append(row)
+
+                                st.write(
+                                    f"Rows ready to import: **{len(good_rows)}** | "
+                                    f"Rows flagged/rejected: **{len(bad_rows)}**"
+                                )
+                                if bad_rows:
+                                    st.warning(
+                                        f"Flagged rows don't match Run #{run.id}'s Finalized phase, or are "
+                                        "missing section_number."
+                                    )
+                                    render_data_table(pd.DataFrame(bad_rows), max_height="300px")
+
+                                if good_rows and st.button("Confirm import", key="confirm_fallplate_import_runtime", disabled=not page_usable):
+                                    existing_keys = {
+                                        (s.production_phase_id, s.section_number)
+                                        for s in session.query(FallplateSectionPosition).all()
+                                    }
+                                    accept, dup = [], []
+                                    for row in good_rows:
+                                        key = (finalized_phase.id, int(row["section_number"]))
+                                        if key in existing_keys:
+                                            dup.append(row)
+                                        else:
+                                            existing_keys.add(key)
+                                            accept.append(row)
+
+                                    for row in accept:
+                                        session.add(
+                                            FallplateSectionPosition(
+                                                production_phase_id=finalized_phase.id,
+                                                section_number=int(row["section_number"]),
+                                                position_mm=row.get("position_mm"),
+                                                angle_deg=row.get("angle_deg"),
+                                                notes=str(row.get("notes", "") or ""),
+                                            )
+                                        )
+                                    session.commit()
+                                    msg = f"Imported {len(accept)} section position(s) from {uploaded_fp.name}."
+                                    if dup:
+                                        msg += f" Skipped {len(dup)} row(s) already recorded for that section (likely a repeat click)."
+                                    st.success(msg)
+                                    st.rerun()
+
+                recent_fp = (
+                    session.query(FallplateSectionPosition)
+                    .filter(FallplateSectionPosition.production_phase_id == finalized_phase.id)
+                    .order_by(FallplateSectionPosition.id.desc())
+                    .all()
+                )
+                if recent_fp:
+                    render_data_table(
+                        pd.DataFrame(
+                            [
+                                {
+                                    "Section": fp.section_number,
+                                    "Position (mm)": fp.position_mm,
+                                    "Angle (deg)": fp.angle_deg,
+                                    "Notes": fp.notes,
+                                }
+                                for fp in recent_fp
+                            ]
+                        ),
+                        max_height="300px",
+                    )

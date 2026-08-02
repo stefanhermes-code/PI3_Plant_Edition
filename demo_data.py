@@ -32,7 +32,6 @@ from db import (
     RawMaterial,
     RecipeComponent,
     RecipeVersion,
-    RuntimeDataRecord,
     TrialRecord,
     get_session,
     init_db,
@@ -278,23 +277,12 @@ def seed_demo_data(session) -> str:
         session.add(run)
         session.flush()
 
-        session.add(
-            RuntimeDataRecord(
-                production_run_id=run.id,
-                line_speed=3.2,
-                pump_speed_or_flow_data="Nominal",
-                temperature_data="Nominal",
-                pressure_data="Nominal",
-                rise_time=95.0,
-                curing_notes="Standard curing unless noted in trial." ,
-                source_file_reference="demo seed",
-            )
-        )
-
         # Finalized-phase machine settings. ratio_index climbs steadily
         # across T1->T5 alongside the hardness recovery (121 -> 141 N),
         # illustrating exactly the process-vs-quality correlation the
-        # Industrial Intelligence pages are built to surface.
+        # Industrial Intelligence pages are built to surface. rise_time/
+        # curing_notes live here (not on the retired RuntimeDataRecord) as
+        # of 2026-08-02 - see db.py's ProductionPhase.
         phase_start = dt.datetime.combine(run.run_date, dt.time(8, 0))
         session.add(
             ProductionPhase(
@@ -311,6 +299,8 @@ def seed_demo_data(session) -> str:
                 sidewall_width_mm=1180,
                 ambient_temperature_c=24.0,
                 ambient_humidity_pct=d["humidity"],
+                rise_time=95.0,
+                curing_notes="Standard curing unless noted in trial.",
                 notes="Demo data - not a real production run.",
                 source_file_reference="demo seed",
             )
@@ -416,18 +406,6 @@ def seed_demo_data(session) -> str:
         session.add(routine_run)
         session.flush()
 
-        session.add(
-            RuntimeDataRecord(
-                production_run_id=routine_run.id,
-                line_speed=3.2,
-                pump_speed_or_flow_data="Nominal",
-                temperature_data="Nominal",
-                pressure_data="Nominal",
-                rise_time=95.0,
-                curing_notes="Standard curing, routine batch.",
-                source_file_reference="demo seed",
-            )
-        )
         routine_phase_start = dt.datetime.combine(routine_run.run_date, dt.time(8, 0))
         session.add(
             ProductionPhase(
@@ -444,6 +422,8 @@ def seed_demo_data(session) -> str:
                 sidewall_width_mm=1180,
                 ambient_temperature_c=24.0,
                 ambient_humidity_pct=60.0,
+                rise_time=95.0,
+                curing_notes="Standard curing, routine batch.",
                 notes="Demo data - routine batch, not a trial.",
                 source_file_reference="demo seed",
             )

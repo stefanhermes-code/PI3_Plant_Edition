@@ -636,6 +636,14 @@ class ProductionPhase(Base):
     # row's value to the Finalized row's value for the plan-vs-actual read.
     ratio_index = Column(Float)
 
+    # Rise time and curing notes - moved here from the now-retired
+    # RuntimeDataRecord table on 2026-08-02, so they flow through the same
+    # Setup-vs-Finalized comparison and PHASE_SETTING_FIELDS pipeline as
+    # every other process setting, rather than living in a separate loose
+    # runtime log. See RuntimeDataRecord below.
+    rise_time = Column(Float)
+    curing_notes = Column(Text)
+
     notes = Column(Text)
     source_file_reference = Column(String(300))  # "manual entry" or CSV filename
     created_at = Column(DateTime, default=dt.datetime.utcnow)
@@ -761,6 +769,18 @@ class ConditioningSegment(Base):
 
 # ---------------------------------------------------------------------------
 # 7. runtime_data_records
+#
+# RETIRED 2026-08-02: the Production Run page's old "Process Phases" +
+# standalone "Runtime Data" tabs did overlapping work (line_speed duplicated
+# ProductionPhase.conveyor_speed, temperature/pressure text fields duplicated
+# structured fields elsewhere), so the page was restructured into two
+# dedicated tabs - "Setup" and "Runtime Data" - both backed by ProductionPhase
+# (phase_name "Setup"/"Finalized"). The two genuinely unique fields this table
+# had, rise_time and curing_notes, moved onto ProductionPhase alongside
+# ambient_temperature_c/ambient_humidity_pct (see above). The model/table
+# stays here, unread and unwritten by the app, purely so the historical rows
+# already in production are never destroyed - same precedent as
+# MaintenanceAndLicenseRecord and SimilarCaseLink elsewhere in this file.
 # ---------------------------------------------------------------------------
 class RuntimeDataRecord(Base):
     __tablename__ = "runtime_data_records"
@@ -771,13 +791,6 @@ class RuntimeDataRecord(Base):
     pump_speed_or_flow_data = Column(String(200))
     temperature_data = Column(String(200))
     pressure_data = Column(String(200))
-    # Ambient temperature/humidity used to live here, but this table is a
-    # loose runtime log (multiple rows per run, never wired into any
-    # correlation/trend analysis). Consolidated onto ProductionPhase
-    # (ambient_temperature_c/ambient_humidity_pct) on 2026-08-02 so there is
-    # one place ambient conditions live, and so they flow through the same
-    # PHASE_SETTING_FIELDS pipeline every other process setting does. See
-    # ProductionPhase below.
     rise_time = Column(Float)
     curing_notes = Column(Text)
     source_file_reference = Column(String(300))

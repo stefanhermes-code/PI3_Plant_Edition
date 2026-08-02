@@ -128,6 +128,7 @@ PHASE_SETTING_FIELDS = [
     "sidewall_width_mm",
     "ambient_temperature_c",
     "ambient_humidity_pct",
+    "rise_time",
 ]
 
 PHASE_SETTING_LABELS = {
@@ -140,6 +141,7 @@ PHASE_SETTING_LABELS = {
     "sidewall_width_mm": "Sidewall width (mm)",
     "ambient_temperature_c": "Ambient temperature (°C)",
     "ambient_humidity_pct": "Ambient humidity (%)",
+    "rise_time": "Rise time (s)",
 }
 
 
