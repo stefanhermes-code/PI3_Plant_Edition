@@ -35,6 +35,7 @@ from helpers import (
     delete_with_confirm,
     next_version_label,
     page_setup,
+    recipe_component_sort_index,
     render_data_table,
     render_function_action_intro,
     set_pending_banner,
@@ -209,6 +210,10 @@ with tab_edit:
             else:
                 active_version = _active_version(edit_grade)
 
+                ordered_components = sorted(
+                    active_version.components,
+                    key=lambda c: recipe_component_sort_index(c.role_in_formulation, c.raw_material_name),
+                )
                 components_df = (
                     pd.DataFrame(
                         [
@@ -219,7 +224,7 @@ with tab_edit:
                                 "Role": c.role_in_formulation or "",
                                 "Notes": c.notes or "",
                             }
-                            for c in active_version.components
+                            for c in ordered_components
                         ]
                     )
                     if active_version.components
@@ -233,7 +238,7 @@ with tab_edit:
                     use_container_width=True,
                     key=f"edit_recipe_components_{edit_grade.id}_{active_version.id}",
                     column_config={
-                        "php": st.column_config.NumberColumn("php", min_value=0.0, step=0.1),
+                        "php": st.column_config.NumberColumn("php", min_value=0.0, step=0.1, format="%.2f"),
                     },
                 )
 
@@ -556,20 +561,24 @@ else:
 
         with st.expander(f"Recipe components ({len(v.components)})"):
             if v.components:
+                ordered_version_components = sorted(
+                    v.components,
+                    key=lambda c: recipe_component_sort_index(c.role_in_formulation, c.raw_material_name),
+                )
                 comp_rows = [
                     {
                         "Raw material": c.raw_material_name,
                         "Supplier": c.supplier,
-                        "php": c.php,
+                        "php": f"{c.php:.2f}" if c.php is not None else "",
                         "Role": c.role_in_formulation,
                         "Notes": c.notes,
                     }
-                    for c in v.components
+                    for c in ordered_version_components
                 ]
                 st.caption("Click a row to edit (and optionally delete) that component.")
                 comp_idx = clickable_table(comp_rows, key=f"components_table_{v.id}")
-                if comp_idx is not None and comp_idx < len(v.components):
-                    st.session_state["comp_selected_id"] = v.components[comp_idx].id
+                if comp_idx is not None and comp_idx < len(ordered_version_components):
+                    st.session_state["comp_selected_id"] = ordered_version_components[comp_idx].id
                 elif st.session_state.get("comp_selected_id") in {c.id for c in v.components}:
                     # a component belonging to THIS version was selected before, but the
                     # table no longer reports a selection - clear the stale reference
@@ -595,7 +604,8 @@ else:
                                 "Supplier", value=selected_comp.supplier or "", key=f"edit_comp_sup_{selected_comp.id}"
                             )
                             e_php = ec3.number_input(
-                                "php", min_value=0.0, step=0.1, value=float(selected_comp.php or 0.0), key=f"edit_comp_php_{selected_comp.id}"
+                                "php", min_value=0.0, step=0.1, format="%.2f",
+                                value=float(selected_comp.php or 0.0), key=f"edit_comp_php_{selected_comp.id}",
                             )
                             e_role = st.text_input(
                                 "Role in formulation", value=selected_comp.role_in_formulation or "", key=f"edit_comp_role_{selected_comp.id}"
@@ -659,7 +669,7 @@ else:
                     )
                     supplier_default = raw_material_choice.default_supplier if raw_material_choice else ""
                     supplier = c2.text_input("Supplier", value=supplier_default or "", key=f"sup_{v.id}")
-                    php = c3.number_input("php", min_value=0.0, step=0.1, key=f"php_{v.id}")
+                    php = c3.number_input("php", min_value=0.0, step=0.1, format="%.2f", key=f"php_{v.id}")
                     role = st.text_input(
                         "Role in formulation (e.g. polyol, TDI, catalyst, surfactant)", key=f"role_{v.id}"
                     )

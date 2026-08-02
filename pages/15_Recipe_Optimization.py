@@ -33,6 +33,7 @@ from auth import current_user, logout_button, require_login
 from db import FoamGrade, get_session, init_db
 from helpers import (
     page_setup,
+    recipe_component_sort_index,
     render_ask_pi3_section,
     render_data_table,
     render_function_action_intro,
@@ -190,16 +191,20 @@ cost_by_version = {v.id: recipe_version_cost(session, v) for v in versions}
 current_cost = cost_by_version[current_version.id]
 
 if current_version.components:
+    ordered_current_components = sorted(
+        current_version.components,
+        key=lambda c: recipe_component_sort_index(c.role_in_formulation, c.raw_material_name),
+    )
     render_data_table(
         pd.DataFrame(
             [
                 {
                     "Raw material": c.raw_material_name,
                     "Supplier": c.supplier,
-                    "php": c.php,
+                    "php": f"{c.php:.2f}" if c.php is not None else None,
                     "Role": c.role_in_formulation,
                 }
-                for c in current_version.components
+                for c in ordered_current_components
             ]
         )
     )
@@ -700,16 +705,20 @@ with st.expander("All recipe versions"):
             + (f" — {v.change_note}" if v.change_note else "")
         )
         if v.components:
+            ordered_history_components = sorted(
+                v.components,
+                key=lambda c: recipe_component_sort_index(c.role_in_formulation, c.raw_material_name),
+            )
             render_data_table(
                 pd.DataFrame(
                     [
                         {
                             "Raw material": c.raw_material_name,
                             "Supplier": c.supplier,
-                            "php": c.php,
+                            "php": f"{c.php:.2f}" if c.php is not None else None,
                             "Role": c.role_in_formulation,
                         }
-                        for c in v.components
+                        for c in ordered_history_components
                     ]
                 )
             )

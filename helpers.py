@@ -2,6 +2,7 @@
 
 import datetime as dt
 import json
+import re
 
 import altair as alt
 import pandas as pd
@@ -361,6 +362,53 @@ def clickable_table(rows, key):
     )
     sel = selection_rows(event)
     return sel[0] if sel else None
+
+
+RECIPE_COMPONENT_CATEGORY_ORDER = (
+    "polyol",
+    "isocyanate",
+    "water",
+    "catalyst",
+    "surfactant",
+    "color",
+    "other",
+)
+
+
+def recipe_component_category(role_text, raw_material_name=""):
+    """Classifies a recipe component into the standard formulation reading
+    order a chemist expects: polyol(s) first, then isocyanate, water,
+    catalysts, surfactant(s), then colors/other additives last. Buckets on
+    the free-text role_in_formulation, falling back to raw_material_name for
+    cases the role text alone would get wrong - e.g. water is often entered
+    with a role like "chemical blowing agent", which would otherwise sort as
+    an "other" additive instead of water. Returns one of
+    RECIPE_COMPONENT_CATEGORY_ORDER."""
+    role = (role_text or "").strip().lower()
+    material = (raw_material_name or "").strip().lower()
+
+    if material == "water" or material.split() == ["water"]:
+        return "water"
+    if "isocyanate" in role or "isocyanate" in material or re.search(r"\b(tdi|mdi)\b", role + " " + material):
+        return "isocyanate"
+    if "polyol" in role or "polyol" in material:
+        return "polyol"
+    if "catalyst" in role:
+        return "catalyst"
+    if "surfactant" in role or "stabiliz" in role or "stabilis" in role:
+        return "surfactant"
+    if any(word in role for word in ("colour", "color", "pigment", "colorant", "colourant")):
+        return "color"
+    return "other"
+
+
+def recipe_component_sort_index(role_text, raw_material_name=""):
+    """Sort key for ordering a recipe's components into the standard
+    polyol -> isocyanate -> water -> catalyst -> surfactant -> color/other
+    reading order. Pass to sorted(..., key=...); relies on sorted() being
+    stable to preserve each category's original relative order."""
+    category = recipe_component_category(role_text, raw_material_name)
+    return RECIPE_COMPONENT_CATEGORY_ORDER.index(category)
 
 
 def delete_with_confirm(label, on_confirm, key_prefix, extra_warning=""):
