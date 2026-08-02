@@ -135,11 +135,15 @@ PAGE_CATALOG = {
     "user_roles_admin": "User Roles",
     "default_user_roles_admin": "Default User Roles",
     "user_accounts_admin": "User Accounts",
+    "performance_admin": "Performance",
 }
 
 REPORT_KEYS = frozenset({"report"})
 PLATFORM_ONLY_KEYS = frozenset(
-    {"companies_admin", "subscription_types_admin", "pi3_ai_connectivity", "default_user_roles_admin"}
+    {
+        "companies_admin", "subscription_types_admin", "pi3_ai_connectivity",
+        "default_user_roles_admin", "performance_admin",
+    }
 )
 
 

@@ -28,6 +28,10 @@ ProductionPhase/PhysicalPropertyResult directly by production_run_id
 instead.
 """
 
+import datetime as dt
+import random
+import time
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -36,6 +40,7 @@ from sqlalchemy.orm import joinedload
 
 from db import (
     ComponentStreamReading,
+    PerformanceLog,
     PhysicalPropertyResult,
     ProductionPhase,
     ProductionRun,
@@ -43,6 +48,40 @@ from db import (
     RecipeVersion,
 )
 from quality_standards import compute_pass_fail
+
+
+def _log_performance(_session, function_name, foam_grade_id, property_name, duration_ms, row_count):
+    """Records one PerformanceLog row (see db.py) for a cache-MISS call to
+    one of the three functions below - added 2026-08-02 in response to a
+    reported "app feels slow in general", so there's a real, persistent
+    record of how expensive each actual database fetch was, visible on the
+    Performance admin page, instead of only ever being able to guess.
+
+    Best-effort only and must never be able to break a page: any failure
+    (including this table not existing yet on some environment that hasn't
+    picked up this migration) is swallowed silently rather than surfaced -
+    a performance-monitoring feature must never be the thing that takes an
+    Intelligence page down. Also does cheap, infrequent housekeeping (a ~2%
+    chance per call of trimming rows older than 30 days) so this table
+    doesn't grow unbounded on a deployment nobody manually tidies."""
+    try:
+        grade_ids = _grade_id_list(foam_grade_id)
+        _session.add(
+            PerformanceLog(
+                function_name=function_name,
+                grade_ids=",".join(str(g) for g in grade_ids) if grade_ids else None,
+                property_name=property_name,
+                row_count=row_count,
+                duration_ms=round(duration_ms, 2),
+            )
+        )
+        _session.commit()
+        if random.random() < 0.02:
+            cutoff = dt.datetime.utcnow() - dt.timedelta(days=30)
+            _session.query(PerformanceLog).filter(PerformanceLog.created_at < cutoff).delete()
+            _session.commit()
+    except Exception:
+        _session.rollback()
 
 # Cache TTL for the three DB-loading functions below (run_settings_dataframe,
 # property_results_dataframe, actual_usage_dataframe). Fixed 2026-08-02: these
@@ -118,8 +157,12 @@ def run_settings_dataframe(_session, foam_grade_id=None):
     for its phases (N+1), which got slower as more production runs were
     recorded. The `_session` parameter name (leading underscore) tells
     Streamlit's cache not to try to hash the SQLAlchemy Session object -
-    the cache key is just foam_grade_id.
+    the cache key is just foam_grade_id. Logs its own duration to
+    PerformanceLog on every call (see _log_performance) - this function
+    only runs at all on a cache miss, so every logged row here is real
+    database work, not a cache hit.
     """
+    _t0 = time.perf_counter()
     q = _session.query(ProductionRun).options(
         joinedload(ProductionRun.foam_grade),
         joinedload(ProductionRun.recipe_version),
@@ -160,7 +203,9 @@ def run_settings_dataframe(_session, foam_grade_id=None):
             row[field] = getattr(phase, field) if phase else None
         rows.append(row)
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    _log_performance(_session, "run_settings_dataframe", foam_grade_id, None, (time.perf_counter() - _t0) * 1000, len(df))
+    return df
 
 
 @st.cache_data(ttl=_DATA_CACHE_TTL, show_spinner=False)
@@ -186,7 +231,9 @@ def property_results_dataframe(_session, foam_grade_id=None, property_name=None)
     slower as more quality data was recorded. The `_session` parameter
     name (leading underscore) tells Streamlit's cache not to try to hash
     the SQLAlchemy Session object - the cache key is just foam_grade_id/
-    property_name."""
+    property_name. Logs its own duration to PerformanceLog on every call
+    (see _log_performance) - only runs at all on a cache miss."""
+    _t0 = time.perf_counter()
     run_load = joinedload(PhysicalPropertyResult.production_run)
     q = (
         _session.query(PhysicalPropertyResult)
@@ -228,7 +275,12 @@ def property_results_dataframe(_session, foam_grade_id=None, property_name=None)
                 "tested_at": r.tested_at,
             }
         )
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    _log_performance(
+        _session, "property_results_dataframe", foam_grade_id, property_name,
+        (time.perf_counter() - _t0) * 1000, len(df),
+    )
+    return df
 
 
 def pass_rate(series) -> float | None:
@@ -571,7 +623,10 @@ def actual_usage_dataframe(_session, foam_grade_id=None):
     Cached (see _DATA_CACHE_TTL) and batch-loads this grade's Finalized
     phases and their stream readings in two queries total instead of one
     query per run plus one query per phase - fixed 2026-08-02, same N+1
-    pattern as run_settings_dataframe/property_results_dataframe above."""
+    pattern as run_settings_dataframe/property_results_dataframe above.
+    Logs its own duration to PerformanceLog on every call (see
+    _log_performance) - only runs at all on a cache miss."""
+    _t0 = time.perf_counter()
     q = _session.query(ProductionRun).options(
         joinedload(ProductionRun.recipe_version).joinedload(RecipeVersion.components)
     )
@@ -643,7 +698,9 @@ def actual_usage_dataframe(_session, foam_grade_id=None):
                     "actual_php_equivalent": round((r.flow_total_qty / polyol_qty) * 100, 4),
                 }
             )
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    _log_performance(_session, "actual_usage_dataframe", foam_grade_id, None, (time.perf_counter() - _t0) * 1000, len(df))
+    return df
 
 
 def rank_component_actual_correlations(session, foam_grade_id, property_name, min_runs=3):

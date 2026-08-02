@@ -1082,6 +1082,42 @@ class PI3AIConnectionSetting(Base):
 
 
 # ---------------------------------------------------------------------------
+# 17. performance_logs
+# ---------------------------------------------------------------------------
+# Added 2026-08-02, in response to a reported "app feels slow in general".
+# Records one row every time one of analytics.py's three shared, cached
+# data-loading functions (run_settings_dataframe, property_results_dataframe,
+# actual_usage_dataframe) actually has to hit the database - i.e. a cache
+# MISS, not every call. A cache hit never re-executes the function body, so
+# it never reaches the logging call either; that's deliberate, not an
+# oversight - the whole point of this table is to show how expensive the
+# real work is and how often it actually happens, not to log the (much more
+# frequent, and near-instant) cache hits too. See analytics._log_performance.
+#
+# grade_ids stores foam_grade_id as text (comma-joined) rather than a proper
+# FK, since that parameter is sometimes a single id and sometimes a list (a
+# foam family's pooled grade ids - see analytics._grade_id_list) - this
+# table is a lightweight operational log, not a normalized relationship, so
+# a denormalized text snapshot is the right amount of structure here.
+#
+# Logging itself must never be able to break a page: analytics._log_performance
+# wraps this insert in a try/except and swallows any failure silently, so a
+# logging problem (e.g. this table not yet migrated on some environment)
+# degrades to "no data on the Performance admin page", never a crashed
+# Intelligence page.
+class PerformanceLog(Base):
+    __tablename__ = "performance_logs"
+
+    id = Column(Integer, primary_key=True)
+    function_name = Column(String(100), nullable=False)
+    grade_ids = Column(String(200))  # comma-joined foam_grade_id(s), or NULL for "no grade filter"
+    property_name = Column(String(200))
+    row_count = Column(Integer)
+    duration_ms = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
 # 16. maintenance_and_license_records
 # ---------------------------------------------------------------------------
 # NOTE (corrected 2026-08-01, PI3_Gaps_and_Ambiguities.docx finding 1.1):
@@ -1130,6 +1166,7 @@ ALL_MODELS = [
     ExpertNote,
     SimilarCaseLink,
     PI3AIConnectionSetting,
+    PerformanceLog,
 ]
 
 

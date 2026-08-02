@@ -268,6 +268,7 @@ platform_admin_pages = [
     ("default_user_roles_admin", st.Page("pages/26_Default_User_Roles.py", title="Default User Roles", icon="🗝️")),
     ("user_accounts_admin", st.Page("pages/25_User_Accounts.py", title="User Accounts", icon="👤")),
     ("pi3_ai_connectivity", st.Page("pages/10_PI3_AI_Connectivity.py", title="PI3 Connectivity", icon="🤖")),
+    ("performance_admin", st.Page("pages/27_Performance.py", title="Performance", icon="⚡")),
 ]
 
 nav_sections_with_keys = {
