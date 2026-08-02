@@ -306,20 +306,26 @@ with tab_runs:
                         "Foam grade *", grades, index=grade_idx,
                         format_func=lambda g: g.grade_name, key=f"edit_run_grade_{selected_run.id}",
                     )
-                    versions = (
+                    # No version picker here - a production run always uses whichever
+                    # recipe version is currently active for the foam grade (see
+                    # RecipeVersion.is_active in db.py; only one can be active per
+                    # grade at a time). Offering a dropdown of every version implied
+                    # a choice that doesn't actually exist - the version to use isn't
+                    # a decision made on this page, it's whatever Recipes has marked
+                    # current. Same fallback as Recipe Optimization's current_version
+                    # for legacy data recorded before is_active existed.
+                    versions_for_grade = (
                         session.query(RecipeVersion).filter(RecipeVersion.foam_grade_id == grade.id).all()
                         if grade else []
                     )
-                    version_idx = 0
-                    if versions:
-                        version_idx = next(
-                            (i for i, v in enumerate(versions) if v.id == selected_run.recipe_version_id), 0
-                        )
-                    recipe_version = st.selectbox(
-                        "Recipe version *", versions, index=version_idx,
-                        format_func=lambda v: v.version_label if v else "—",
-                        key=f"edit_run_version_{selected_run.id}",
+                    current_version = next(
+                        (v for v in versions_for_grade if v.is_active),
+                        versions_for_grade[-1] if versions_for_grade else None,
                     )
+                    if current_version:
+                        st.caption(f"Recipe version in use: **{current_version.version_label}** (current)")
+                    else:
+                        st.caption("⚠️ This foam grade has no recipe version yet - add one on the Recipes page first.")
                     machines_for_plant = (
                         session.query(Machine)
                         .filter(Machine.plant_id == grade.product_family.plant_id, Machine.active.is_(True))
@@ -359,12 +365,12 @@ with tab_runs:
                     )
                     save = st.form_submit_button("Save changes", disabled=not page_usable)
                     if save and page_usable:
-                        if not recipe_version:
-                            st.error("This foam grade has no recipe version yet — add one first.")
+                        if not current_version:
+                            st.error("This foam grade has no recipe version yet — add one on the Recipes page first.")
                         else:
                             selected_run.foam_grade_id = grade.id
                             selected_run.plant_id = grade.product_family.plant_id
-                            selected_run.recipe_version_id = recipe_version.id
+                            selected_run.recipe_version_id = current_version.id
                             selected_run.machine_id = machine.id if machine else None
                             selected_run.run_date = run_date
                             selected_run.batch_reference = batch_reference
@@ -415,14 +421,22 @@ with tab_runs:
 
             with st.form("add_run"):
                 grade = st.selectbox("Foam grade *", grades, format_func=lambda g: g.grade_name)
-                versions = (
+                # No version picker - see the same note in the Edit Run form above.
+                # A new run always uses whichever recipe version is currently active
+                # for the chosen foam grade.
+                versions_for_grade = (
                     session.query(RecipeVersion).filter(RecipeVersion.foam_grade_id == grade.id).all()
                     if grade
                     else []
                 )
-                recipe_version = st.selectbox(
-                    "Recipe version *", versions, format_func=lambda v: v.version_label if v else "—"
+                current_version = next(
+                    (v for v in versions_for_grade if v.is_active),
+                    versions_for_grade[-1] if versions_for_grade else None,
                 )
+                if current_version:
+                    st.caption(f"Recipe version in use: **{current_version.version_label}** (current)")
+                else:
+                    st.caption("⚠️ This foam grade has no recipe version yet - add one on the Recipes page first.")
                 machines_for_plant = (
                     session.query(Machine)
                     .filter(Machine.plant_id == grade.product_family.plant_id, Machine.active.is_(True))
@@ -441,13 +455,13 @@ with tab_runs:
 
                 submitted = st.form_submit_button("Save production run", disabled=not page_usable)
                 if submitted and page_usable:
-                    if not recipe_version:
-                        st.error("This foam grade has no recipe version yet — add one first.")
+                    if not current_version:
+                        st.error("This foam grade has no recipe version yet — add one on the Recipes page first.")
                     else:
                         run = ProductionRun(
                             plant_id=grade.product_family.plant_id,
                             foam_grade_id=grade.id,
-                            recipe_version_id=recipe_version.id,
+                            recipe_version_id=current_version.id,
                             run_date=run_date,
                             batch_reference=_generate_batch_reference(session, run_date, plant_ids),
                             block_reference=block_reference,
