@@ -186,97 +186,110 @@ with tab_edit:
         if not grades_with_active:
             st.info("No foam grade has an active recipe yet - use 'Create Recipe' to start one.")
         else:
-            edit_grade = st.selectbox(
-                "Foam grade *", grades_with_active, format_func=lambda g: g.grade_name, key="edit_recipe_grade"
-            )
-            active_version = _active_version(edit_grade)
-            st.caption(
-                f"Editing **{active_version.version_label}** ({active_version.approval_status}), "
-                f"currently active for {edit_grade.grade_name}. Saving creates a new version with the "
-                "changes below and retires this one - the current version is never modified in place."
-            )
+            grade_rows = [
+                {
+                    "Foam grade": g.grade_name,
+                    "Active version": _active_version(g).version_label,
+                    "Status": _active_version(g).approval_status,
+                    "Effective date": _active_version(g).effective_date,
+                }
+                for g in grades_with_active
+            ]
+            edit_idx = clickable_table(grade_rows, key="edit_recipe_grade_table")
+            if edit_idx is not None and edit_idx < len(grades_with_active):
+                st.session_state["edit_recipe_grade_id"] = grades_with_active[edit_idx].id
+            elif st.session_state.get("edit_recipe_grade_id") not in {g.id for g in grades_with_active}:
+                st.session_state.pop("edit_recipe_grade_id", None)
 
-            components_df = (
-                pd.DataFrame(
-                    [
-                        {
-                            "Raw material": c.raw_material_name,
-                            "Supplier": c.supplier or "",
-                            "php": c.php,
-                            "Role": c.role_in_formulation or "",
-                            "Notes": c.notes or "",
-                        }
-                        for c in active_version.components
-                    ]
+            selected_grade_id = st.session_state.get("edit_recipe_grade_id")
+            edit_grade = next((g for g in grades_with_active if g.id == selected_grade_id), None)
+
+            if edit_grade is None:
+                st.caption("Select a foam grade above to edit its recipe.")
+            else:
+                active_version = _active_version(edit_grade)
+
+                components_df = (
+                    pd.DataFrame(
+                        [
+                            {
+                                "Raw material": c.raw_material_name,
+                                "Supplier": c.supplier or "",
+                                "php": c.php,
+                                "Role": c.role_in_formulation or "",
+                                "Notes": c.notes or "",
+                            }
+                            for c in active_version.components
+                        ]
+                    )
+                    if active_version.components
+                    else pd.DataFrame(columns=["Raw material", "Supplier", "php", "Role", "Notes"])
                 )
-                if active_version.components
-                else pd.DataFrame(columns=["Raw material", "Supplier", "php", "Role", "Notes"])
-            )
 
-            st.markdown("**Ingredients** — edit values directly, or use the row controls to add or remove ingredients.")
-            edited_df = st.data_editor(
-                components_df,
-                num_rows="dynamic",
-                use_container_width=True,
-                key=f"edit_recipe_components_{edit_grade.id}_{active_version.id}",
-                column_config={
-                    "php": st.column_config.NumberColumn("php", min_value=0.0, step=0.1),
-                },
-            )
+                st.markdown("**Ingredients** — edit values directly, or use the row controls to add or remove ingredients.")
+                edited_df = st.data_editor(
+                    components_df,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key=f"edit_recipe_components_{edit_grade.id}_{active_version.id}",
+                    column_config={
+                        "php": st.column_config.NumberColumn("php", min_value=0.0, step=0.1),
+                    },
+                )
 
-            suggested_label = next_version_label(active_version.version_label, len(edit_grade.recipe_versions))
-            with st.form(f"edit_recipe_{edit_grade.id}"):
-                new_label = st.text_input("New version label *", value=suggested_label)
-                new_effective = st.date_input("Effective date", value=dt.date.today())
-                new_change_note = st.text_area("Change note * (what changed and why)")
-                new_status = st.selectbox("Approval status", APPROVAL_STATUSES, index=0)
-                new_created_by = st.text_input("Created by")
-                save_edit = st.form_submit_button("Save as new version")
-                if save_edit:
-                    clean_rows = [
-                        row for _, row in edited_df.iterrows() if str(row.get("Raw material") or "").strip()
-                    ]
-                    if not new_label.strip() or not new_change_note.strip():
-                        st.error("Version label and change note are required.")
-                    elif not clean_rows:
-                        st.error("At least one ingredient is required.")
-                    else:
-                        new_version = RecipeVersion(
-                            foam_grade_id=edit_grade.id,
-                            version_label=new_label.strip(),
-                            effective_date=new_effective,
-                            change_note=new_change_note,
-                            approval_status=new_status,
-                            created_by=new_created_by,
-                            # See the identical note in the Create tab above:
-                            # must not flush as active while this grade's
-                            # current version still is - the DB now enforces
-                            # at most one active version per grade.
-                            is_active=False,
-                        )
-                        session.add(new_version)
-                        session.flush()
-                        for row in clean_rows:
-                            name = str(row["Raw material"]).strip()
-                            supplier = str(row.get("Supplier") or "")
-                            rm = _match_or_create_raw_material(name, supplier)
-                            session.add(
-                                RecipeComponent(
-                                    recipe_version_id=new_version.id,
-                                    raw_material_id=rm.id if rm else None,
-                                    raw_material_name=name,
-                                    supplier=supplier,
-                                    php=row.get("php") if pd.notna(row.get("php")) else None,
-                                    role_in_formulation=str(row.get("Role") or ""),
-                                    notes=str(row.get("Notes") or ""),
-                                )
+                suggested_label = next_version_label(active_version.version_label, len(edit_grade.recipe_versions))
+                with st.form(f"edit_recipe_{edit_grade.id}"):
+                    new_label = st.text_input("New version label *", value=suggested_label)
+                    new_effective = st.date_input("Effective date", value=dt.date.today())
+                    new_change_note = st.text_area("Change note * (what changed and why)")
+                    new_status = st.selectbox("Approval status", APPROVAL_STATUSES, index=0)
+                    new_created_by = st.text_input("Created by")
+                    save_edit = st.form_submit_button("Save as new version")
+                    if save_edit:
+                        clean_rows = [
+                            row for _, row in edited_df.iterrows() if str(row.get("Raw material") or "").strip()
+                        ]
+                        if not new_label.strip() or not new_change_note.strip():
+                            st.error("Version label and change note are required.")
+                        elif not clean_rows:
+                            st.error("At least one ingredient is required.")
+                        else:
+                            new_version = RecipeVersion(
+                                foam_grade_id=edit_grade.id,
+                                version_label=new_label.strip(),
+                                effective_date=new_effective,
+                                change_note=new_change_note,
+                                approval_status=new_status,
+                                created_by=new_created_by,
+                                # See the identical note in the Create tab above:
+                                # must not flush as active while this grade's
+                                # current version still is - the DB now enforces
+                                # at most one active version per grade.
+                                is_active=False,
                             )
-                        activate_recipe_version(session, edit_grade.id, new_version)
-                        session.commit()
-                        st.success(
-                            f"'{new_label}' saved and is now the active recipe for {edit_grade.grade_name}."
-                        )
-                        st.rerun()
+                            session.add(new_version)
+                            session.flush()
+                            for row in clean_rows:
+                                name = str(row["Raw material"]).strip()
+                                supplier = str(row.get("Supplier") or "")
+                                rm = _match_or_create_raw_material(name, supplier)
+                                session.add(
+                                    RecipeComponent(
+                                        recipe_version_id=new_version.id,
+                                        raw_material_id=rm.id if rm else None,
+                                        raw_material_name=name,
+                                        supplier=supplier,
+                                        php=row.get("php") if pd.notna(row.get("php")) else None,
+                                        role_in_formulation=str(row.get("Role") or ""),
+                                        notes=str(row.get("Notes") or ""),
+                                    )
+                                )
+                            activate_recipe_version(session, edit_grade.id, new_version)
+                            session.commit()
+                            st.success(
+                                f"'{new_label}' saved and is now the active recipe for {edit_grade.grade_name}."
+                            )
+                            st.rerun()
 
 with tab_import:
     if not page_usable:
