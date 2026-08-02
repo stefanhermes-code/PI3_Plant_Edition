@@ -28,7 +28,7 @@ from analytics import (
     recipe_version_cost,
     recipe_version_diff,
 )
-from quality_standards import tolerance_label
+from quality_standards import compute_pass_fail, tolerance_label
 from auth import current_user, logout_button, require_login
 from db import FoamGrade, get_session, init_db
 from helpers import (
@@ -246,8 +246,11 @@ st.caption(
     "Two questions, answered per property, using only production runs made under the CURRENT "
     "recipe (not older versions - which version was running earlier doesn't matter here): did we "
     "achieve the required property, and if not, does the actual metered dosage of a raw material "
-    "explain why. Pass/Fail per result is judged against the industry accepted tolerance for that "
-    "property - see the Tolerance column below."
+    "explain why. **Achieved?** compares the AVERAGE actual result across those runs against the "
+    "target ± the industry accepted tolerance for that property (see the Tolerance column) - it is "
+    "not about how many individual runs passed. **Runs outside tolerance** is separate context: it "
+    "shows how many individual results fell outside that same band, which can happen even when the "
+    "average is on target if results scatter widely run to run."
 )
 
 current_version_results = results_df[results_df["recipe_version_id"] == current_version.id]
@@ -266,20 +269,39 @@ else:
             avg_target=("target_value", "mean"),
             unit=("unit", "first"),
             pass_rate=("pass_fail", pass_rate),
+            n_outside=("pass_fail", lambda s: (s.dropna() == "Fail").sum()),
             n=("result_id", "count"),
         )
         .reset_index()
     )
     expectation_summary["avg_actual"] = expectation_summary["avg_actual"].round(2)
     expectation_summary["avg_target"] = expectation_summary["avg_target"].round(2)
-    expectation_summary["achieved"] = expectation_summary["pass_rate"].apply(
-        lambda p: "Yes" if pd.notna(p) and p >= 1.0 else ("No" if pd.notna(p) else "—")
+    # Achieved? compares the AVERAGE actual value for this property (across all
+    # runs made under the current recipe) against target +/- the industry
+    # tolerance - the same compute_pass_fail() band used everywhere else in the
+    # app, just applied once to the mean rather than to each individual run.
+    # This is deliberately NOT based on what share of individual runs passed
+    # (that's "Runs outside tolerance" below, a separate run-to-run variability
+    # stat) - see the caption above the table for why these two are different
+    # questions. Fixed 2026-08-02 per explicit user feedback: the previous
+    # version conflated "100% of individual runs passed" with "the average
+    # meets target," which made a table showing avg 7.98% vs target 8% (well
+    # within the ±1 band) still say "Not achieved" whenever a handful of the
+    # 39 underlying runs scattered outside the band - correct arithmetic, but
+    # the wrong question for an "Achieved?" verdict.
+    expectation_summary["achieved"] = expectation_summary.apply(
+        lambda row: {"Pass": "Yes", "Fail": "No"}.get(
+            compute_pass_fail(row["property_name"], row["avg_target"], row["avg_actual"]), "—"
+        ),
+        axis=1,
     )
     expectation_summary["tolerance"] = expectation_summary["property_name"].apply(tolerance_label)
 
     display_expectation = expectation_summary.copy()
-    display_expectation["Pass rate"] = display_expectation["pass_rate"].apply(
-        lambda p: f"{p:.0%}" if pd.notna(p) else "—"
+    display_expectation["Runs outside tolerance"] = display_expectation.apply(
+        lambda row: f"{int(row['n_outside'])} of {int(row['n'])} ({row['n_outside'] / row['n']:.0%})"
+        if row["n"] else "—",
+        axis=1,
     )
     display_expectation = display_expectation.rename(
         columns={
@@ -300,8 +322,8 @@ else:
                 "Required (target)",
                 "UOM",
                 "Tolerance",
-                "Pass rate",
                 "Achieved?",
+                "Runs outside tolerance",
                 "Runs",
             ]
         ]
@@ -326,19 +348,27 @@ else:
             f"({current_version.version_label})."
         )
     else:
-        achieved = prop_row.iloc[0]["achieved"]
-        pass_rate_text = (
-            f"{prop_row.iloc[0]['pass_rate']:.0%}" if pd.notna(prop_row.iloc[0]["pass_rate"]) else "—"
+        row = prop_row.iloc[0]
+        achieved = row["achieved"]
+        avg_actual_text = row["avg_actual"]
+        avg_target_text = row["avg_target"]
+        tolerance_text = row["tolerance"]
+        n_outside = int(row["n_outside"])
+        n_total = int(row["n"])
+        outside_text = (
+            f"{n_outside} of {n_total} ({n_outside / n_total:.0%})" if n_total else "—"
         )
         if achieved == "Yes":
             st.success(
-                f"Achieved: every {corr_property} result under the current recipe met target "
-                f"({pass_rate_text} pass rate)."
+                f"Achieved: the average {corr_property} result under the current recipe "
+                f"({avg_actual_text}) is within tolerance ({tolerance_text}) of the target "
+                f"({avg_target_text}). {outside_text} individual runs fell outside that band."
             )
         else:
             st.warning(
-                f"Not achieved: only {pass_rate_text} of {corr_property} results under the current "
-                "recipe met target."
+                f"Not achieved: the average {corr_property} result under the current recipe "
+                f"({avg_actual_text}) is outside tolerance ({tolerance_text}) of the target "
+                f"({avg_target_text}). {outside_text} individual runs fell outside that band."
             )
 
     actual_ranked = rank_component_actual_correlations(session, grade.id, corr_property)
