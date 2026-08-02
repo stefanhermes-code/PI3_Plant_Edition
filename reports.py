@@ -647,6 +647,41 @@ _BULLET_RE = re.compile(r"^[-•*]\s+(\S.*)$")
 # backticks in the Word doc instead of real formatting.
 _INLINE_MD_RE = re.compile(r"\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`")
 
+# PI3 also frequently answers with a GFM-style markdown table (a header
+# row, a "|---|---:|" alignment/separator row, then data rows) when
+# comparing several components or properties - confirmed in production
+# output (e.g. a Recipe Optimization report's "Recommended formulation
+# direction" and "Target-property focus" tables). Before this existed,
+# every line of a markdown table fell through to the plain-paragraph case
+# below and rendered as literal "| Water | 3.00 php | ... |" / "|---|---:|"
+# text - unreadable, and the single biggest formatting complaint on these
+# reports. _PIPE_ROW_RE spots a candidate row; _SEP_CELL_RE recognizes the
+# separator row's cells (dashes, optionally colon-flanked for alignment)
+# so a real header+data table can be told apart from an ordinary line that
+# merely happens to contain a "|" character.
+_PIPE_ROW_RE = re.compile(r"^\|.*\|$")
+_SEP_CELL_RE = re.compile(r"^:?-{3,}:?$")
+
+
+def _split_md_table_row(line):
+    """Split a markdown table row ('| a | b |') into ['a', 'b'], honoring a
+    backslash-escaped pipe inside a cell and dropping the empty strings
+    produced by the row's own leading/trailing pipes."""
+    protected = line.replace("\\|", "\x00")
+    cells = [c.strip().replace("\x00", "|") for c in protected.split("|")]
+    if cells and cells[0] == "":
+        cells = cells[1:]
+    if cells and cells[-1] == "":
+        cells = cells[:-1]
+    return cells
+
+
+def _is_md_table_separator(line):
+    if not _PIPE_ROW_RE.match(line):
+        return False
+    cells = _split_md_table_row(line)
+    return bool(cells) and all(_SEP_CELL_RE.match(c) for c in cells)
+
 
 def _strip_inline_markdown(text):
     """Plain-text version of a line with markdown markers removed but their
@@ -684,33 +719,79 @@ def _add_runs_with_inline_markdown(paragraph, text, size=None):
             run.font.size = size
 
 
+def _docx_markdown_table(doc, header_cells, data_rows):
+    """Renders a parsed markdown table (a header cell list plus a list of
+    data-row cell lists, both already produced by _split_md_table_row) as a
+    real bordered Word table - same "Light Grid Accent 1" style used for
+    PI3's own SQL-result appendix table (_docx_data_table), so a markdown
+    table and a data table look consistent in the same report. Ragged rows
+    (a data row with a different cell count than the header) are padded or
+    truncated to the header's column count rather than raising - a
+    model-written table is exactly the kind of input that occasionally
+    comes out uneven."""
+    ncols = len(header_cells)
+    table = doc.add_table(rows=1, cols=ncols)
+    table.style = "Light Grid Accent 1"
+    for cell, header_text in zip(table.rows[0].cells, header_cells):
+        run = cell.paragraphs[0].add_run(_strip_inline_markdown(header_text))
+        run.bold = True
+        run.font.size = Pt(9)
+    for row_cells in data_rows:
+        padded = (row_cells + [""] * ncols)[:ncols]
+        cells = table.add_row().cells
+        for cell, cell_text in zip(cells, padded):
+            _add_runs_with_inline_markdown(cell.paragraphs[0], cell_text or "—", size=Pt(9))
+    return table
+
+
 def _render_ai_answer_body(doc, text):
     """Render a PI3 answer's plain text into real Word structure: numbered
     top-level sections and lettered sub-sections become real headings,
-    "- " list items become real bulleted paragraphs, inline **bold**/
-    *italic*/`code` markdown becomes real run formatting, and everything
-    else stays a normal paragraph. Replaces the previous behavior of
-    dumping one flat Normal paragraph per non-blank line verbatim, which
-    produced an unreadable wall of text with no headings or bullets, left
-    literal markdown markers in place, and let Word split a heading from
-    its own content across a page break."""
-    for raw_line in (text or "").split("\n"):
-        line = raw_line.strip()
+    "- " list items become real bulleted paragraphs, a markdown pipe table
+    (header row + "|---|" separator row + data rows) becomes a real Word
+    table, inline **bold**/*italic*/`code` markdown becomes real run
+    formatting, and everything else stays a normal paragraph. Replaces the
+    previous behavior of dumping one flat Normal paragraph per non-blank
+    line verbatim, which produced an unreadable wall of text with no
+    headings, bullets, or tables, and left literal markdown markers
+    (including whole "| a | b |" / "|---|---:|" table rows) in place."""
+    lines = [raw_line.strip() for raw_line in (text or "").split("\n")]
+    n = len(lines)
+    i = 0
+    while i < n:
+        line = lines[i]
         if not line:
+            i += 1
             continue
+
+        if _PIPE_ROW_RE.match(line) and i + 1 < n and _is_md_table_separator(lines[i + 1]):
+            header_cells = _split_md_table_row(line)
+            j = i + 2
+            data_rows = []
+            while j < n and _PIPE_ROW_RE.match(lines[j]):
+                data_rows.append(_split_md_table_row(lines[j]))
+                j += 1
+            _docx_markdown_table(doc, header_cells, data_rows)
+            i = j
+            continue
+
         bullet_match = _BULLET_RE.match(line)
         if bullet_match:
             p = doc.add_paragraph(style="List Bullet")
             _add_runs_with_inline_markdown(p, bullet_match.group(1), size=Pt(10.5))
+            i += 1
             continue
         if _TOP_HEADING_RE.match(line):
             _docx_heading(doc, _strip_inline_markdown(line), size=13, space_before=14)
+            i += 1
             continue
         if _SUB_HEADING_RE.match(line):
             _docx_heading(doc, _strip_inline_markdown(line), size=11.5, color=_HTC_GREY, space_before=10)
+            i += 1
             continue
         p = doc.add_paragraph()
         _add_runs_with_inline_markdown(p, line)
+        i += 1
 
 
 def _docx_kv_table(doc, pairs):
