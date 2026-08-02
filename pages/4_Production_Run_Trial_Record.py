@@ -270,7 +270,6 @@ with tab_runs:
                 {
                     "Run": r.id,
                     "Grade": r.foam_grade.grade_name,
-                    "Recipe": r.recipe_version.version_label,
                     "Date": r.run_date,
                     "Batch": r.batch_reference,
                     "Block": r.block_reference,
