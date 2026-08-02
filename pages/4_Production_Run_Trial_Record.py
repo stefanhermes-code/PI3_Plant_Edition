@@ -719,8 +719,18 @@ with tab_setup:
                 st.caption("Setup data already recorded for this run — edit it in the Overview & Edit tab.")
             else:
                 with st.form(f"add_setup_{run.id}"):
-                    phase_start = combine_date_time("Setup start", f"new_setup_start_{run.id}")
-                    phase_end = combine_date_time("Setup end", f"new_setup_end_{run.id}")
+                    # Default the date to the run's own run_date rather than
+                    # today - setup happens on the day the batch is scheduled,
+                    # and setup start/end are normally the same day (hours
+                    # apart, not days), so both fields default to that one
+                    # date. Still fully editable, including across a
+                    # midnight-spanning setup if that genuinely happens.
+                    phase_start = combine_date_time(
+                        "Setup start", f"new_setup_start_{run.id}", default_date=run.run_date
+                    )
+                    phase_end = combine_date_time(
+                        "Setup end", f"new_setup_end_{run.id}", default_date=run.run_date
+                    )
 
                     st.markdown("**Machine settings**")
                     c1, c2, c3, c4 = st.columns(4)
@@ -1706,8 +1716,16 @@ with tab_runtime:
                 st.caption("Runtime Data already recorded for this run — edit it in the Overview & Edit tab.")
             else:
                 with st.form(f"add_runtime_{run.id}"):
-                    phase_start = combine_date_time("Run start", f"new_runtime_start_{run.id}")
-                    phase_end = combine_date_time("Run end", f"new_runtime_end_{run.id}")
+                    # Same reasoning as the Setup Create form above: default
+                    # to the run's own run_date, not today, since Runtime
+                    # Data is normally logged the same day the batch ran
+                    # (hours apart, not days) - still fully editable.
+                    phase_start = combine_date_time(
+                        "Run start", f"new_runtime_start_{run.id}", default_date=run.run_date
+                    )
+                    phase_end = combine_date_time(
+                        "Run end", f"new_runtime_end_{run.id}", default_date=run.run_date
+                    )
 
                     st.markdown("**Machine settings**")
                     c1, c2, c3, c4 = st.columns(4)
