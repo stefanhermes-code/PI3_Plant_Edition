@@ -124,13 +124,18 @@ if results_df.empty:
     st.info("No quality test results recorded yet for this foam grade's production runs.")
 else:
     st.subheader("Physical properties")
+    st.caption(
+        "All-time average across every recipe version ever run for this grade - a quick reference, "
+        "not a verdict. See 'Does the current recipe meet target?' below for the Achieved?/Not "
+        "achieved call against the CURRENT recipe specifically, judged against the industry "
+        "tolerance for each property."
+    )
     overall_summary = (
         results_df.groupby("property_name")
         .agg(
             avg_target=("target_value", "mean"),
             avg_actual=("actual_value", "mean"),
             unit=("unit", "first"),
-            pass_rate=("pass_fail", pass_rate),
         )
         .reset_index()
         .rename(
@@ -145,10 +150,7 @@ else:
     overall_summary["Avg target"] = overall_summary["Avg target"].round(2)
     overall_summary["Avg actual"] = overall_summary["Avg actual"].round(2)
     overall_summary["UOM"] = overall_summary["UOM"].fillna("—")
-    overall_summary["Pass rate"] = overall_summary["pass_rate"].apply(
-        lambda p: f"{p:.0%}" if pd.notna(p) else "—"
-    )
-    overall_summary = overall_summary[["Property", "Avg target", "Avg actual", "UOM", "Pass rate"]]
+    overall_summary = overall_summary[["Property", "Avg target", "Avg actual", "UOM"]]
     render_data_table(overall_summary)
 
 # Per-property, per-version summary tables - not shown on screen (see the
