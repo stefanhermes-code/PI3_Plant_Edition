@@ -20,9 +20,14 @@ rounds of correction on 2026-08-01/02:
   higher-density grade). Compression set works the same way even though
   the property itself is measured in %: target 8%, tolerance 1 -> allowed
   band is 8 +/- 1 percentage point, i.e. 7%-9% - NOT 8% of the target
-  value (which would be a far tighter +/- 0.08 band). Confirmed for both
-  properties; Elongation at break and Ball rebound resilience are also
-  %-measured but still use "relative" below pending the same confirmation.
+  value (which would be a far tighter +/- 0.08 band). Elongation at break
+  and Ball rebound resilience work the same way, confirmed 2026-08-02:
+  target 48% ball rebound, tolerance 5 -> allowed band is 48 +/- 5
+  percentage points, i.e. 43%-53% - NOT 5% of 48 (the previous, incorrect
+  "relative" reading, which gave 45.6-50.4, a much tighter and wrong
+  band). The published tolerance numbers themselves (5 and 10) are
+  unchanged from before this fix - only the mode moved from "relative" to
+  "absolute", exactly as already done for Density and Compression set.
 
 unit_label is retained purely to describe what unit the property's
 target/actual values are themselves measured in for display (e.g. in the
@@ -53,8 +58,8 @@ INDUSTRY_TOLERANCES = {
     "Density": ("absolute", 2.0, "kg/m3"),
     "40% IFD / hardness": ("relative", 20.0, "N"),
     "Tensile strength": ("relative", 10.0, "kPa"),
-    "Elongation at break": ("relative", 10.0, "%"),
-    "Ball rebound resilience": ("relative", 5.0, "%"),
+    "Elongation at break": ("absolute", 10.0, "%"),
+    "Ball rebound resilience": ("absolute", 5.0, "%"),
     "Compression set": ("absolute", 1.0, "%"),
     "Airflow / air permeability": ("relative", 10.0, "cfm"),
 }
