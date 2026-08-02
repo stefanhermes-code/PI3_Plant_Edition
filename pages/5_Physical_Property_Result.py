@@ -12,6 +12,18 @@ back to a sample by id, same as before.
 Keyed primarily to the production run (every batch gets quality results,
 trial or not). Linking to a trial is optional and only relevant when the
 result is part of a formal experiment's evidence trail.
+
+Redesigned 2026-08-02 (results browsing/edit make-over): the Add form now
+sits behind a collapsed expander, same as the Quality Issue page, so
+landing on this page shows the browsable table by default rather than an
+always-open form. The old "Results by production run" section - one
+bordered container with its own mini-table PER production run, stacked one
+after another - is replaced by a single flat, filterable table across
+every result (scoped to the active company), with one click-to-select/
+edit/delete flow, matching the Quality Issue page's established pattern.
+At real data volumes (100+ runs x several properties each) the per-run
+version amounted to little more than "every result, one after another" -
+a page of many small tables rather than one properly browsable list.
 """
 
 import datetime as dt
@@ -100,7 +112,6 @@ if not runs:
 # Physical property results
 # ---------------------------------------------------------------------------
 st.divider()
-st.subheader("📏 Quality test results")
 
 property_defs = (
     session.query(PhysicalPropertyDefinition)
@@ -116,115 +127,116 @@ if not property_defs:
 tab_result_manual, tab_result_import = st.tabs(["Add quality test result", "CSV / Excel import"])
 
 with tab_result_manual:
-    if not page_usable:
-        st.caption("View-only access - adding a quality test result is restricted for your role.")
-    else:
-        run = st.selectbox(
-            "Production run *",
-            runs,
-            format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
-            key="result_run_select",
-        )
-        trials_for_run = (
-            session.query(TrialRecord).filter(TrialRecord.production_run_id == run.id).all() if run else []
-        )
-        trial = st.selectbox(
-            "Link to trial (optional — only if this result is part of a formal experiment)",
-            [None] + trials_for_run,
-            format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
-            key="result_trial_select",
-        )
-        samples_for_run = (
-            session.query(Sample).filter(Sample.production_run_id == run.id).all() if run else []
-        )
-        sample = st.selectbox(
-            "Sample (optional, but recommended for comparability)",
-            [None] + samples_for_run,
-            format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
-            key="result_sample_select",
-        )
-        property_def = st.selectbox(
-            "Property * (⭐ = most commonly tested; full list searchable below)",
-            property_defs,
-            format_func=lambda p: f"⭐ {p.name}" if p.is_common else p.name,
-            key="result_property_select",
-        )
-        if property_def:
-            st.caption(f"{property_def.what_it_measures} — category: {property_def.category}")
-
-        methods_for_property = (
-            session.query(PhysicalPropertyMethod)
-            .filter(PhysicalPropertyMethod.property_definition_id == property_def.id)
-            .order_by(PhysicalPropertyMethod.sort_order)
-            .all()
-            if property_def
-            else []
-        )
-        uoms_for_property = (
-            session.query(PhysicalPropertyUOM)
-            .filter(PhysicalPropertyUOM.property_definition_id == property_def.id)
-            .order_by(PhysicalPropertyUOM.sort_order)
-            .all()
-            if property_def
-            else []
-        )
-
-        with st.form("add_property_result"):
-            c1, c2 = st.columns(2)
-            method_choice = c1.selectbox(
-                "Measuring method *",
-                methods_for_property,
-                format_func=lambda m: m.method_code,
+    with st.expander("Add quality test result", expanded=False):
+        if not page_usable:
+            st.caption("View-only access - adding a quality test result is restricted for your role.")
+        else:
+            run = st.selectbox(
+                "Production run *",
+                runs,
+                format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
+                key="result_run_select",
             )
-            method_other = c1.text_input("Or type a method not listed above")
-            uom_choice = c2.selectbox(
-                "Unit of measure *",
-                uoms_for_property,
-                format_func=lambda u: u.unit_label,
+            trials_for_run = (
+                session.query(TrialRecord).filter(TrialRecord.production_run_id == run.id).all() if run else []
             )
-            uom_other = c2.text_input("Or type a unit not listed above")
-
-            c3, c4, c5 = st.columns(3)
-            target_value = c3.number_input("Target value", step=0.1)
-            actual_value = c4.number_input("Actual value", step=0.1)
-            method_revision = c5.text_input("Method edition / revision (e.g. 2017)")
+            trial = st.selectbox(
+                "Link to trial (optional — only if this result is part of a formal experiment)",
+                [None] + trials_for_run,
+                format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
+                key="result_trial_select",
+            )
+            samples_for_run = (
+                session.query(Sample).filter(Sample.production_run_id == run.id).all() if run else []
+            )
+            sample = st.selectbox(
+                "Sample (optional, but recommended for comparability)",
+                [None] + samples_for_run,
+                format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
+                key="result_sample_select",
+            )
+            property_def = st.selectbox(
+                "Property * (⭐ = most commonly tested; full list searchable below)",
+                property_defs,
+                format_func=lambda p: f"⭐ {p.name}" if p.is_common else p.name,
+                key="result_property_select",
+            )
             if property_def:
-                st.caption(f"Industry accepted tolerance for {property_def.name}: {tolerance_label(property_def.name)}")
-            replicate_no = st.number_input("Replicate no.", min_value=1, step=1, value=1)
-            tested_at = st.date_input("Tested on", value=dt.date.today())
-            notes = st.text_area("Notes (e.g. specimen geometry, orientation, deflection, temperature)")
-            submitted = st.form_submit_button("Save result")
-            if submitted:
-                final_method = method_other.strip() or (method_choice.method_code if method_choice else "")
-                final_unit = uom_other.strip() or (uom_choice.unit_label if uom_choice else "")
-                if not property_def:
-                    st.error("Select a property.")
-                elif not final_method:
-                    st.error("A measuring method is required — pick one or type a custom one.")
-                else:
-                    pass_fail = compute_pass_fail(property_def.name, target_value, actual_value)
-                    session.add(
-                        PhysicalPropertyResult(
-                            production_run_id=run.id,
-                            trial_record_id=trial.id if trial else None,
-                            sample_id=sample.id if sample else None,
-                            property_definition_id=property_def.id,
-                            property_method_id=method_choice.id if (method_choice and not method_other.strip()) else None,
-                            property_name=property_def.name,
-                            target_value=target_value or None,
-                            actual_value=actual_value or None,
-                            unit=final_unit,
-                            pass_fail=pass_fail,
-                            test_method=final_method,
-                            method_revision=method_revision,
-                            replicate_no=int(replicate_no),
-                            tested_at=tested_at,
-                            notes=notes,
+                st.caption(f"{property_def.what_it_measures} — category: {property_def.category}")
+
+            methods_for_property = (
+                session.query(PhysicalPropertyMethod)
+                .filter(PhysicalPropertyMethod.property_definition_id == property_def.id)
+                .order_by(PhysicalPropertyMethod.sort_order)
+                .all()
+                if property_def
+                else []
+            )
+            uoms_for_property = (
+                session.query(PhysicalPropertyUOM)
+                .filter(PhysicalPropertyUOM.property_definition_id == property_def.id)
+                .order_by(PhysicalPropertyUOM.sort_order)
+                .all()
+                if property_def
+                else []
+            )
+
+            with st.form("add_property_result"):
+                c1, c2 = st.columns(2)
+                method_choice = c1.selectbox(
+                    "Measuring method *",
+                    methods_for_property,
+                    format_func=lambda m: m.method_code,
+                )
+                method_other = c1.text_input("Or type a method not listed above")
+                uom_choice = c2.selectbox(
+                    "Unit of measure *",
+                    uoms_for_property,
+                    format_func=lambda u: u.unit_label,
+                )
+                uom_other = c2.text_input("Or type a unit not listed above")
+
+                c3, c4, c5 = st.columns(3)
+                target_value = c3.number_input("Target value", step=0.1)
+                actual_value = c4.number_input("Actual value", step=0.1)
+                method_revision = c5.text_input("Method edition / revision (e.g. 2017)")
+                if property_def:
+                    st.caption(f"Industry accepted tolerance for {property_def.name}: {tolerance_label(property_def.name)}")
+                replicate_no = st.number_input("Replicate no.", min_value=1, step=1, value=1)
+                tested_at = st.date_input("Tested on", value=dt.date.today())
+                notes = st.text_area("Notes (e.g. specimen geometry, orientation, deflection, temperature)")
+                submitted = st.form_submit_button("Save result")
+                if submitted:
+                    final_method = method_other.strip() or (method_choice.method_code if method_choice else "")
+                    final_unit = uom_other.strip() or (uom_choice.unit_label if uom_choice else "")
+                    if not property_def:
+                        st.error("Select a property.")
+                    elif not final_method:
+                        st.error("A measuring method is required — pick one or type a custom one.")
+                    else:
+                        pass_fail = compute_pass_fail(property_def.name, target_value, actual_value)
+                        session.add(
+                            PhysicalPropertyResult(
+                                production_run_id=run.id,
+                                trial_record_id=trial.id if trial else None,
+                                sample_id=sample.id if sample else None,
+                                property_definition_id=property_def.id,
+                                property_method_id=method_choice.id if (method_choice and not method_other.strip()) else None,
+                                property_name=property_def.name,
+                                target_value=target_value or None,
+                                actual_value=actual_value or None,
+                                unit=final_unit,
+                                pass_fail=pass_fail,
+                                test_method=final_method,
+                                method_revision=method_revision,
+                                replicate_no=int(replicate_no),
+                                tested_at=tested_at,
+                                notes=notes,
+                            )
                         )
-                    )
-                    session.commit()
-                    st.success("Quality test result saved.")
-                    st.rerun()
+                        session.commit()
+                        st.success("Quality test result saved.")
+                        st.rerun()
 
 with tab_result_import:
     show_pending_banner("result_import_msg")
@@ -349,49 +361,68 @@ with tab_result_import:
             set_pending_banner("result_import_msg", msg)
             st.rerun()
 
+# ---------------------------------------------------------------------------
+# Browse / edit / delete - one flat, filterable table across every result
+# (scoped to the active company), not one mini-table per production run.
+# ---------------------------------------------------------------------------
 st.divider()
-st.subheader("Results by production run")
+st.subheader("Quality test results")
 
-for r_run in runs:
-    results = (
-        session.query(PhysicalPropertyResult)
-        .filter(PhysicalPropertyResult.production_run_id == r_run.id)
-        .all()
-    )
-    if not results:
-        continue
-    with st.container(border=True):
-        st.markdown(f"**Run #{r_run.id}** — {r_run.foam_grade.grade_name} · {r_run.run_date}")
-        result_rows = [
-            {
-                "Property": r.property_name,
-                "Target": r.target_value,
-                "Actual": r.actual_value,
-                "Unit": r.unit,
-                # Recomputed live rather than trusted from the stored
-                # pass_fail column - see the same note in
-                # analytics.property_results_dataframe.
-                "Pass/Fail": compute_pass_fail(r.property_name, r.target_value, r.actual_value),
-                "Sample": f"#{r.sample_id} ({r.sample.zone_label})" if r.sample else "—",
-                "Trial": f"#{r.trial_record_id}" if r.trial_record_id else "—",
-                "Method": r.test_method,
-                "Rev.": r.method_revision,
-                "Replicate": r.replicate_no,
-                "Tested": r.tested_at,
-                "Notes": r.notes,
-            }
-            for r in results
-        ]
-        st.caption("Click a row to edit (and optionally delete) that result.")
-        idx = clickable_table(result_rows, key=f"results_table_{r_run.id}")
-        if idx is not None:
-            st.session_state["result_selected_id"] = results[idx].id
-        elif st.session_state.get("result_selected_id") in {r.id for r in results}:
-            # a result belonging to THIS run was selected before, but the table no
-            # longer reports a selection - clear the stale reference, scoped to this
-            # run's own result ids so it doesn't clobber a different run's live
-            # selection elsewhere in this same loop.
-            st.session_state.pop("result_selected_id", None)
+pass_fail_options = ["Pass", "Fail", "Not computed"]
+pass_fail_filter = st.multiselect("Pass/Fail filter", pass_fail_options, default=pass_fail_options)
+
+property_name_options = sorted({p.name for p in property_defs}) if property_defs else []
+property_filter = (
+    st.multiselect("Property filter", property_name_options, default=property_name_options)
+    if property_name_options
+    else None
+)
+
+results_query = apply_scope(
+    session.query(PhysicalPropertyResult), PhysicalPropertyResult.production_run_id, run_ids
+)
+if property_filter is not None:
+    results_query = results_query.filter(PhysicalPropertyResult.property_name.in_(property_filter))
+all_results = results_query.order_by(PhysicalPropertyResult.tested_at.desc()).all()
+
+# Pass/Fail is recomputed live rather than trusted from the stored column -
+# see the same note in analytics.property_results_dataframe - so this
+# filter is applied here in Python against the live verdict, not as a SQL
+# WHERE clause against the stored (possibly stale) column.
+filtered_results = []
+for r in all_results:
+    live_pass_fail = compute_pass_fail(r.property_name, r.target_value, r.actual_value)
+    if (live_pass_fail or "Not computed") in pass_fail_filter:
+        filtered_results.append((r, live_pass_fail))
+
+if not filtered_results:
+    st.info("No quality test results match this filter.")
+else:
+    result_rows = [
+        {
+            "Run": f"#{r.production_run_id}",
+            "Grade": r.production_run.foam_grade.grade_name,
+            "Property": r.property_name,
+            "Target": r.target_value,
+            "Actual": r.actual_value,
+            "Unit": r.unit,
+            "Pass/Fail": live_pass_fail or "—",
+            "Sample": f"#{r.sample_id} ({r.sample.zone_label})" if r.sample else "—",
+            "Trial": f"#{r.trial_record_id}" if r.trial_record_id else "—",
+            "Method": r.test_method,
+            "Rev.": r.method_revision,
+            "Replicate": r.replicate_no,
+            "Tested": r.tested_at,
+            "Notes": r.notes,
+        }
+        for r, live_pass_fail in filtered_results
+    ]
+    st.caption(f"{len(filtered_results)} result(s). Click a row to edit (and optionally delete) that result.")
+    idx = clickable_table(result_rows, key="results_table")
+    if idx is not None and idx < len(filtered_results):
+        st.session_state["result_selected_id"] = filtered_results[idx][0].id
+    else:
+        st.session_state.pop("result_selected_id", None)
 
 selected_result_id = st.session_state.get("result_selected_id")
 selected_result = (
@@ -539,4 +570,3 @@ if selected_result:
     if st.button("Clear selection", key="clear_result_selection"):
         st.session_state.pop("result_selected_id", None)
         st.rerun()
-
