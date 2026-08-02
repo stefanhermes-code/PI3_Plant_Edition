@@ -337,22 +337,25 @@ else:
     )
 
 # ---------------------------------------------------------------------------
-# What else changed - recipe/machine switches and quality issues on the same timeline
+# What else changed - machine switches and quality issues on the same timeline
+#
+# Recipe-version changes are deliberately NOT included here (removed
+# 2026-08-02, per explicit request) - a recipe version replaces the
+# previous one rather than coexisting with it (see Recipe Optimization's
+# "current formulation" framing app-wide), so a version switch on this
+# grade's timeline isn't a comparable "what else changed" event the same
+# way a machine change or a quality issue is.
 # ---------------------------------------------------------------------------
 st.divider()
 st.subheader("What else changed on this timeline")
 change_rows = []
-prev_recipe, prev_machine = None, None
+prev_machine = None
 for _, row in series.iterrows():
-    if prev_recipe is not None and row["recipe_version"] != prev_recipe:
-        change_rows.append(
-            {"Date": row["tested_at"], "Run ID": row["run_id"], "Change": f"Recipe version: {prev_recipe} -> {row['recipe_version']}"}
-        )
     if prev_machine is not None and row["machine"] != prev_machine:
         change_rows.append(
             {"Date": row["tested_at"], "Run ID": row["run_id"], "Change": f"Machine: {prev_machine} -> {row['machine']}"}
         )
-    prev_recipe, prev_machine = row["recipe_version"], row["machine"]
+    prev_machine = row["machine"]
 
 run_ids = [int(r) for r in series["run_id"].tolist()]
 quality_issues = (
