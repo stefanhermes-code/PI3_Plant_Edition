@@ -16,6 +16,12 @@ ultimately hangs off:
                               PhysicalPropertyResult / AdjustmentConclusion /
                               ApprovalRecord / ExpertNote / ...
       |
+      +--- CustomerTrial --- Sample / QualityObservation / PhysicalPropertyResult
+      |     (independent lab-trial flow, no ProductionRun underneath)
+      |
+      +--- OptimizationTrial --- Sample / QualityObservation / PhysicalPropertyResult
+      |     (independent lab-trial flow, no ProductionRun underneath)
+      |
       +--- PI3AIConnectionSetting
 
 `None` is used throughout as the "unfiltered" sentinel (the platform owner
@@ -26,7 +32,7 @@ access_control.py and on the Plant/Raw Materials pages. An empty list
 - not silently fall through to "everything."
 """
 
-from db import Company, FoamGrade, Plant, ProductFamily, ProductionRun
+from db import Company, CustomerTrial, FoamGrade, OptimizationTrial, Plant, ProductFamily, ProductionRun
 
 
 def company_picker(st_module, session, is_platform_owner, own_company_id, key):
@@ -115,6 +121,41 @@ def run_ids_for_company(session, company_id):
     """Convenience: production run ids reachable from a company's plants."""
     plant_ids = plant_ids_for_company(session, company_id)
     return run_ids_for_plants(session, plant_ids)
+
+
+def customer_trial_ids_for_plants(session, plant_ids):
+    if plant_ids is None:
+        return None
+    if not plant_ids:
+        return []
+    return [
+        tid for (tid,) in session.query(CustomerTrial.id).filter(CustomerTrial.plant_id.in_(plant_ids)).all()
+    ]
+
+
+def customer_trial_ids_for_company(session, company_id):
+    """Convenience: customer trial ids reachable from a company's plants -
+    the independent, non-production-run lab-trial flow added 2026-08-03."""
+    plant_ids = plant_ids_for_company(session, company_id)
+    return customer_trial_ids_for_plants(session, plant_ids)
+
+
+def optimization_trial_ids_for_plants(session, plant_ids):
+    if plant_ids is None:
+        return None
+    if not plant_ids:
+        return []
+    return [
+        tid for (tid,) in session.query(OptimizationTrial.id).filter(OptimizationTrial.plant_id.in_(plant_ids)).all()
+    ]
+
+
+def optimization_trial_ids_for_company(session, company_id):
+    """Convenience: optimization trial ids reachable from a company's
+    plants - the independent, non-production-run lab-trial flow added
+    2026-08-03."""
+    plant_ids = plant_ids_for_company(session, company_id)
+    return optimization_trial_ids_for_plants(session, plant_ids)
 
 
 def apply_scope(query, column, ids):

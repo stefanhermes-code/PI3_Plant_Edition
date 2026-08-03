@@ -62,7 +62,8 @@ this order by `page_visible()`:
    forms and action buttons. As of 2026-08-01 this is rolled out on every
    operational page with a write action: Plant & Foam Equipment Overview,
    Product Family & Foam Grade, Recipes, Production Run, Quality Test
-   Result, Quality Issue, Samples & Conditioning, Adjustment & Conclusion,
+   Result, Quality Issue, Samples & Conditioning, Customer Trials,
+   Optimization Trials, Adjustment & Conclusion,
    Approval & Review, Trial / Experiment, Raw Materials, Expert
    Notes, Recipe Optimization, Trend Analysis, Machine Settings
    Correlation, and Root-Cause Assistant (their "Ask PI3"/"Save to Expert
@@ -119,6 +120,8 @@ PAGE_CATALOG = {
     "quality_test_result": "Quality Test Result",
     "quality_issue": "Quality Issue",
     "samples_conditioning": "Samples & Conditioning",
+    "customer_trials": "Customer Trials",
+    "optimization_trials": "Optimization Trials",
     "trial_experiment": "Trial / Experiment",
     "adjustment_conclusion": "Adjustment & Conclusion",
     "approval_review": "Approval & Review",

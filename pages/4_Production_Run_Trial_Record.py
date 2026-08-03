@@ -30,9 +30,11 @@ own RuntimeDataRecord table — the two were doing overlapping work (e.g.
 RuntimeDataRecord.line_speed duplicating ProductionPhase.conveyor_speed).
 Restructured 2026-08-02 into two dedicated tabs instead: Setup (hardcoded to
 the "Setup" ProductionPhase row) and Runtime Data (hardcoded to the
-"Finalized" ProductionPhase row, now also carrying rise_time/curing_notes —
-the two fields RuntimeDataRecord had that nothing else captured). See
-RuntimeDataRecord in db.py for why that table is still there but retired.
+"Finalized" ProductionPhase row, now also carrying rise_time — one of the
+two fields RuntimeDataRecord had that nothing else captured (the other,
+curing_notes, was removed from the app entirely on 2026-08-03 - not a real,
+reliably-captured field in practice). See RuntimeDataRecord in db.py for
+why that table is still there but retired.
 
 Setup's field set was narrowed again on 2026-08-03, after feedback that
 several fields shown there weren't actually Setup-appropriate: foam_height_mm
@@ -130,7 +132,7 @@ SETUP_OPTIONAL_COLUMNS = [
 RUNTIME_REQUIRED_COLUMNS = ["production_run_id"]
 RUNTIME_OPTIONAL_COLUMNS = SETUP_OPTIONAL_COLUMNS + [
     "foam_height_mm", "ambient_temperature_c", "ambient_humidity_pct",
-    "rise_time", "curing_notes",
+    "rise_time",
 ]
 
 # Component stream readings are actual measurements taken once production is
@@ -1692,10 +1694,6 @@ with tab_runtime:
                         "Rise time (s)", min_value=0.0, step=1.0, value=float(finalized_phase.rise_time or 0.0),
                         key=f"edit_runtime_rise_{finalized_phase.id}",
                     )
-                    curing_notes = st.text_area(
-                        "Curing / cutting timing notes", value=finalized_phase.curing_notes or "",
-                        key=f"edit_runtime_curing_{finalized_phase.id}",
-                    )
 
                     notes = st.text_area(
                         "Notes", value=finalized_phase.notes or "", key=f"edit_runtime_notes_{finalized_phase.id}"
@@ -1715,7 +1713,6 @@ with tab_runtime:
                             finalized_phase.ambient_temperature_c = ambient_temperature_c or None
                             finalized_phase.ambient_humidity_pct = ambient_humidity_pct or None
                             finalized_phase.rise_time = rise_time or None
-                            finalized_phase.curing_notes = curing_notes
                             finalized_phase.foaming_mode = foaming_mode
                             finalized_phase.top_flat_system_used = top_flat_system_used
                             finalized_phase.sidewall_width_mm = sidewall_width_mm or None
@@ -1800,7 +1797,6 @@ with tab_runtime:
                         help="A result of the foaming process, measured here — not a Setup-tab setting.",
                     )
                     rise_time = st.number_input("Rise time (s)", min_value=0.0, step=1.0, key=f"new_runtime_rise_{run.id}")
-                    curing_notes = st.text_area("Curing / cutting timing notes", key=f"new_runtime_curing_{run.id}")
 
                     notes = st.text_area("Notes", key=f"new_runtime_notes_{run.id}")
 
@@ -1822,7 +1818,6 @@ with tab_runtime:
                                     ambient_temperature_c=ambient_temperature_c or None,
                                     ambient_humidity_pct=ambient_humidity_pct or None,
                                     rise_time=rise_time or None,
-                                    curing_notes=curing_notes,
                                     foaming_mode=foaming_mode,
                                     top_flat_system_used=top_flat_system_used,
                                     sidewall_width_mm=sidewall_width_mm or None,
@@ -1894,7 +1889,6 @@ with tab_runtime:
                                         ambient_temperature_c=row.get("ambient_temperature_c"),
                                         ambient_humidity_pct=row.get("ambient_humidity_pct"),
                                         rise_time=row.get("rise_time"),
-                                        curing_notes=str(row.get("curing_notes", "") or ""),
                                         foaming_mode=(
                                             str(row.get("foaming_mode")).strip()
                                             if str(row.get("foaming_mode", "") or "").strip() in FOAMING_MODES

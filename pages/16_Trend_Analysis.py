@@ -105,6 +105,18 @@ RULE_PLAIN_LABELS = {
 }
 
 
+def _event_desc(run_id, source):
+    """Plain-language reference to a flagged point, for the small number of
+    places on this page that name a specific run/trial in a sentence
+    (control-chart flags, CUSUM breach). A production-run point always has
+    a real run_id ('run 42'); a lab-trial point (include_trials on) has
+    none - referring to it by source instead ('a Customer Trial result')
+    reads better than the literal 'run None' a bare run_id would produce."""
+    if run_id is not None:
+        return f"run {run_id}"
+    return f"a {source} result" if source and source != "Production Run" else "a lab trial result"
+
+
 def _line_chart_no_zero(df, value_cols):
     """Same idea as st.line_chart(df[value_cols]), but without forcing the
     Y-axis down to zero. These properties normally sit in a narrow band
@@ -138,14 +150,38 @@ def _line_chart_no_zero(df, value_cols):
 # Optimization's identical filter).
 grades = [
     g for g in apply_scope(session.query(FoamGrade), FoamGrade.id, scoped_grade_ids).all()
-    if not property_results_dataframe(session, foam_grade_id=g.id).empty
+    if not property_results_dataframe(session, foam_grade_id=g.id, include_trials=True).empty
 ]
 if not grades:
     st.warning("No foam grade yet has quality test results recorded - add these first before using Trend Analysis.")
     st.stop()
 
 unit = analysis_unit_picker(grades, key_prefix="trend")
-results_df = property_results_dataframe(session, foam_grade_id=unit["grade_ids"])
+
+include_trials = st.checkbox(
+    "Include lab trial data (Customer Trials / Optimization Trials)",
+    value=False,
+    key=f"trend_include_trials_{unit['state_key']}",
+    help=(
+        "Off by default: only production-run results are shown. Turning this on pools in results "
+        "from Customer Trial and Optimization Trial lab samples for this grade/family too - useful "
+        "for spotting a pattern across everything tested, but these lab trials have no machine or "
+        "process settings behind them, so they're shown with a blank machine and won't line up with "
+        "a specific production run."
+    ),
+)
+results_df = property_results_dataframe(session, foam_grade_id=unit["grade_ids"], include_trials=include_trials)
+
+if results_df.empty:
+    # Can happen when this grade/family's only quality test results come from
+    # a Customer Trial / Optimization Trial and the toggle above is off - the
+    # grade still passed the (include_trials=True) availability filter above,
+    # so it's offered here even though its production-run-only view is empty.
+    st.info(
+        "No production-run quality test results for this selection - only lab trial results exist. "
+        "Turn on 'Include lab trial data' above to trend them."
+    )
+    st.stop()
 
 properties = sorted(results_df["property_name"].dropna().unique())
 property_name = st.selectbox("Property", properties)
@@ -175,7 +211,9 @@ if pooling_grades:
         "false shift, drift, or trend."
     )
 
-series = property_run_series(session, unit["grade_ids"], property_name, normalize_pct_of_target=pooling_grades)
+series = property_run_series(
+    session, unit["grade_ids"], property_name, normalize_pct_of_target=pooling_grades, include_trials=include_trials
+)
 if recipe_filter != "All":
     series = series[series["recipe_version"] == recipe_filter]
 if machine_filter != "All":
@@ -187,7 +225,8 @@ if series.empty:
     st.stop()
 
 value_desc = f"{property_name} result" if not pooling_grades else f"{property_name} result (as % of target)"
-st.caption(f"{len(series)} production run(s) with a {value_desc}, {series['tested_at'].min()} to {series['tested_at'].max()}.")
+event_desc = "production run(s) / lab trial(s)" if include_trials else "production run(s)"
+st.caption(f"{len(series)} {event_desc} with a {value_desc}, {series['tested_at'].min()} to {series['tested_at'].max()}.")
 
 # ---------------------------------------------------------------------------
 # Control chart
@@ -221,7 +260,7 @@ else:
                 {
                     "What was seen": RULE_PLAIN_LABELS.get(f["rule"], f["rule"]),
                     "First seen": f["first_tested_at"],
-                    "Run ID": f["first_run_id"],
+                    "Run ID": f["first_run_id"] if f["first_run_id"] is not None else f.get("first_source", "—"),
                     "Points matching": f["points_matching"],
                 }
                 for f in chart_result["flags"]
@@ -287,7 +326,7 @@ else:
     else:
         st.warning(
             f"A slow {cusum['breach_direction']} drift has been building up, first becoming clear "
-            f"at run {cusum['breach_run_id']} ({cusum['breach_tested_at']})."
+            f"at {_event_desc(cusum['breach_run_id'], cusum.get('breach_source'))} ({cusum['breach_tested_at']})."
         )
 
 # ---------------------------------------------------------------------------
@@ -351,13 +390,19 @@ st.subheader("What else changed on this timeline")
 change_rows = []
 prev_machine = None
 for _, row in series.iterrows():
+    # A lab-trial row (include_trials, machine=None/NaN) isn't a real machine
+    # switch and isn't a gap in machine history either - skip it here rather
+    # than flagging a false "Machine: X -> None" change or resetting the
+    # comparison, so trial rows just don't participate in this check.
+    if pd.isna(row["machine"]):
+        continue
     if prev_machine is not None and row["machine"] != prev_machine:
         change_rows.append(
             {"Date": row["tested_at"], "Run ID": row["run_id"], "Change": f"Machine: {prev_machine} -> {row['machine']}"}
         )
     prev_machine = row["machine"]
 
-run_ids = [int(r) for r in series["run_id"].tolist()]
+run_ids = [int(r) for r in series["run_id"].dropna().tolist()]
 quality_issues = (
     session.query(QualityObservation)
     .filter(QualityObservation.production_run_id.in_(run_ids))
@@ -386,6 +431,8 @@ else:
 st.divider()
 st.subheader("Results")
 results_columns = ["tested_at", "run_id", "machine", "actual_value", "target_value", "n_replicates"]
+if include_trials:
+    results_columns.insert(2, "source")
 if pooling_grades:
     results_columns.insert(2, "foam_grade")
 render_data_table(series[results_columns], max_height="400px")
@@ -412,8 +459,8 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
                 control_summary = "In control - no control-chart rule violations."
             else:
                 control_summary = "Rule violations found:\n" + "\n".join(
-                    f"- {f['rule']}: first seen at run {f['first_run_id']} ({f['first_tested_at']}), "
-                    f"{f['points_matching']} point(s) matching"
+                    f"- {f['rule']}: first seen at {_event_desc(f['first_run_id'], f.get('first_source'))} "
+                    f"({f['first_tested_at']}), {f['points_matching']} point(s) matching"
                     for f in chart_result["flags"]
                 )
         else:
@@ -432,7 +479,7 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
                 "No sustained drift detected."
                 if cusum["breach_index"] is None
                 else f"Sustained {cusum['breach_direction']} drift, first crossing the decision limit at "
-                f"run {cusum['breach_run_id']} ({cusum['breach_tested_at']})."
+                f"{_event_desc(cusum['breach_run_id'], cusum.get('breach_source'))} ({cusum['breach_tested_at']})."
             )
         else:
             cusum_summary = "Not enough data for a CUSUM check."

@@ -12,18 +12,23 @@ import datetime as dt
 
 import pandas as pd
 import streamlit as st
+from sqlalchemy import or_
 
 import quality_issue_taxonomy
 from access_control import can_use_page
 from db import (
     CONFIDENCE_LEVELS,
+    SAMPLE_SOURCE_TYPES,
     SEVERITIES,
+    CustomerTrial,
     FoamGrade,
+    OptimizationTrial,
     ProductionRun,
     QualityObservation,
     TrialRecord,
     get_session,
     init_db,
+    sample_source_fk_field,
 )
 from auth import current_user, logout_button, require_login
 from helpers import (
@@ -40,13 +45,56 @@ from helpers import (
     show_pending_banner,
     view_only_notice,
 )
-from tenant_scope import apply_scope, company_picker, grade_ids_for_company, run_ids_for_company
+from tenant_scope import (
+    apply_scope,
+    company_picker,
+    customer_trial_ids_for_company,
+    grade_ids_for_company,
+    optimization_trial_ids_for_company,
+    run_ids_for_company,
+)
 
-OBSERVATION_REQUIRED_COLUMNS = ["production_run_id", "observation_type"]
+# An issue belongs to exactly one parent - a production run, a customer
+# trial, or an optimization trial (see db.SAMPLE_SOURCE_TYPES). CSV rows
+# carry all three FK columns as optional and must set exactly one.
+OBSERVATION_REQUIRED_COLUMNS = ["observation_type"]
 OBSERVATION_OPTIONAL_COLUMNS = [
-    "trial_record_id", "severity", "frequency", "location_in_block", "suspected_cause",
+    "production_run_id", "customer_trial_id", "optimization_trial_id", "trial_record_id",
+    "severity", "frequency", "location_in_block", "suspected_cause",
     "confidence_level", "product_impact", "customer_impact", "notes", "observed_at",
 ]
+
+
+def _obs_source_desc(obs):
+    """(source label, human-readable parent description) for a
+    QualityObservation, resolving whichever of the three FKs is set."""
+    if obs.production_run_id is not None:
+        run = obs.production_run
+        desc = f"Run #{run.id} — {run.foam_grade.grade_name} · {run.run_date}" if run else f"Run #{obs.production_run_id}"
+        return "Production Run", desc
+    if obs.customer_trial_id is not None:
+        t = obs.customer_trial
+        desc = f"Trial #{t.id} — {t.customer_name}" if t else f"Trial #{obs.customer_trial_id}"
+        return "Customer Trial", desc
+    if obs.optimization_trial_id is not None:
+        t = obs.optimization_trial
+        ref = (t.improvement_initiative_reference or "(no reference)") if t else ""
+        desc = f"Trial #{t.id} — {ref}" if t else f"Trial #{obs.optimization_trial_id}"
+        return "Optimization Trial", desc
+    return "—", "—"
+
+
+def _obs_foam_grade_id(obs):
+    """foam_grade_id reachable from whichever of the three parents this
+    issue belongs to - used to apply the Foam scope filter/chart across
+    all three sources uniformly."""
+    if obs.production_run_id is not None:
+        return obs.production_run.foam_grade_id if obs.production_run else None
+    if obs.customer_trial_id is not None:
+        return obs.customer_trial.foam_grade_id if obs.customer_trial else None
+    if obs.optimization_trial_id is not None:
+        return obs.optimization_trial.foam_grade_id if obs.optimization_trial else None
+    return None
 
 
 def _issue_type_picker(key_prefix, current_value=None):
@@ -122,11 +170,11 @@ render_function_action_intro(
         "for when the issue was found during a deliberate investigation."
     ),
     action_text=(
-        "Select the production run the issue was observed on, then log the issue type, severity, "
-        "frequency, location in the block, suspected cause, and your confidence level in that "
-        "assessment. Use the CSV/Excel import tab to bulk-load a batch of issues instead of "
-        "entering them one by one. Link to a trial only if this issue surfaced during a formal "
-        "trial/experiment."
+        "Pick which of the three you're logging against (Production Run / Customer Trial / "
+        "Optimization Trial), then log the issue type, severity, frequency, location in the block, "
+        "suspected cause, and your confidence level in that assessment. Use the CSV/Excel import "
+        "tab to bulk-load a batch of issues instead of entering them one by one. Link to a trial "
+        "record only if this issue surfaced during a formal trial/experiment on a production run."
     ),
 )
 session = get_session()
@@ -139,14 +187,29 @@ company, _all_companies = company_picker(
 )
 active_company_id = company.id if company else None
 scoped_run_ids = run_ids_for_company(session, active_company_id)
+scoped_ct_ids = customer_trial_ids_for_company(session, active_company_id)
+scoped_ot_ids = optimization_trial_ids_for_company(session, active_company_id)
 
 runs = (
     apply_scope(session.query(ProductionRun), ProductionRun.id, scoped_run_ids)
     .order_by(ProductionRun.created_at.desc())
     .all()
 )
-if not runs:
-    st.warning("Create a production run first (Production Run page).")
+customer_trials = (
+    apply_scope(session.query(CustomerTrial), CustomerTrial.id, scoped_ct_ids)
+    .order_by(CustomerTrial.created_at.desc())
+    .all()
+)
+optimization_trials = (
+    apply_scope(session.query(OptimizationTrial), OptimizationTrial.id, scoped_ot_ids)
+    .order_by(OptimizationTrial.created_at.desc())
+    .all()
+)
+if not runs and not customer_trials and not optimization_trials:
+    st.warning(
+        "Create a production run, customer trial, or optimization trial first "
+        "(Production Run / Customer Trials / Optimization Trials pages)."
+    )
     st.stop()
 
 tab_obs_manual, tab_obs_import = st.tabs(["Add quality issue", "CSV / Excel import"])
@@ -165,20 +228,48 @@ with tab_obs_manual:
             if _typical_causes:
                 st.caption(f"Typical causes/checks: {_typical_causes}")
 
-            with st.form("add_observation"):
-                run = st.selectbox(
-                    "Production run *",
-                    runs,
+            available_sources = [
+                s for s in SAMPLE_SOURCE_TYPES
+                if (s == "Production Run" and runs)
+                or (s == "Customer Trial" and customer_trials)
+                or (s == "Optimization Trial" and optimization_trials)
+            ]
+            source_type = st.selectbox("Record against *", available_sources, key="obs_source_type")
+            if source_type == "Production Run":
+                parent = st.selectbox(
+                    "Production run *", runs,
                     format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
+                    key="obs_run_select",
                 )
+            elif source_type == "Customer Trial":
+                parent = st.selectbox(
+                    "Customer trial *", customer_trials,
+                    format_func=lambda t: f"Trial #{t.id} — {t.foam_grade.grade_name} · {t.customer_name} · {t.trial_date or '—'}",
+                    key="obs_ct_select",
+                )
+            else:
+                parent = st.selectbox(
+                    "Optimization trial *", optimization_trials,
+                    format_func=lambda t: (
+                        f"Trial #{t.id} — {t.foam_grade.grade_name} · "
+                        f"{t.improvement_initiative_reference or '(no reference)'} · {t.trial_date or '—'}"
+                    ),
+                    key="obs_ot_select",
+                )
+            if source_type == "Production Run":
                 trials_for_run = (
-                    session.query(TrialRecord).filter(TrialRecord.production_run_id == run.id).all() if run else []
+                    session.query(TrialRecord).filter(TrialRecord.production_run_id == parent.id).all() if parent else []
                 )
                 trial = st.selectbox(
                     "Link to trial (optional)",
                     [None] + trials_for_run,
                     format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
+                    key="obs_trial_select",
                 )
+            else:
+                trial = None
+
+            with st.form("add_observation"):
                 st.caption(f"Issue type: **{observation_type or '(describe the issue above)'}**")
                 c1, c2 = st.columns(2)
                 severity = c1.selectbox("Severity", SEVERITIES)
@@ -195,22 +286,21 @@ with tab_obs_manual:
                     if not observation_type:
                         st.error("Issue type is required.")
                     else:
-                        session.add(
-                            QualityObservation(
-                                production_run_id=run.id,
-                                trial_record_id=trial.id if trial else None,
-                                observation_type=observation_type,
-                                severity=severity,
-                                frequency=frequency,
-                                location_in_block=location_in_block,
-                                suspected_cause=suspected_cause,
-                                confidence_level=confidence_level,
-                                product_impact=product_impact,
-                                customer_impact=customer_impact,
-                                notes=notes,
-                                observed_at=observed_at,
-                            )
+                        new_obs = QualityObservation(
+                            trial_record_id=trial.id if trial else None,
+                            observation_type=observation_type,
+                            severity=severity,
+                            frequency=frequency,
+                            location_in_block=location_in_block,
+                            suspected_cause=suspected_cause,
+                            confidence_level=confidence_level,
+                            product_impact=product_impact,
+                            customer_impact=customer_impact,
+                            notes=notes,
+                            observed_at=observed_at,
                         )
+                        setattr(new_obs, sample_source_fk_field(source_type), parent.id)
+                        session.add(new_obs)
                         session.commit()
                         st.success("Quality issue saved.")
                         st.rerun()
@@ -221,21 +311,49 @@ with tab_obs_import:
         for _cat in quality_issue_taxonomy.categories():
             st.write(f"**{_cat}**")
             st.write(", ".join(it["name"] for it in quality_issue_taxonomy.issue_types_for_category(_cat)))
+    st.caption(
+        "Each row needs exactly one of production_run_id / customer_trial_id / optimization_trial_id "
+        "set, matching which of the three that issue belongs to."
+    )
     obs_df, obs_filename = csv_excel_uploader(
         OBSERVATION_REQUIRED_COLUMNS, OBSERVATION_OPTIONAL_COLUMNS, key="observation_upload"
     )
     if obs_df is not None:
-        run_ids = {r.id for r in runs}
+        import_run_ids = {r.id for r in runs}
+        import_ct_ids = {t.id for t in customer_trials}
+        import_ot_ids = {t.id for t in optimization_trials}
         # Scoped to this company's runs - otherwise a CSV row could link a
         # new quality issue to a different company's trial record.
         trials_all = {
             t.id: t
             for t in apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, scoped_run_ids).all()
         }
+
+        def _row_fk(row):
+            """(fk_field, fk_value) if exactly one of the three FK columns
+            is set to a value in-scope, else (None, None)."""
+            candidates = []
+            for field, id_set in (
+                ("production_run_id", import_run_ids),
+                ("customer_trial_id", import_ct_ids),
+                ("optimization_trial_id", import_ot_ids),
+            ):
+                val = row.get(field)
+                if pd.notna(val) and str(val).strip():
+                    candidates.append((field, val, id_set))
+            if len(candidates) != 1:
+                return None, None
+            field, val, id_set = candidates[0]
+            try:
+                val_int = int(val)
+            except (TypeError, ValueError):
+                return None, None
+            return (field, val_int) if val_int in id_set else (None, None)
+
         good_rows, bad_rows = [], []
         for _, row in obs_df.iterrows():
             try:
-                run_ok = row.get("production_run_id") in run_ids
+                fk_field, _fk_val = _row_fk(row)
                 trial_val = row.get("trial_record_id")
                 trial_ok = pd.isna(trial_val) or int(trial_val) in trials_all
                 # Issue type must match the controlled taxonomy (see
@@ -247,7 +365,7 @@ with tab_obs_import:
                 issue_match = quality_issue_taxonomy.lookup_case_insensitive(
                     str(row.get("observation_type", "") or "")
                 )
-                ok = bool(run_ok and trial_ok and issue_match)
+                ok = bool(fk_field and trial_ok and issue_match)
             except (TypeError, ValueError):
                 ok = False
             if ok:
@@ -258,22 +376,27 @@ with tab_obs_import:
         st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
         if bad_rows:
             st.warning(
-                "Flagged rows reference an unknown production_run_id/trial_record_id, or their "
+                "Flagged rows don't have exactly one in-scope production_run_id / customer_trial_id "
+                "/ optimization_trial_id set, reference an unknown trial_record_id, or their "
                 "observation_type doesn't match one of the controlled issue-type names (see the "
                 "'Add quality issue' dropdown above for the exact list of accepted values)."
             )
             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
         if good_rows and st.button("Confirm import", key="confirm_observation_import", disabled=not page_usable):
-            existing_keys = {
-                (o.production_run_id, o.observation_type.strip().lower(), o.observed_at)
-                for o in session.query(QualityObservation).all()
-            }
+            existing_keys = set()
+            for o in session.query(QualityObservation).all():
+                src_label, _ = _obs_source_desc(o)
+                fk_col = sample_source_fk_field(src_label) if src_label in SAMPLE_SOURCE_TYPES else None
+                if fk_col:
+                    existing_keys.add((fk_col, getattr(o, fk_col), o.observation_type.strip().lower(), o.observed_at))
 
             def _obs_key(row):
+                fk_field, fk_val = _row_fk(row)
                 observed_val = pd.to_datetime(row.get("observed_at"), errors="coerce")
                 return (
-                    int(row["production_run_id"]),
+                    fk_field,
+                    fk_val,
                     str(row["observation_type"]).strip().lower(),
                     observed_val.date() if not pd.isna(observed_val) else dt.date.today(),
                 )
@@ -292,26 +415,26 @@ with tab_obs_import:
                 canonical_issue_type = quality_issue_taxonomy.lookup_case_insensitive(
                     str(row["observation_type"])
                 )["name"]
-                session.add(
-                    QualityObservation(
-                        production_run_id=int(row["production_run_id"]),
-                        trial_record_id=int(trial_val) if not pd.isna(trial_val) else None,
-                        observation_type=canonical_issue_type,
-                        severity=severity_val if severity_val in SEVERITIES else "Low",
-                        frequency=frequency_val if frequency_val in ["One-off", "Recurring"] else "One-off",
-                        location_in_block=str(row.get("location_in_block", "") or ""),
-                        suspected_cause=str(row.get("suspected_cause", "") or ""),
-                        confidence_level=confidence_val if confidence_val in CONFIDENCE_LEVELS else "Unconfirmed",
-                        product_impact=str(row.get("product_impact", "") or ""),
-                        customer_impact=str(row.get("customer_impact", "") or ""),
-                        notes=str(row.get("notes", "") or ""),
-                        observed_at=observed_val.date() if not pd.isna(observed_val) else dt.date.today(),
-                    )
+                fk_field, fk_val = _row_fk(row)
+                new_obs = QualityObservation(
+                    trial_record_id=int(trial_val) if not pd.isna(trial_val) and fk_field == "production_run_id" else None,
+                    observation_type=canonical_issue_type,
+                    severity=severity_val if severity_val in SEVERITIES else "Low",
+                    frequency=frequency_val if frequency_val in ["One-off", "Recurring"] else "One-off",
+                    location_in_block=str(row.get("location_in_block", "") or ""),
+                    suspected_cause=str(row.get("suspected_cause", "") or ""),
+                    confidence_level=confidence_val if confidence_val in CONFIDENCE_LEVELS else "Unconfirmed",
+                    product_impact=str(row.get("product_impact", "") or ""),
+                    customer_impact=str(row.get("customer_impact", "") or ""),
+                    notes=str(row.get("notes", "") or ""),
+                    observed_at=observed_val.date() if not pd.isna(observed_val) else dt.date.today(),
                 )
+                setattr(new_obs, fk_field, fk_val)
+                session.add(new_obs)
             session.commit()
             msg = f"Imported {len(new_rows)} quality issue(s) from {obs_filename}."
             if dup_rows:
-                msg += f" Skipped {len(dup_rows)} row(s) already recorded for their run/type/date (likely a repeat click)."
+                msg += f" Skipped {len(dup_rows)} row(s) already recorded for their source/type/date (likely a repeat click)."
             set_pending_banner("observation_import_msg", msg)
             st.rerun()
 
@@ -357,31 +480,42 @@ with filter_col2:
             scope_grade_ids = [g.id for g in scoped_grades if g.product_family_id == scope_family.id]
             scope_label = scope_family.name
 
-observations_query = apply_scope(
-    session.query(QualityObservation), QualityObservation.production_run_id, scoped_run_ids
-).filter(QualityObservation.severity.in_(severity_filter))
-if scope_grade_ids is not None:
-    observations_query = observations_query.join(
-        ProductionRun, QualityObservation.production_run_id == ProductionRun.id
-    ).filter(ProductionRun.foam_grade_id.in_(scope_grade_ids))
-observations = observations_query.order_by(QualityObservation.observed_at.desc()).all()
+observations_query = session.query(QualityObservation).filter(QualityObservation.severity.in_(severity_filter))
+if active_company_id is not None:
+    observations_query = observations_query.filter(
+        or_(
+            QualityObservation.production_run_id.in_(scoped_run_ids or []),
+            QualityObservation.customer_trial_id.in_(scoped_ct_ids or []),
+            QualityObservation.optimization_trial_id.in_(scoped_ot_ids or []),
+        )
+    )
+all_observations = observations_query.order_by(QualityObservation.observed_at.desc()).all()
+# Foam scope applied here in Python (not a SQL join) - a result's foam
+# grade is reached through whichever of the three mutually-exclusive
+# parents it has - see _obs_foam_grade_id().
+observations = (
+    [o for o in all_observations if _obs_foam_grade_id(o) in (scope_grade_ids or [])]
+    if scope_grade_ids is not None else all_observations
+)
 
 if not observations:
     st.info("No quality issues match this filter.")
 else:
-    obs_rows = [
-        {
-            "Issue": o.observation_type,
-            "Run": f"#{o.production_run.id}",
-            "Grade": o.production_run.foam_grade.grade_name,
-            "Trial": f"#{o.trial_record_id}" if o.trial_record_id else "—",
-            "Severity": o.severity,
-            "Frequency": o.frequency,
-            "Confidence": o.confidence_level,
-            "Observed": o.observed_at,
-        }
-        for o in observations
-    ]
+    obs_rows = []
+    for o in observations:
+        source_label, source_desc = _obs_source_desc(o)
+        obs_rows.append(
+            {
+                "Issue": o.observation_type,
+                "Source": source_label,
+                "Parent": source_desc,
+                "Trial": f"#{o.trial_record_id}" if o.trial_record_id else "—",
+                "Severity": o.severity,
+                "Frequency": o.frequency,
+                "Confidence": o.confidence_level,
+                "Observed": o.observed_at,
+            }
+        )
     st.caption("Click a row to edit (and optionally delete) that quality issue.")
     idx = clickable_table(obs_rows, key="obs_table")
     if idx is not None and idx < len(observations):
@@ -429,36 +563,71 @@ else:
         st.divider()
         st.subheader(f"Edit: {selected.observation_type}")
 
-        # Production run + trial link are rendered OUTSIDE the form, same
-        # reasoning as the issue-type picker below: the trial dropdown's
-        # options depend on which run is currently selected, so it needs to
-        # react immediately when the run changes rather than waiting for
-        # form submit. This also fixes a real gap - the run this issue was
-        # recorded against used to be fixed at creation time with no way to
-        # correct it later if it had been linked to the wrong run.
-        run_options = runs
-        run_default = next((i for i, r in enumerate(run_options) if r.id == selected.production_run_id), 0)
-        e_run = st.selectbox(
-            "Production run *",
-            run_options,
-            index=run_default,
-            format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
-            key=f"edit_obs_run_{selected.id}",
+        # Source/parent + trial link are rendered OUTSIDE the form, same
+        # reasoning as the issue-type picker below: the parent/trial
+        # dropdowns' options depend on the source type and parent currently
+        # selected, so they need to react immediately rather than waiting
+        # for form submit. This also preserves a real gap-fix from before
+        # the 3-source rework - which run this issue was recorded against
+        # used to be fixed at creation time with no way to correct it
+        # later; now the source (Production Run / Customer Trial /
+        # Optimization Trial) and its parent can both be corrected too.
+        current_source, _ = _obs_source_desc(selected)
+        available_edit_sources = [
+            s for s in SAMPLE_SOURCE_TYPES
+            if (s == "Production Run" and runs)
+            or (s == "Customer Trial" and customer_trials)
+            or (s == "Optimization Trial" and optimization_trials)
+            or s == current_source
+        ]
+        e_source_type = st.selectbox(
+            "Record against *", available_edit_sources,
+            index=available_edit_sources.index(current_source) if current_source in available_edit_sources else 0,
+            key=f"edit_obs_source_{selected.id}",
         )
-        trials_for_edit = (
-            session.query(TrialRecord).filter(TrialRecord.production_run_id == e_run.id).all() if e_run else []
-        )
-        trial_options = [None] + trials_for_edit
-        trial_default = next(
-            (i for i, t in enumerate(trial_options) if t and t.id == selected.trial_record_id), 0
-        )
-        e_trial = st.selectbox(
-            "Link to trial (optional)",
-            trial_options,
-            index=trial_default,
-            format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
-            key=f"edit_obs_trial_{selected.id}",
-        )
+        if e_source_type == "Production Run":
+            run_options = runs
+            run_default = next((i for i, r in enumerate(run_options) if r.id == selected.production_run_id), 0)
+            e_parent = st.selectbox(
+                "Production run *", run_options, index=run_default,
+                format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
+                key=f"edit_obs_run_{selected.id}",
+            )
+        elif e_source_type == "Customer Trial":
+            ct_default = next((i for i, t in enumerate(customer_trials) if t.id == selected.customer_trial_id), 0)
+            e_parent = st.selectbox(
+                "Customer trial *", customer_trials, index=ct_default,
+                format_func=lambda t: f"Trial #{t.id} — {t.foam_grade.grade_name} · {t.customer_name} · {t.trial_date or '—'}",
+                key=f"edit_obs_ct_{selected.id}",
+            )
+        else:
+            ot_default = next((i for i, t in enumerate(optimization_trials) if t.id == selected.optimization_trial_id), 0)
+            e_parent = st.selectbox(
+                "Optimization trial *", optimization_trials, index=ot_default,
+                format_func=lambda t: (
+                    f"Trial #{t.id} — {t.foam_grade.grade_name} · "
+                    f"{t.improvement_initiative_reference or '(no reference)'} · {t.trial_date or '—'}"
+                ),
+                key=f"edit_obs_ot_{selected.id}",
+            )
+
+        if e_source_type == "Production Run":
+            trials_for_edit = (
+                session.query(TrialRecord).filter(TrialRecord.production_run_id == e_parent.id).all() if e_parent else []
+            )
+            trial_options = [None] + trials_for_edit
+            trial_default = next(
+                (i for i, t in enumerate(trial_options) if t and t.id == selected.trial_record_id), 0
+            )
+            e_trial = st.selectbox(
+                "Link to trial (optional)",
+                trial_options,
+                index=trial_default,
+                format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
+                key=f"edit_obs_trial_{selected.id}",
+            )
+        else:
+            e_trial = None
 
         e_type, e_typical_causes = _issue_type_picker(f"edit_obs_{selected.id}", current_value=selected.observation_type)
         if e_typical_causes:
@@ -491,10 +660,13 @@ else:
             if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
                 if not e_type:
                     st.error("Issue type is required.")
-                elif not e_run:
-                    st.error("Production run is required.")
+                elif not e_parent:
+                    st.error(f"{e_source_type} is required.")
                 else:
-                    selected.production_run_id = e_run.id
+                    selected.production_run_id = None
+                    selected.customer_trial_id = None
+                    selected.optimization_trial_id = None
+                    setattr(selected, sample_source_fk_field(e_source_type), e_parent.id)
                     selected.trial_record_id = e_trial.id if e_trial else None
                     selected.observation_type = e_type
                     selected.severity = e_severity

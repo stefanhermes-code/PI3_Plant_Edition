@@ -149,7 +149,27 @@ RAW_MATERIAL_CATEGORIES = [
     "Other",
 ]
 
-ZONE_LABELS = ["Top", "Middle", "Bottom"]
+ZONE_LABELS = ["Top", "Middle", "Bottom", "Whole sample / N/A"]
+
+# A sample/result/issue belongs to exactly one of these three parents -
+# never more than one, never none. Enforced at the app level
+# (sample_source_fk_field() below, used by pages 5/6/9) rather than a DB CHECK, to keep local SQLite
+# dev portable. "Production" is the only one that ever has real machine/
+# process settings (ProductionPhase) behind it - CustomerTrial and
+# OptimizationTrial are both independent lab-trial flows with no such
+# context, per user direction 2026-08-03.
+SAMPLE_SOURCE_TYPES = ["Production Run", "Customer Trial", "Optimization Trial"]
+
+
+def sample_source_fk_field(source_type):
+    """Which FK column on Sample/PhysicalPropertyResult/QualityObservation
+    corresponds to a SAMPLE_SOURCE_TYPES value - single point of truth so
+    pages 5/6/9 never hardcode this mapping three separate times."""
+    return {
+        "Production Run": "production_run_id",
+        "Customer Trial": "customer_trial_id",
+        "Optimization Trial": "optimization_trial_id",
+    }[source_type]
 
 
 # ---------------------------------------------------------------------------
@@ -671,13 +691,18 @@ class ProductionPhase(Base):
     # are never destroyed, same precedent as RuntimeDataRecord.
     ratio_index = Column(Float)
 
-    # Rise time and curing notes - moved here from the now-retired
-    # RuntimeDataRecord table on 2026-08-02, so they flow through the same
-    # Setup-vs-Finalized comparison and PHASE_SETTING_FIELDS pipeline as
-    # every other process setting, rather than living in a separate loose
-    # runtime log. See RuntimeDataRecord below.
+    # Rise time - moved here from the now-retired RuntimeDataRecord table on
+    # 2026-08-02, so it flows through the same Setup-vs-Finalized comparison
+    # and PHASE_SETTING_FIELDS pipeline as every other process setting,
+    # rather than living in a separate loose runtime log. See
+    # RuntimeDataRecord below.
+    #
+    # curing_notes (a free-text "curing/cutting timing notes" box) removed
+    # 2026-08-03 per user direction - not a real, reliably-captured field in
+    # practice. RuntimeDataRecord.curing_notes below is untouched (already
+    # retired/unread by the app, kept only so its historical rows aren't
+    # destroyed) - this only removes the live, actively-used copy.
     rise_time = Column(Float)
-    curing_notes = Column(Text)
 
     notes = Column(Text)
     source_file_reference = Column(String(300))  # "manual entry" or CSV filename
@@ -833,13 +858,23 @@ class Sample(Base):
     __tablename__ = "samples"
 
     id = Column(Integer, primary_key=True)
-    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
+    # Exactly one of these three is set (see SAMPLE_SOURCE_TYPES /
+    # sample_source_fk_field() above) - production_run_id for real
+    # production-batch QC samples, customer_trial_id / optimization_trial_id
+    # for the two independent lab-trial flows added 2026-08-03. All three
+    # nullable; enforced at the app level, not a DB CHECK.
+    production_run_id = Column(Integer, ForeignKey("production_runs.id"))
+    customer_trial_id = Column(Integer, ForeignKey("customer_trials.id"))
+    optimization_trial_id = Column(Integer, ForeignKey("optimization_trials.id"))
     sample_ts = Column(DateTime)
-    zone_label = Column(String(50))  # Top / Middle / Bottom - deliberately just the vertical layer
-    cure_age_hours = Column(Float)
+    zone_label = Column(String(50))  # Top / Middle / Bottom / Whole sample - N/A (see ZONE_LABELS)
+    # cure_age_hours removed 2026-08-03 per user direction (the other
+    # "curing time" field that isn't really a thing in practice).
     notes = Column(Text)
 
     production_run = relationship("ProductionRun")
+    customer_trial = relationship("CustomerTrial")
+    optimization_trial = relationship("OptimizationTrial")
 
 
 # ---------------------------------------------------------------------------
@@ -962,6 +997,111 @@ class TrialRecord(Base):
 
 
 # ---------------------------------------------------------------------------
+# 8c. customer_trials (lab trial made for a customer/sales opportunity)
+#
+# Added 2026-08-03, per user correction: this is NOT a production run with a
+# "purpose" flag - it's a genuinely independent flow. A customer trial is
+# typically a small lab-scale box made to answer a specific sales
+# opportunity, with no machine/process settings behind it at all (no
+# ProductionPhase, no Setup/Runtime Data - that structure only exists for a
+# real production run). It still targets a foam grade and, usually, a
+# formulation - hence foam_grade_id (required, so this flows into the same
+# foam-grade-keyed Intelligence pipeline as production data) and
+# recipe_version_id (optional - a trial formulation isn't always a saved
+# recipe version). Samples, quality test results, and quality issues attach
+# here via their own nullable customer_trial_id FK (see Sample,
+# PhysicalPropertyResult, QualityObservation below) - never via
+# production_run_id, which stays NULL for every row tied to a trial.
+# ---------------------------------------------------------------------------
+class CustomerTrial(Base):
+    __tablename__ = "customer_trials"
+
+    id = Column(Integer, primary_key=True)
+    plant_id = Column(Integer, ForeignKey("plants.id"), nullable=False)
+    foam_grade_id = Column(Integer, ForeignKey("foam_grades.id"), nullable=False)
+    recipe_version_id = Column(Integer, ForeignKey("recipe_versions.id"))
+
+    customer_name = Column(String(200), nullable=False)
+    sales_opportunity_reference = Column(String(200))
+    requested_by = Column(String(200))
+    trial_objective = Column(Text)  # what the customer wants evaluated, and why
+    responsible_person = Column(String(200))
+    trial_date = Column(Date)
+    batch_reference = Column(String(200))  # this trial's own box/batch identifier
+    status = Column(String(50), default="Open")  # Open / Pending Closure / Closed
+
+    # closeout
+    outcome = Column(Text)
+    customer_feedback = Column(Text)
+    follow_up_action = Column(Text)
+    reviewed_by = Column(String(200))
+    date_closed = Column(Date)
+
+    notes = Column(Text)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    plant = relationship("Plant")
+    foam_grade = relationship("FoamGrade")
+    recipe_version = relationship("RecipeVersion")
+
+    # Same pattern as TrialRecord above, minus a DB-level CHECK constraint
+    # (kept app-level only here to limit migration scope for this batch).
+    REQUIRED_CLOSEOUT_FIELDS = ["outcome", "reviewed_by", "date_closed"]
+
+    def missing_closeout_fields(self):
+        return [f for f in self.REQUIRED_CLOSEOUT_FIELDS if not getattr(self, f)]
+
+    def can_close(self):
+        return len(self.missing_closeout_fields()) == 0
+
+
+# ---------------------------------------------------------------------------
+# 8d. optimization_trials (lab trial stemming from a Performance Improvement
+# initiative, related to but independent of the Industrial Intelligence
+# section's own analysis - see CustomerTrial above for the shared reasoning
+# on why this doesn't go through Production Run).
+# ---------------------------------------------------------------------------
+class OptimizationTrial(Base):
+    __tablename__ = "optimization_trials"
+
+    id = Column(Integer, primary_key=True)
+    plant_id = Column(Integer, ForeignKey("plants.id"), nullable=False)
+    foam_grade_id = Column(Integer, ForeignKey("foam_grades.id"), nullable=False)
+    recipe_version_id = Column(Integer, ForeignKey("recipe_versions.id"))
+
+    improvement_initiative_reference = Column(String(200))
+    hypothesis = Column(Text)
+    what_changed = Column(Text)
+    responsible_person = Column(String(200))
+    trial_date = Column(Date)
+    batch_reference = Column(String(200))
+    status = Column(String(50), default="Open")  # Open / Pending Closure / Closed
+
+    # closeout
+    result_against_target = Column(Text)
+    conclusion = Column(Text)
+    reuse_recommendation = Column(Text)
+    reviewed_by = Column(String(200))
+    approved_by = Column(String(200))
+    date_closed = Column(Date)
+
+    notes = Column(Text)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    plant = relationship("Plant")
+    foam_grade = relationship("FoamGrade")
+    recipe_version = relationship("RecipeVersion")
+
+    REQUIRED_CLOSEOUT_FIELDS = ["conclusion", "reuse_recommendation", "reviewed_by", "approved_by", "date_closed"]
+
+    def missing_closeout_fields(self):
+        return [f for f in self.REQUIRED_CLOSEOUT_FIELDS if not getattr(self, f)]
+
+    def can_close(self):
+        return len(self.missing_closeout_fields()) == 0
+
+
+# ---------------------------------------------------------------------------
 # 8b. physical_property_definitions / methods / uoms
 #
 # Master reference list (84 properties) supplied by the business as
@@ -1019,8 +1159,11 @@ class PhysicalPropertyResult(Base):
     __tablename__ = "physical_property_results"
 
     id = Column(Integer, primary_key=True)
-    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
-    trial_record_id = Column(Integer, ForeignKey("trial_records.id"))  # optional: only for formal experiments
+    # Exactly one of these three is set - see SAMPLE_SOURCE_TYPES above.
+    production_run_id = Column(Integer, ForeignKey("production_runs.id"))
+    customer_trial_id = Column(Integer, ForeignKey("customer_trials.id"))
+    optimization_trial_id = Column(Integer, ForeignKey("optimization_trials.id"))
+    trial_record_id = Column(Integer, ForeignKey("trial_records.id"))  # optional: only for formal experiments ON a production run
     sample_id = Column(Integer, ForeignKey("samples.id"))  # nullable: older rows predate sample tracking
     property_definition_id = Column(Integer, ForeignKey("physical_property_definitions.id"))  # nullable for legacy/"Other"
     property_method_id = Column(Integer, ForeignKey("physical_property_methods.id"))  # nullable
@@ -1038,6 +1181,8 @@ class PhysicalPropertyResult(Base):
     trial_record = relationship("TrialRecord", back_populates="physical_property_results")
     sample = relationship("Sample")
     production_run = relationship("ProductionRun")
+    customer_trial = relationship("CustomerTrial")
+    optimization_trial = relationship("OptimizationTrial")
 
 
 # ---------------------------------------------------------------------------
@@ -1049,8 +1194,11 @@ class QualityObservation(Base):
     __tablename__ = "quality_observations"
 
     id = Column(Integer, primary_key=True)
-    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
-    trial_record_id = Column(Integer, ForeignKey("trial_records.id"))  # optional: only for formal experiments
+    # Exactly one of these three is set - see SAMPLE_SOURCE_TYPES above.
+    production_run_id = Column(Integer, ForeignKey("production_runs.id"))
+    customer_trial_id = Column(Integer, ForeignKey("customer_trials.id"))
+    optimization_trial_id = Column(Integer, ForeignKey("optimization_trials.id"))
+    trial_record_id = Column(Integer, ForeignKey("trial_records.id"))  # optional: only for formal experiments ON a production run
     observation_type = Column(String(200), nullable=False)  # e.g. shrinkage, hardness drift, collapse, splitting
     severity = Column(String(50))  # Low / Medium / High
     frequency = Column(String(50))  # One-off / Recurring
@@ -1064,6 +1212,8 @@ class QualityObservation(Base):
 
     trial_record = relationship("TrialRecord", back_populates="quality_observations")
     production_run = relationship("ProductionRun")
+    customer_trial = relationship("CustomerTrial")
+    optimization_trial = relationship("OptimizationTrial")
 
 
 # ---------------------------------------------------------------------------
@@ -1262,6 +1412,8 @@ ALL_MODELS = [
     ConditioningSegment,
     RuntimeDataRecord,
     TrialRecord,
+    CustomerTrial,
+    OptimizationTrial,
     PhysicalPropertyDefinition,
     PhysicalPropertyMethod,
     PhysicalPropertyUOM,

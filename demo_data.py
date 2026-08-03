@@ -21,8 +21,10 @@ import datetime as dt
 from db import (
     AdjustmentConclusion,
     ApprovalRecord,
+    CustomerTrial,
     FoamGrade,
     Machine,
+    OptimizationTrial,
     PhysicalPropertyResult,
     Plant,
     ProductFamily,
@@ -32,6 +34,7 @@ from db import (
     RawMaterial,
     RecipeComponent,
     RecipeVersion,
+    Sample,
     TrialRecord,
     get_session,
     init_db,
@@ -280,9 +283,11 @@ def seed_demo_data(session) -> str:
         session.add(run)
         session.flush()
 
-        # Finalized-phase machine settings. rise_time/curing_notes live here
-        # (not on the retired RuntimeDataRecord) as of 2026-08-02 - see
-        # db.py's ProductionPhase. ratio_index moved to RecipeVersion as of
+        # Finalized-phase machine settings. rise_time lives here (not on the
+        # retired RuntimeDataRecord) as of 2026-08-02 - see db.py's
+        # ProductionPhase. curing_notes was removed app-wide as of
+        # 2026-08-03 (not a real field per user feedback). ratio_index
+        # moved to RecipeVersion as of
         # 2026-08-03 (see v04/v05/v06 above) - it now climbs across the
         # trial series via the recipe change (v05 -> v06 at trial 5)
         # alongside the hardness recovery (121 -> 141 N), rather than via a
@@ -304,7 +309,6 @@ def seed_demo_data(session) -> str:
                 ambient_temperature_c=24.0,
                 ambient_humidity_pct=d["humidity"],
                 rise_time=95.0,
-                curing_notes="Standard curing unless noted in trial.",
                 foaming_mode="LLD",
                 top_flat_system_used=True,
                 notes="Demo data - not a real production run.",
@@ -428,7 +432,6 @@ def seed_demo_data(session) -> str:
                 ambient_temperature_c=24.0,
                 ambient_humidity_pct=60.0,
                 rise_time=95.0,
-                curing_notes="Standard curing, routine batch.",
                 foaming_mode="Trough",
                 top_flat_system_used=False,
                 notes="Demo data - routine batch, not a trial.",
@@ -461,13 +464,146 @@ def seed_demo_data(session) -> str:
             )
         )
 
+    # ---- Customer Trial demonstration (independent lab-trial flow, added
+    # 2026-08-03 - see db.py's CustomerTrial). A small lab-scale box made
+    # for a specific sales opportunity, with no machine/process settings
+    # behind it at all: no ProductionRun, no ProductionPhase. Samples,
+    # quality test results, and quality issues all key off
+    # customer_trial_id instead of production_run_id, exercising the same
+    # "3 sample source types" pipeline the Intelligence pages' "include
+    # trials" toggle (Trend Analysis, Recipe Optimization) reads from.
+    # -----------------------------------------------------------------------
+    customer_trial = CustomerTrial(
+        plant_id=plant.id,
+        foam_grade_id=grade_28mh.id,
+        recipe_version_id=v06.id,
+        customer_name="Rest Well Bedding Co.",
+        sales_opportunity_reference="OPP-2026-0143",
+        requested_by="Rest Well Bedding Co. - Purchasing",
+        trial_objective="Evaluate the current 28-MH-06 formulation for a new mattress SKU before committing to a purchase order.",
+        responsible_person="Technical Manager",
+        trial_date=dt.date.today() - dt.timedelta(days=3),
+        batch_reference="CT-BOX-001",
+        status="Closed",
+        outcome="Density and hardness both met the customer's target range; sample approved for the next stage of qualification.",
+        customer_feedback="Comfort feel matched their reference sample; no shrinkage observed after 48h.",
+        follow_up_action="Send formal quote and lead time for a full production trial run.",
+        reviewed_by="Technical Manager",
+        date_closed=dt.date.today() - dt.timedelta(days=1),
+        notes="Demo data - lab-scale customer trial, not a production run.",
+    )
+    session.add(customer_trial)
+    session.flush()
+
+    customer_sample = Sample(
+        customer_trial_id=customer_trial.id,
+        sample_ts=dt.datetime.combine(customer_trial.trial_date, dt.time(10, 0)),
+        zone_label="Whole sample",
+        notes="Demo data - lab box sample for customer trial.",
+    )
+    session.add(customer_sample)
+    session.flush()
+
+    session.add_all(
+        [
+            PhysicalPropertyResult(
+                customer_trial_id=customer_trial.id, sample_id=customer_sample.id, property_name="Density",
+                target_value=28.0, actual_value=28.2, unit="kg/m3", pass_fail="Pass",
+                test_method="ISO 845", tested_at=customer_trial.trial_date,
+            ),
+            PhysicalPropertyResult(
+                customer_trial_id=customer_trial.id, sample_id=customer_sample.id, property_name="Hardness",
+                target_value=140.0, actual_value=142.0, unit="N", pass_fail="Pass",
+                test_method="ISO 2439", tested_at=customer_trial.trial_date,
+            ),
+        ]
+    )
+    session.add(
+        QualityObservation(
+            customer_trial_id=customer_trial.id,
+            observation_type="No issue found - routine check",
+            severity="Low",
+            frequency="One-off",
+            location_in_block="Whole sample",
+            confidence_level="Confirmed",
+            product_impact="None - sample met target on first trial.",
+            observed_at=customer_trial.trial_date,
+        )
+    )
+
+    # ---- Optimization Trial demonstration (the second independent
+    # lab-trial flow - stems from a Performance Improvement initiative
+    # related to, but independent of, the Intelligence section's own
+    # analysis; same "no machine/process settings behind it" shape as
+    # CustomerTrial above, just triggered internally rather than by a
+    # customer). -------------------------------------------------------
+    optimization_trial = OptimizationTrial(
+        plant_id=plant.id,
+        foam_grade_id=grade_28mh.id,
+        recipe_version_id=v06.id,
+        improvement_initiative_reference="PI-2026-0027",
+        hypothesis="A small further reduction in catalyst level can trim cost without moving hardness/density outside tolerance.",
+        what_changed="Catalyst blend reduced by 5% relative to 28-MH-06.",
+        responsible_person="R&D",
+        trial_date=dt.date.today() - dt.timedelta(days=2),
+        batch_reference="OT-BOX-001",
+        status="Closed",
+        result_against_target="Hardness and density both remained within tolerance at the reduced catalyst level.",
+        conclusion="The catalyst reduction is viable for this grade without a measurable quality impact.",
+        reuse_recommendation="Carry the 5% catalyst reduction into the next recipe version review for this grade.",
+        reviewed_by="Technical Manager",
+        approved_by="Plant Manager",
+        date_closed=dt.date.today(),
+        notes="Demo data - lab-scale optimization trial, not a production run.",
+    )
+    session.add(optimization_trial)
+    session.flush()
+
+    optimization_sample = Sample(
+        optimization_trial_id=optimization_trial.id,
+        sample_ts=dt.datetime.combine(optimization_trial.trial_date, dt.time(10, 0)),
+        zone_label="Whole sample",
+        notes="Demo data - lab box sample for optimization trial.",
+    )
+    session.add(optimization_sample)
+    session.flush()
+
+    session.add_all(
+        [
+            PhysicalPropertyResult(
+                optimization_trial_id=optimization_trial.id, sample_id=optimization_sample.id, property_name="Density",
+                target_value=28.0, actual_value=27.9, unit="kg/m3", pass_fail="Pass",
+                test_method="ISO 845", tested_at=optimization_trial.trial_date,
+            ),
+            PhysicalPropertyResult(
+                optimization_trial_id=optimization_trial.id, sample_id=optimization_sample.id, property_name="Hardness",
+                target_value=140.0, actual_value=138.0, unit="N", pass_fail="Pass",
+                test_method="ISO 2439", tested_at=optimization_trial.trial_date,
+            ),
+        ]
+    )
+    session.add(
+        QualityObservation(
+            optimization_trial_id=optimization_trial.id,
+            observation_type="No issue found - routine check",
+            severity="Low",
+            frequency="One-off",
+            location_in_block="Whole sample",
+            confidence_level="Confirmed",
+            product_impact="None - reduced-catalyst sample met target.",
+            observed_at=optimization_trial.trial_date,
+        )
+    )
+
     session.flush()
 
     session.commit()
     return (
         "Demo data created: 1 plant, 1 product family, 2 foam grades, 3 recipe versions, "
         "5 closed trials (with full closeout, quality issues, adjustments, approvals), "
-        "plus 2 routine production runs with quality results and no trial at all."
+        "2 routine production runs with quality results and no trial at all, plus 1 closed "
+        "Customer Trial and 1 closed Optimization Trial (each with its own sample and quality "
+        "results, independent of any production run)."
     )
 
 

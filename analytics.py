@@ -40,6 +40,8 @@ from sqlalchemy.orm import joinedload
 
 from db import (
     ComponentStreamReading,
+    CustomerTrial,
+    OptimizationTrial,
     PerformanceLog,
     PhysicalPropertyResult,
     ProductionPhase,
@@ -250,7 +252,7 @@ def run_settings_dataframe(_session, foam_grade_id=None):
 
 
 @st.cache_data(ttl=_DATA_CACHE_TTL, show_spinner=False)
-def property_results_dataframe(_session, foam_grade_id=None, property_name=None):
+def property_results_dataframe(_session, foam_grade_id=None, property_name=None, include_trials=False):
     """One row per physical property result, joined with the run's grade,
     recipe version, and machine - the base table for trend/correlation
     work. `foam_grade_id` accepts a single id or a list of ids (a foam
@@ -264,6 +266,21 @@ def property_results_dataframe(_session, foam_grade_id=None, property_name=None)
     Assistant, Machine Settings Optimization) needs the current rule, not
     a historical snapshot of it.
 
+    `include_trials` (default False - production-run-only, matching every
+    caller's behavior before 2026-08-03) additionally unions in results
+    sourced from CustomerTrial/OptimizationTrial (see
+    db.SAMPLE_SOURCE_TYPES) - the two independent lab-trial flows that have
+    no ProductionPhase/machine behind them. Only Trend Analysis and Recipe
+    Optimization ever pass True for this - Process-Property Correlation,
+    Root-Cause Assistant, and Machine Settings Optimization are keyed on
+    PHASE_SETTING_FIELDS (machine/process settings) that simply don't
+    exist for a lab trial, so they stay production-run-only unconditionally
+    rather than accepting this parameter. Trial-sourced rows carry
+    run_id=None, run_date=None, machine=None, and a "source" column
+    ("Production Run" / "Customer Trial" / "Optimization Trial") so callers
+    can tell the two apart when it matters (e.g. excluding trial rows from
+    anything that assumes a real run_date for time-ordering).
+
     Cached (see _DATA_CACHE_TTL) and eager-loads each result's production
     run plus that run's foam_grade/recipe_version/machine in the same
     query - fixed 2026-08-02, previously touched each of those 3
@@ -272,8 +289,9 @@ def property_results_dataframe(_session, foam_grade_id=None, property_name=None)
     slower as more quality data was recorded. The `_session` parameter
     name (leading underscore) tells Streamlit's cache not to try to hash
     the SQLAlchemy Session object - the cache key is just foam_grade_id/
-    property_name. Logs its own duration to PerformanceLog on every call
-    (see _log_performance) - only runs at all on a cache miss."""
+    property_name/include_trials. Logs its own duration to PerformanceLog
+    on every call (see _log_performance) - only runs at all on a cache
+    miss."""
     _t0 = time.perf_counter()
     run_load = joinedload(PhysicalPropertyResult.production_run)
     q = (
@@ -300,7 +318,9 @@ def property_results_dataframe(_session, foam_grade_id=None, property_name=None)
         rows.append(
             {
                 "result_id": r.id,
+                "source": "Production Run",
                 "run_id": run.id,
+                "trial_id": None,
                 "run_date": run.run_date,
                 "foam_grade_id": run.foam_grade_id,
                 "foam_grade": run.foam_grade.grade_name if run.foam_grade else None,
@@ -316,6 +336,51 @@ def property_results_dataframe(_session, foam_grade_id=None, property_name=None)
                 "tested_at": r.tested_at,
             }
         )
+
+    if include_trials:
+        for source_label, trial_model, fk_col in (
+            ("Customer Trial", CustomerTrial, PhysicalPropertyResult.customer_trial_id),
+            ("Optimization Trial", OptimizationTrial, PhysicalPropertyResult.optimization_trial_id),
+        ):
+            trial_load = joinedload(getattr(PhysicalPropertyResult, "customer_trial" if trial_model is CustomerTrial else "optimization_trial"))
+            tq = (
+                _session.query(PhysicalPropertyResult)
+                .join(trial_model, fk_col == trial_model.id)
+                .options(
+                    trial_load.joinedload(trial_model.foam_grade),
+                    trial_load.joinedload(trial_model.recipe_version),
+                )
+            )
+            if grade_ids:
+                tq = tq.filter(trial_model.foam_grade_id.in_(grade_ids))
+            if property_name:
+                tq = tq.filter(PhysicalPropertyResult.property_name == property_name)
+            for r in tq.all():
+                trial = r.customer_trial if trial_model is CustomerTrial else r.optimization_trial
+                if trial is None:
+                    continue
+                rows.append(
+                    {
+                        "result_id": r.id,
+                        "source": source_label,
+                        "run_id": None,
+                        "trial_id": trial.id,
+                        "run_date": trial.trial_date,
+                        "foam_grade_id": trial.foam_grade_id,
+                        "foam_grade": trial.foam_grade.grade_name if trial.foam_grade else None,
+                        "recipe_version_id": trial.recipe_version_id,
+                        "recipe_version": trial.recipe_version.version_label if trial.recipe_version else None,
+                        "machine_id": None,
+                        "machine": None,
+                        "property_name": r.property_name,
+                        "target_value": r.target_value,
+                        "actual_value": r.actual_value,
+                        "unit": r.unit,
+                        "pass_fail": compute_pass_fail(r.property_name, r.target_value, r.actual_value),
+                        "tested_at": r.tested_at,
+                    }
+                )
+
     df = pd.DataFrame(rows)
     _log_performance(
         _session, "property_results_dataframe", foam_grade_id, property_name,
@@ -331,6 +396,17 @@ def pass_rate(series) -> float | None:
     if known.empty:
         return None
     return round((known == "Pass").sum() / len(known), 3)
+
+
+def _safe_int(value):
+    """int(value), or None if value is missing/NaN - a lab-trial-sourced row
+    in an SPC series (see property_run_series's include_trials) has no
+    run_id, and int(nan) raises rather than producing something usable, so
+    every SPC function below that surfaces a flagged point's run id goes
+    through this instead of a bare int() cast."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    return int(value)
 
 
 def normalize_to_pct_of_target(df):
@@ -818,7 +894,7 @@ def rank_component_actual_correlations(session, foam_grade_id, property_name, mi
 _D2_MOVING_RANGE = 1.128  # control-chart constant for a 2-point moving range (individuals chart)
 
 
-def property_run_series(session, foam_grade_id, property_name, normalize_pct_of_target=False):
+def property_run_series(session, foam_grade_id, property_name, normalize_pct_of_target=False, include_trials=False):
     """One row per production run (mean of any replicate results) for a
     foam grade/property, sorted chronologically by test date. This is the
     base series every SPC function below works from - a control chart,
@@ -832,12 +908,26 @@ def property_run_series(session, foam_grade_id, property_name, normalize_pct_of_
     don't mistake a grade-to-grade target difference for a real shift or
     drift. Every SPC function reads only actual_value/target_value, so
     normalizing here is sufficient - nothing downstream needs to know
-    whether it's looking at a raw unit or percent-of-target."""
-    df = property_results_dataframe(session, foam_grade_id=foam_grade_id, property_name=property_name)
+    whether it's looking at a raw unit or percent-of-target.
+
+    `include_trials` (default False) is passed straight through to
+    property_results_dataframe() - see that function's docstring. Only
+    Trend Analysis passes True here. Trial-sourced rows have no run_id
+    (lab trials have no ProductionRun behind them), so grouping can't use
+    plain run_id alone once trials are included - "source"/"run_id"/
+    "trial_id" together identify one event (one production run, or one
+    lab trial) regardless of source; dropna=False keeps trial rows (which
+    have a null run_id) and production-run rows (which have a null
+    trial_id) from being silently dropped by groupby's default NaN
+    handling."""
+    df = property_results_dataframe(
+        session, foam_grade_id=foam_grade_id, property_name=property_name, include_trials=include_trials
+    )
     if df.empty:
         return df
+    group_cols = ["source", "run_id", "trial_id"] if "trial_id" in df.columns else ["run_id"]
     per_run = (
-        df.groupby("run_id")
+        df.groupby(group_cols, dropna=False)
         .agg(
             actual_value=("actual_value", "mean"),
             target_value=("target_value", "mean"),
@@ -942,7 +1032,8 @@ def control_chart_analysis(series_df, min_points=5):
             {
                 "rule": rule,
                 "first_index": first_i,
-                "first_run_id": int(chart_df.iloc[first_i]["run_id"]),
+                "first_run_id": _safe_int(chart_df.iloc[first_i]["run_id"]),
+                "first_source": chart_df.iloc[first_i]["source"] if "source" in chart_df.columns else "Production Run",
                 "first_tested_at": chart_df.iloc[first_i]["tested_at"],
                 "points_matching": len(indices),
             }
@@ -1072,7 +1163,10 @@ def cusum_analysis(series_df, k=0.5, h=5.0, min_points=8):
         "breach_direction": breach_direction,
     }
     if breach_index is not None:
-        result["breach_run_id"] = int(chart_df.iloc[breach_index]["run_id"])
+        result["breach_run_id"] = _safe_int(chart_df.iloc[breach_index]["run_id"])
+        result["breach_source"] = (
+            chart_df.iloc[breach_index]["source"] if "source" in chart_df.columns else "Production Run"
+        )
         result["breach_tested_at"] = chart_df.iloc[breach_index]["tested_at"]
     return result
 

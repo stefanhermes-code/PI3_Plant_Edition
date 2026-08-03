@@ -233,6 +233,8 @@ production_pages = [
 
 experiment_pages = [
     ("samples_conditioning", st.Page("pages/9_Samples_Conditioning.py", title="Samples & Conditioning", icon="🧊")),
+    ("customer_trials", st.Page("pages/11_Customer_Trials.py", title="Customer Trials", icon="🤝")),
+    ("optimization_trials", st.Page("pages/12_Optimization_Trials.py", title="Optimization Trials", icon="🚀")),
     ("trial_experiment", st.Page("pages/13_Trial_Experiment.py", title="Trial / Experiment", icon="🧫")),
     ("adjustment_conclusion", st.Page("pages/7_Adjustment_Conclusion.py", title="Adjustment & Conclusion", icon="🛠️")),
     ("approval_review", st.Page("pages/8_Approval_Review.py", title="Approval & Review", icon="✅")),

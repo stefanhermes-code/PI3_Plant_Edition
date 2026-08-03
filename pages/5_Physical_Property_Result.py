@@ -30,11 +30,15 @@ import datetime as dt
 
 import pandas as pd
 import streamlit as st
+from sqlalchemy import or_
 
 from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from db import (
+    SAMPLE_SOURCE_TYPES,
+    CustomerTrial,
     FoamGrade,
+    OptimizationTrial,
     PhysicalPropertyDefinition,
     PhysicalPropertyMethod,
     PhysicalPropertyResult,
@@ -44,6 +48,7 @@ from db import (
     TrialRecord,
     get_session,
     init_db,
+    sample_source_fk_field,
 )
 from helpers import (
     clickable_table,
@@ -59,13 +64,63 @@ from helpers import (
     view_only_notice,
 )
 from quality_standards import compute_pass_fail, tolerance_label
-from tenant_scope import apply_scope, company_picker, grade_ids_for_company, run_ids_for_company
+from tenant_scope import (
+    apply_scope,
+    company_picker,
+    customer_trial_ids_for_company,
+    grade_ids_for_company,
+    optimization_trial_ids_for_company,
+    run_ids_for_company,
+)
 
-RESULT_REQUIRED_COLUMNS = ["production_run_id", "property_name", "test_method", "unit", "actual_value"]
+# A result belongs to exactly one parent - a production run, a customer
+# trial, or an optimization trial (see db.SAMPLE_SOURCE_TYPES). CSV rows
+# carry all three FK columns as optional and must set exactly one.
+RESULT_REQUIRED_COLUMNS = ["property_name", "test_method", "unit", "actual_value"]
 RESULT_OPTIONAL_COLUMNS = [
+    "production_run_id", "customer_trial_id", "optimization_trial_id",
     "target_value", "sample_id", "trial_record_id", "method_revision",
     "replicate_no", "tested_at", "notes",
 ]
+
+
+def _result_source_desc(result):
+    """(source label, human-readable parent description) for a
+    PhysicalPropertyResult, resolving whichever of the three FKs is set."""
+    if result.production_run_id is not None:
+        run = result.production_run
+        desc = f"Run #{run.id} — {run.foam_grade.grade_name} · {run.run_date}" if run else f"Run #{result.production_run_id}"
+        return "Production Run", desc
+    if result.customer_trial_id is not None:
+        t = result.customer_trial
+        desc = f"Trial #{t.id} — {t.customer_name}" if t else f"Trial #{result.customer_trial_id}"
+        return "Customer Trial", desc
+    if result.optimization_trial_id is not None:
+        t = result.optimization_trial
+        ref = (t.improvement_initiative_reference or "(no reference)") if t else ""
+        desc = f"Trial #{t.id} — {ref}" if t else f"Trial #{result.optimization_trial_id}"
+        return "Optimization Trial", desc
+    return "—", "—"
+
+
+def _result_foam_grade_id(result):
+    """foam_grade_id reachable from whichever of the three parents this
+    result belongs to - used to apply the Foam scope filter/chart across
+    all three sources uniformly."""
+    if result.production_run_id is not None:
+        return result.production_run.foam_grade_id if result.production_run else None
+    if result.customer_trial_id is not None:
+        return result.customer_trial.foam_grade_id if result.customer_trial else None
+    if result.optimization_trial_id is not None:
+        return result.optimization_trial.foam_grade_id if result.optimization_trial else None
+    return None
+
+
+def _samples_for_parent(session, source_type, parent_id):
+    if not parent_id:
+        return []
+    fk_field = sample_source_fk_field(source_type)
+    return session.query(Sample).filter(getattr(Sample, fk_field) == parent_id).all()
 
 page_setup("Quality Test Result")
 init_db()
@@ -83,11 +138,12 @@ render_function_action_intro(
         "it went through before testing."
     ),
     action_text=(
-        "Add the sample(s) for this run first, on the Samples & Conditioning page (in Trials & "
-        "Samples), if you want results traceable back to block location and cure age. Then pick "
-        "the property, test method, and unit from the master list here and link the result back "
-        "to its sample if one applies. Use the CSV/Excel import tab to bulk-load a batch of "
-        "results at once instead of entering them one by one."
+        "Add the sample(s) first, on the Samples & Conditioning page (in Trials & Samples), if you "
+        "want results traceable back to block location. Then pick which of the three you're "
+        "recording against (Production Run / Customer Trial / Optimization Trial), the property, "
+        "test method, and unit from the master list here, and link the result back to its sample "
+        "if one applies. Use the CSV/Excel import tab to bulk-load a batch of results at once "
+        "instead of entering them one by one."
     ),
 )
 session = get_session()
@@ -100,14 +156,29 @@ company, _all_companies = company_picker(
 )
 active_company_id = company.id if company else None
 run_ids = run_ids_for_company(session, active_company_id)
+customer_trial_ids = customer_trial_ids_for_company(session, active_company_id)
+optimization_trial_ids = optimization_trial_ids_for_company(session, active_company_id)
 
 runs = (
     apply_scope(session.query(ProductionRun), ProductionRun.id, run_ids)
     .order_by(ProductionRun.created_at.desc())
     .all()
 )
-if not runs:
-    st.warning("Create a production run first (Production Run page).")
+customer_trials = (
+    apply_scope(session.query(CustomerTrial), CustomerTrial.id, customer_trial_ids)
+    .order_by(CustomerTrial.created_at.desc())
+    .all()
+)
+optimization_trials = (
+    apply_scope(session.query(OptimizationTrial), OptimizationTrial.id, optimization_trial_ids)
+    .order_by(OptimizationTrial.created_at.desc())
+    .all()
+)
+if not runs and not customer_trials and not optimization_trials:
+    st.warning(
+        "Create a production run, customer trial, or optimization trial first "
+        "(Production Run / Customer Trials / Optimization Trials pages)."
+    )
     st.stop()
 
 # ---------------------------------------------------------------------------
@@ -133,27 +204,62 @@ with tab_result_manual:
         if not page_usable:
             st.caption("View-only access - adding a quality test result is restricted for your role.")
         else:
-            run = st.selectbox(
-                "Production run *",
-                runs,
-                format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
-                key="result_run_select",
-            )
-            trials_for_run = (
-                session.query(TrialRecord).filter(TrialRecord.production_run_id == run.id).all() if run else []
-            )
-            trial = st.selectbox(
-                "Link to trial (optional — only if this result is part of a formal experiment)",
-                [None] + trials_for_run,
-                format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
-                key="result_trial_select",
-            )
-            samples_for_run = (
-                session.query(Sample).filter(Sample.production_run_id == run.id).all() if run else []
-            )
+            available_sources = [
+                s for s in SAMPLE_SOURCE_TYPES
+                if (s == "Production Run" and runs)
+                or (s == "Customer Trial" and customer_trials)
+                or (s == "Optimization Trial" and optimization_trials)
+            ]
+            # Source picker lives outside the form, same reasoning as
+            # Samples & Conditioning's own source picker - which parent-
+            # picker (and whether the trial-record link even applies) shows
+            # below depends on this choice, and form-internal widgets don't
+            # rerun until submit.
+            source_type = st.selectbox("Record against *", available_sources, key="result_source_type")
+            if source_type == "Production Run":
+                run = st.selectbox(
+                    "Production run *", runs,
+                    format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
+                    key="result_run_select",
+                )
+                parent = run
+            elif source_type == "Customer Trial":
+                parent = st.selectbox(
+                    "Customer trial *", customer_trials,
+                    format_func=lambda t: f"Trial #{t.id} — {t.foam_grade.grade_name} · {t.customer_name} · {t.trial_date or '—'}",
+                    key="result_ct_select",
+                )
+            else:
+                parent = st.selectbox(
+                    "Optimization trial *", optimization_trials,
+                    format_func=lambda t: (
+                        f"Trial #{t.id} — {t.foam_grade.grade_name} · "
+                        f"{t.improvement_initiative_reference or '(no reference)'} · {t.trial_date or '—'}"
+                    ),
+                    key="result_ot_select",
+                )
+
+            if source_type == "Production Run":
+                # TrialRecord (a formal experiment) only ever sits on top of
+                # a production run - lab trials (Customer/Optimization) are
+                # already their own independent flow with their own
+                # closeout, so this link doesn't apply to them.
+                trials_for_run = (
+                    session.query(TrialRecord).filter(TrialRecord.production_run_id == parent.id).all() if parent else []
+                )
+                trial = st.selectbox(
+                    "Link to trial (optional — only if this result is part of a formal experiment)",
+                    [None] + trials_for_run,
+                    format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
+                    key="result_trial_select",
+                )
+            else:
+                trial = None
+
+            samples_for_parent = _samples_for_parent(session, source_type, parent.id if parent else None)
             sample = st.selectbox(
                 "Sample (optional, but recommended for comparability)",
-                [None] + samples_for_run,
+                [None] + samples_for_parent,
                 format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
                 key="result_sample_select",
             )
@@ -217,25 +323,24 @@ with tab_result_manual:
                         st.error("A measuring method is required — pick one or type a custom one.")
                     else:
                         pass_fail = compute_pass_fail(property_def.name, target_value, actual_value)
-                        session.add(
-                            PhysicalPropertyResult(
-                                production_run_id=run.id,
-                                trial_record_id=trial.id if trial else None,
-                                sample_id=sample.id if sample else None,
-                                property_definition_id=property_def.id,
-                                property_method_id=method_choice.id if (method_choice and not method_other.strip()) else None,
-                                property_name=property_def.name,
-                                target_value=target_value or None,
-                                actual_value=actual_value or None,
-                                unit=final_unit,
-                                pass_fail=pass_fail,
-                                test_method=final_method,
-                                method_revision=method_revision,
-                                replicate_no=int(replicate_no),
-                                tested_at=tested_at,
-                                notes=notes,
-                            )
+                        new_result = PhysicalPropertyResult(
+                            trial_record_id=trial.id if trial else None,
+                            sample_id=sample.id if sample else None,
+                            property_definition_id=property_def.id,
+                            property_method_id=method_choice.id if (method_choice and not method_other.strip()) else None,
+                            property_name=property_def.name,
+                            target_value=target_value or None,
+                            actual_value=actual_value or None,
+                            unit=final_unit,
+                            pass_fail=pass_fail,
+                            test_method=final_method,
+                            method_revision=method_revision,
+                            replicate_no=int(replicate_no),
+                            tested_at=tested_at,
+                            notes=notes,
                         )
+                        setattr(new_result, sample_source_fk_field(source_type), parent.id)
+                        session.add(new_result)
                         session.commit()
                         st.success("Quality test result saved.")
                         st.rerun()
@@ -244,31 +349,62 @@ with tab_result_import:
     show_pending_banner("result_import_msg")
     st.caption(
         "property_name must match a name in the physical property master list (case-insensitive). "
-        "test_method and unit are stored as typed — they don't need to match an existing method/UOM."
+        "test_method and unit are stored as typed — they don't need to match an existing method/UOM. "
+        "Each row needs exactly one of production_run_id / customer_trial_id / optimization_trial_id "
+        "set, matching which of the three that result belongs to."
     )
     result_df, result_filename = csv_excel_uploader(
         RESULT_REQUIRED_COLUMNS, RESULT_OPTIONAL_COLUMNS, key="result_upload"
     )
     if result_df is not None:
-        import_run_ids = {r.id for r in runs}
         defs_by_name = {p.name.strip().lower(): p for p in property_defs}
-        # Scoped to this company's runs - otherwise a CSV row could attach a
-        # new result to a different company's sample or trial (the run_id
-        # check alone doesn't catch that, since sample_id/trial_record_id
-        # are independent columns).
+        import_run_ids = {r.id for r in runs}
+        import_ct_ids = {t.id for t in customer_trials}
+        import_ot_ids = {t.id for t in optimization_trials}
+        # Scoped to this company's parents - otherwise a CSV row could
+        # attach a new result to a different company's sample or trial
+        # (the parent-id check alone doesn't catch that, since sample_id/
+        # trial_record_id are independent columns).
         samples_all = {
-            s.id: s for s in apply_scope(session.query(Sample), Sample.production_run_id, run_ids).all()
+            s.id: s for s in session.query(Sample).filter(
+                or_(
+                    Sample.production_run_id.in_(import_run_ids),
+                    Sample.customer_trial_id.in_(import_ct_ids),
+                    Sample.optimization_trial_id.in_(import_ot_ids),
+                )
+            ).all()
         }
         trials_all = {
             t.id: t
             for t in apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, run_ids).all()
         }
 
+        def _row_fk(row):
+            """(fk_field, fk_value) if exactly one of the three FK columns
+            is set to a value in-scope, else (None, None)."""
+            candidates = []
+            for field, id_set in (
+                ("production_run_id", import_run_ids),
+                ("customer_trial_id", import_ct_ids),
+                ("optimization_trial_id", import_ot_ids),
+            ):
+                val = row.get(field)
+                if pd.notna(val) and str(val).strip():
+                    candidates.append((field, val, id_set))
+            if len(candidates) != 1:
+                return None, None
+            field, val, id_set = candidates[0]
+            try:
+                val_int = int(val)
+            except (TypeError, ValueError):
+                return None, None
+            return (field, val_int) if val_int in id_set else (None, None)
+
         good_rows, bad_rows = [], []
         for _, row in result_df.iterrows():
             try:
                 prop_def = defs_by_name.get(str(row.get("property_name", "")).strip().lower())
-                run_ok = row.get("production_run_id") in import_run_ids
+                fk_field, _fk_val = _row_fk(row)
                 sample_val = row.get("sample_id")
                 sample_ok = pd.isna(sample_val) or int(sample_val) in samples_all
                 trial_val = row.get("trial_record_id")
@@ -278,7 +414,7 @@ with tab_result_import:
                     and str(row.get("unit", "")).strip()
                     and not pd.isna(row.get("actual_value"))
                 )
-                ok = bool(prop_def and run_ok and sample_ok and trial_ok and has_method_unit_value)
+                ok = bool(prop_def and fk_field and sample_ok and trial_ok and has_method_unit_value)
             except (TypeError, ValueError):
                 ok = False
             if ok:
@@ -289,23 +425,28 @@ with tab_result_import:
         st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
         if bad_rows:
             st.warning(
-                "Flagged rows have an unrecognized property_name, production_run_id, sample_id, or "
-                "trial_record_id, or are missing test_method / unit / actual_value."
+                "Flagged rows have an unrecognized property_name, don't have exactly one in-scope "
+                "production_run_id / customer_trial_id / optimization_trial_id set, an unrecognized "
+                "sample_id / trial_record_id, or are missing test_method / unit / actual_value."
             )
             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
         if good_rows and st.button("Confirm import", key="confirm_result_import", disabled=not page_usable):
-            existing_keys = {
-                (r.production_run_id, r.property_definition_id, r.sample_id, r.replicate_no)
-                for r in session.query(PhysicalPropertyResult).all()
-            }
+            existing_keys = set()
+            for r in session.query(PhysicalPropertyResult).all():
+                src_label, _ = _result_source_desc(r)
+                fk_col = sample_source_fk_field(src_label) if src_label in SAMPLE_SOURCE_TYPES else None
+                if fk_col:
+                    existing_keys.add((fk_col, getattr(r, fk_col), r.property_definition_id, r.sample_id, r.replicate_no))
 
             def _result_key(row):
                 prop_def = defs_by_name[str(row["property_name"]).strip().lower()]
+                fk_field, fk_val = _row_fk(row)
                 sample_val = row.get("sample_id")
                 replicate_val = row.get("replicate_no")
                 return (
-                    int(row["production_run_id"]),
+                    fk_field,
+                    fk_val,
                     prop_def.id,
                     int(sample_val) if not pd.isna(sample_val) else None,
                     int(replicate_val) if not pd.isna(replicate_val) else 1,
@@ -337,29 +478,29 @@ with tab_result_import:
                 trial_val = row.get("trial_record_id")
                 replicate_val = row.get("replicate_no")
                 tested_val = pd.to_datetime(row.get("tested_at"), errors="coerce")
-                session.add(
-                    PhysicalPropertyResult(
-                        production_run_id=int(row["production_run_id"]),
-                        trial_record_id=int(trial_val) if not pd.isna(trial_val) else None,
-                        sample_id=int(sample_val) if not pd.isna(sample_val) else None,
-                        property_definition_id=prop_def.id,
-                        property_method_id=method_match.id if method_match else None,
-                        property_name=prop_def.name,
-                        target_value=target_val if not pd.isna(target_val) else None,
-                        actual_value=actual_val if not pd.isna(actual_val) else None,
-                        unit=str(row["unit"]).strip(),
-                        pass_fail=pass_fail,
-                        test_method=test_method,
-                        method_revision=str(row.get("method_revision", "") or ""),
-                        replicate_no=int(replicate_val) if not pd.isna(replicate_val) else 1,
-                        tested_at=tested_val.date() if not pd.isna(tested_val) else dt.date.today(),
-                        notes=str(row.get("notes", "") or ""),
-                    )
+                fk_field, fk_val = _row_fk(row)
+                new_result = PhysicalPropertyResult(
+                    trial_record_id=int(trial_val) if not pd.isna(trial_val) and fk_field == "production_run_id" else None,
+                    sample_id=int(sample_val) if not pd.isna(sample_val) else None,
+                    property_definition_id=prop_def.id,
+                    property_method_id=method_match.id if method_match else None,
+                    property_name=prop_def.name,
+                    target_value=target_val if not pd.isna(target_val) else None,
+                    actual_value=actual_val if not pd.isna(actual_val) else None,
+                    unit=str(row["unit"]).strip(),
+                    pass_fail=pass_fail,
+                    test_method=test_method,
+                    method_revision=str(row.get("method_revision", "") or ""),
+                    replicate_no=int(replicate_val) if not pd.isna(replicate_val) else 1,
+                    tested_at=tested_val.date() if not pd.isna(tested_val) else dt.date.today(),
+                    notes=str(row.get("notes", "") or ""),
                 )
+                setattr(new_result, fk_field, fk_val)
+                session.add(new_result)
             session.commit()
             msg = f"Imported {len(new_rows)} quality test result(s) from {result_filename}."
             if dup_rows:
-                msg += f" Skipped {len(dup_rows)} row(s) already recorded for their run/property/sample (likely a repeat click)."
+                msg += f" Skipped {len(dup_rows)} row(s) already recorded for their source/property/sample (likely a repeat click)."
             set_pending_banner("result_import_msg", msg)
             st.rerun()
 
@@ -418,23 +559,30 @@ with filter_col3:
             scope_grade_ids = [g.id for g in scoped_grades if g.product_family_id == scope_family.id]
             scope_label = scope_family.name
 
-results_query = apply_scope(
-    session.query(PhysicalPropertyResult), PhysicalPropertyResult.production_run_id, run_ids
-)
+results_query = session.query(PhysicalPropertyResult)
+if active_company_id is not None:
+    results_query = results_query.filter(
+        or_(
+            PhysicalPropertyResult.production_run_id.in_(run_ids or []),
+            PhysicalPropertyResult.customer_trial_id.in_(customer_trial_ids or []),
+            PhysicalPropertyResult.optimization_trial_id.in_(optimization_trial_ids or []),
+        )
+    )
 if property_filter is not None:
     results_query = results_query.filter(PhysicalPropertyResult.property_name.in_(property_filter))
-if scope_grade_ids is not None:
-    results_query = results_query.join(
-        ProductionRun, PhysicalPropertyResult.production_run_id == ProductionRun.id
-    ).filter(ProductionRun.foam_grade_id.in_(scope_grade_ids))
 all_results = results_query.order_by(PhysicalPropertyResult.tested_at.desc()).all()
 
 # Pass/Fail is recomputed live rather than trusted from the stored column -
 # see the same note in analytics.property_results_dataframe - so this
 # filter is applied here in Python against the live verdict, not as a SQL
-# WHERE clause against the stored (possibly stale) column.
+# WHERE clause against the stored (possibly stale) column. Foam scope is
+# applied here too (rather than a SQL join) since a result's foam grade is
+# reached through whichever of the three mutually-exclusive parents it
+# has - see _result_foam_grade_id().
 filtered_results = []
 for r in all_results:
+    if scope_grade_ids is not None and _result_foam_grade_id(r) not in (scope_grade_ids or []):
+        continue
     live_pass_fail = compute_pass_fail(r.property_name, r.target_value, r.actual_value)
     if (live_pass_fail or "Not computed") in pass_fail_filter:
         filtered_results.append((r, live_pass_fail))
@@ -442,25 +590,27 @@ for r in all_results:
 if not filtered_results:
     st.info("No quality test results match this filter.")
 else:
-    result_rows = [
-        {
-            "Run": f"#{r.production_run_id}",
-            "Grade": r.production_run.foam_grade.grade_name,
-            "Property": r.property_name,
-            "Target": r.target_value,
-            "Actual": r.actual_value,
-            "Unit": r.unit,
-            "Pass/Fail": live_pass_fail or "—",
-            "Sample": f"#{r.sample_id} ({r.sample.zone_label})" if r.sample else "—",
-            "Trial": f"#{r.trial_record_id}" if r.trial_record_id else "—",
-            "Method": r.test_method,
-            "Rev.": r.method_revision,
-            "Replicate": r.replicate_no,
-            "Tested": r.tested_at,
-            "Notes": r.notes,
-        }
-        for r, live_pass_fail in filtered_results
-    ]
+    result_rows = []
+    for r, live_pass_fail in filtered_results:
+        source_label, source_desc = _result_source_desc(r)
+        result_rows.append(
+            {
+                "Source": source_label,
+                "Parent": source_desc,
+                "Property": r.property_name,
+                "Target": r.target_value,
+                "Actual": r.actual_value,
+                "Unit": r.unit,
+                "Pass/Fail": live_pass_fail or "—",
+                "Sample": f"#{r.sample_id} ({r.sample.zone_label})" if r.sample else "—",
+                "Trial": f"#{r.trial_record_id}" if r.trial_record_id else "—",
+                "Method": r.test_method,
+                "Rev.": r.method_revision,
+                "Replicate": r.replicate_no,
+                "Tested": r.tested_at,
+                "Notes": r.notes,
+            }
+        )
     st.caption(f"{len(filtered_results)} result(s). Click a row to edit (and optionally delete) that result.")
     idx = clickable_table(result_rows, key="results_table")
     if idx is not None and idx < len(filtered_results):
@@ -497,7 +647,9 @@ selected_result = (
 
 if selected_result:
     st.divider()
+    edit_source_label, edit_source_desc = _result_source_desc(selected_result)
     st.subheader(f"Edit quality test result #{selected_result.id}")
+    st.caption(f"{edit_source_label}: {edit_source_desc} — which run/trial this belongs to can't be changed here.")
     # Same controlled method/UOM pickers as the Add form above, scoped to
     # this result's own property - previously this edit form used a free
     # text_input for both fields, which lost the structured picker the Add
@@ -525,9 +677,10 @@ if selected_result:
         (i for i, u in enumerate(uoms_for_edit) if u.unit_label == selected_result.unit), None
     )
     with st.form(f"edit_result_{selected_result.id}"):
-        samples_for_edit = (
-            session.query(Sample).filter(Sample.production_run_id == selected_result.production_run_id).all()
-        )
+        samples_for_edit = _samples_for_parent(
+            session, edit_source_label,
+            selected_result.production_run_id or selected_result.customer_trial_id or selected_result.optimization_trial_id,
+        ) if edit_source_label in SAMPLE_SOURCE_TYPES else []
         sample_options = [None] + samples_for_edit
         sample_default = next((i for i, s in enumerate(sample_options) if s and s.id == selected_result.sample_id), 0)
         e_sample = st.selectbox(
@@ -535,8 +688,11 @@ if selected_result:
             format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
             key=f"edit_result_sample_{selected_result.id}",
         )
+        # TrialRecord (a formal experiment) only ever sits on top of a
+        # production run - doesn't apply to lab-trial-sourced results.
         trials_for_edit_result = (
             session.query(TrialRecord).filter(TrialRecord.production_run_id == selected_result.production_run_id).all()
+            if selected_result.production_run_id is not None else []
         )
         trial_options_result = [None] + trials_for_edit_result
         trial_default_result = next(

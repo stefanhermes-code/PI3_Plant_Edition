@@ -91,7 +91,7 @@ scoped_grade_ids = grade_ids_for_company(session, active_company_id)
 # the reviewer pick a grade and then hit a dead end on every section.
 grades = [
     g for g in apply_scope(session.query(FoamGrade), FoamGrade.id, scoped_grade_ids).all()
-    if g.recipe_versions and not property_results_dataframe(session, foam_grade_id=g.id).empty
+    if g.recipe_versions and not property_results_dataframe(session, foam_grade_id=g.id, include_trials=True).empty
 ]
 if not grades:
     st.warning(
@@ -117,7 +117,20 @@ if not versions:
 # matters if a grade somehow ended up with none or several marked active).
 current_version = next((v for v in versions if v.is_active), versions[-1])
 
-results_df = property_results_dataframe(session, foam_grade_id=grade.id)
+include_trials = st.checkbox(
+    "Include lab trial data (Customer Trials / Optimization Trials)",
+    value=False,
+    key=f"recipe_opt_include_trials_{grade.id}",
+    help=(
+        "Off by default: only production-run results are used below. Turning this on pools in "
+        "quality test results from this grade's Customer Trial and Optimization Trial lab samples "
+        "too - useful when a new or lightly-produced grade has more lab-trial history than "
+        "production history yet. The ingredient-dosage correlation section further down always "
+        "stays production-run-only regardless of this toggle, since it needs metered stream "
+        "readings that only exist for a production run."
+    ),
+)
+results_df = property_results_dataframe(session, foam_grade_id=grade.id, include_trials=include_trials)
 available_properties = sorted(results_df["property_name"].dropna().unique()) if not results_df.empty else []
 
 if results_df.empty:

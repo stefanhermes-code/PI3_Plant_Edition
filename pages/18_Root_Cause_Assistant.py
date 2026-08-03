@@ -58,6 +58,13 @@ scoped_run_ids = run_ids_for_company(session, active_company_id)
 
 observations = (
     apply_scope(session.query(QualityObservation), QualityObservation.production_run_id, scoped_run_ids)
+    # Root-Cause Assistant compares a run against its most recent prior run's
+    # machine/process settings - a lab trial (Customer Trial / Optimization
+    # Trial, added 2026-08-03) has neither, so a trial-sourced quality issue
+    # (production_run_id NULL) is excluded here unconditionally rather than
+    # offered as a dead-end pick. See analytics.py's property_results_dataframe
+    # docstring for why this page never accepts an include_trials toggle.
+    .filter(QualityObservation.production_run_id.isnot(None))
     .order_by(QualityObservation.observed_at.desc())
     .all()
 )
