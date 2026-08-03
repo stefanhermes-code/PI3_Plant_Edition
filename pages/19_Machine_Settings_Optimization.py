@@ -12,7 +12,9 @@ import streamlit as st
 import ai_assistant
 from access_control import can_use_page
 from analytics import (
+    BOOLEAN_SETTING_FIELDS,
     PHASE_SETTING_LABELS,
+    format_setting_range,
     merged_run_property_dataframe,
     property_results_dataframe,
     rank_setting_optimization,
@@ -160,12 +162,18 @@ merged["deviation_pct"] = ((merged["actual_value"] - merged["target_value"]) / m
 merged.loc[merged["target_value"].isna() | (merged["target_value"] == 0), "deviation_pct"] = float("nan")
 
 merged["range"] = None
-for q, labels in ((3, ["Low", "Medium", "High"]), (2, ["Low", "High"])):
-    try:
-        merged["range"] = pd.qcut(merged[setting_field], q=q, labels=labels, duplicates="drop")
-        break
-    except ValueError:
-        continue
+if setting_field in BOOLEAN_SETTING_FIELDS:
+    # Group comparison, not a quantile split - see the matching comment in
+    # analytics.rank_setting_optimization for why pd.qcut is the wrong tool
+    # for a strictly 0/1 field (fails outright on skewed Yes/No splits).
+    merged["range"] = merged[setting_field].map({1.0: "Yes", 0.0: "No"})
+else:
+    for q, labels in ((3, ["Low", "Medium", "High"]), (2, ["Low", "High"])):
+        try:
+            merged["range"] = pd.qcut(merged[setting_field], q=q, labels=labels, duplicates="drop")
+            break
+        except ValueError:
+            continue
 
 if merged["range"].isna().all() or merged["range"].nunique(dropna=True) < 2:
     st.info(
@@ -183,7 +191,7 @@ else:
     summary = (
         merged.groupby("range", observed=True)
         .agg(
-            setting_range=(setting_field, lambda s: f"{s.min():g}–{s.max():g}"),
+            setting_range=(setting_field, lambda s: format_setting_range(setting_field, s)),
             avg_actual=("actual_value", "mean"),
             avg_target=("target_value", "mean"),
             avg_abs_deviation_pct=("deviation_pct", "mean"),

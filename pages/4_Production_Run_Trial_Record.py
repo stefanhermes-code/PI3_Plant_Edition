@@ -77,6 +77,7 @@ from db import (
     RecipeComponent,
     RecipeVersion,
     Sample,
+    expected_fallplate_section_count,
     get_session,
     init_db,
 )
@@ -144,7 +145,7 @@ STREAM_OPTIONAL_COLUMNS = [
 ]
 
 FALLPLATE_REQUIRED_COLUMNS = ["production_run_id", "phase_name", "section_number"]
-FALLPLATE_OPTIONAL_COLUMNS = ["position_mm", "angle_deg", "notes"]
+FALLPLATE_OPTIONAL_COLUMNS = ["distance_from_trough_mm", "position_mm", "actuator_position", "angle_deg", "notes"]
 
 EVENT_REQUIRED_COLUMNS = ["production_run_id", "event_type", "event_ts"]
 EVENT_OPTIONAL_COLUMNS = ["phase_name", "severity", "description", "action_taken"]
@@ -876,9 +877,18 @@ with tab_setup:
 
         with sub_fallplate:
             st.caption(
-                "Structured height/angle per section for fall-plate or pour-plate lines (typically 4-6 "
-                "sections). Requires Setup data to exist first for this run."
+                "A fall-plate profile is a series of vertical positions at the plate joints/support "
+                "points between the trough outlet and the horizontal conveyor (point 1 nearest the "
+                "trough), not one overall plate angle - height above the conveyor datum is the primary "
+                "setting; angle is calculated from adjacent points (or recorded directly on older "
+                "machines). Requires Setup data to exist first for this run."
             )
+            _expected_sections = expected_fallplate_section_count(run.machine)
+            if _expected_sections:
+                st.caption(
+                    f"This run's machine ({run.machine.model}) typically has **{_expected_sections}** "
+                    "adjustable fall-plate sections."
+                )
             if not setup_phase:
                 st.info("Add Setup data for this run first (Create tab) before recording section positions.")
             else:
@@ -887,9 +897,23 @@ with tab_setup:
                 with sub_fp_manual:
                     with st.form(f"add_fallplate_section_setup_{run.id}"):
                         c1, c2 = st.columns(2)
-                        section_number = c1.number_input("Section number *", min_value=1, step=1, value=1)
-                        position_mm = c2.number_input("Position (mm above conveyor datum)", step=1.0)
-                        angle_deg = st.number_input("Angle (degrees, optional)", step=0.5)
+                        section_number = c1.number_input(
+                            "Fall-plate point ID *", min_value=1, step=1, value=1,
+                            help="1 = the point nearest the trough outlet, counting toward the conveyor.",
+                        )
+                        distance_from_trough_mm = c2.number_input(
+                            "Distance from trough outlet (mm, optional)", step=1.0
+                        )
+                        c3, c4 = st.columns(2)
+                        position_mm = c3.number_input("Height above conveyor datum (mm)", step=1.0)
+                        actuator_position = c4.number_input(
+                            "Raw actuator/encoder position (optional)", step=1.0,
+                            help="Only if this machine's HMI shows a raw screw/motor/encoder position "
+                            "rather than a calculated height.",
+                        )
+                        angle_deg = st.number_input(
+                            "Plate angle (degrees, calculated or recorded, optional)", step=0.5
+                        )
                         fp_notes = st.text_area("Notes", key=f"fp_notes_setup_{run.id}")
                         submitted = st.form_submit_button("Save section position", disabled=not page_usable)
                         if submitted and page_usable:
@@ -897,7 +921,9 @@ with tab_setup:
                                 FallplateSectionPosition(
                                     production_phase_id=setup_phase.id,
                                     section_number=int(section_number),
+                                    distance_from_trough_mm=distance_from_trough_mm or None,
                                     position_mm=position_mm or None,
+                                    actuator_position=actuator_position or None,
                                     angle_deg=angle_deg or None,
                                     notes=fp_notes,
                                 )
@@ -969,7 +995,9 @@ with tab_setup:
                                             FallplateSectionPosition(
                                                 production_phase_id=setup_phase.id,
                                                 section_number=int(row["section_number"]),
+                                                distance_from_trough_mm=row.get("distance_from_trough_mm"),
                                                 position_mm=row.get("position_mm"),
+                                                actuator_position=row.get("actuator_position"),
                                                 angle_deg=row.get("angle_deg"),
                                                 notes=str(row.get("notes", "") or ""),
                                             )
@@ -992,8 +1020,10 @@ with tab_setup:
                         pd.DataFrame(
                             [
                                 {
-                                    "Section": fp.section_number,
-                                    "Position (mm)": fp.position_mm,
+                                    "Point ID": fp.section_number,
+                                    "Distance from trough (mm)": fp.distance_from_trough_mm,
+                                    "Height above datum (mm)": fp.position_mm,
+                                    "Actuator position": fp.actuator_position,
                                     "Angle (deg)": fp.angle_deg,
                                     "Notes": fp.notes,
                                 }
@@ -1890,9 +1920,18 @@ with tab_runtime:
 
         with sub_fallplate:
             st.caption(
-                "Structured height/angle per section for fall-plate or pour-plate lines (typically 4-6 "
-                "sections). Requires Runtime Data to exist first for this run."
+                "A fall-plate profile is a series of vertical positions at the plate joints/support "
+                "points between the trough outlet and the horizontal conveyor (point 1 nearest the "
+                "trough), not one overall plate angle - height above the conveyor datum is the primary "
+                "setting; angle is calculated from adjacent points (or recorded directly on older "
+                "machines). Requires Runtime Data to exist first for this run."
             )
+            _expected_sections_rt = expected_fallplate_section_count(run.machine)
+            if _expected_sections_rt:
+                st.caption(
+                    f"This run's machine ({run.machine.model}) typically has **{_expected_sections_rt}** "
+                    "adjustable fall-plate sections."
+                )
             if not finalized_phase:
                 st.info("Add Runtime Data for this run first (Create tab) before recording section positions.")
             else:
@@ -1901,9 +1940,23 @@ with tab_runtime:
                 with sub_fp_manual:
                     with st.form(f"add_fallplate_section_runtime_{run.id}"):
                         c1, c2 = st.columns(2)
-                        section_number = c1.number_input("Section number *", min_value=1, step=1, value=1)
-                        position_mm = c2.number_input("Position (mm above conveyor datum)", step=1.0)
-                        angle_deg = st.number_input("Angle (degrees, optional)", step=0.5)
+                        section_number = c1.number_input(
+                            "Fall-plate point ID *", min_value=1, step=1, value=1,
+                            help="1 = the point nearest the trough outlet, counting toward the conveyor.",
+                        )
+                        distance_from_trough_mm = c2.number_input(
+                            "Distance from trough outlet (mm, optional)", step=1.0
+                        )
+                        c3, c4 = st.columns(2)
+                        position_mm = c3.number_input("Height above conveyor datum (mm)", step=1.0)
+                        actuator_position = c4.number_input(
+                            "Raw actuator/encoder position (optional)", step=1.0,
+                            help="Only if this machine's HMI shows a raw screw/motor/encoder position "
+                            "rather than a calculated height.",
+                        )
+                        angle_deg = st.number_input(
+                            "Plate angle (degrees, calculated or recorded, optional)", step=0.5
+                        )
                         fp_notes = st.text_area("Notes", key=f"fp_notes_runtime_{run.id}")
                         submitted = st.form_submit_button("Save section position", disabled=not page_usable)
                         if submitted and page_usable:
@@ -1911,7 +1964,9 @@ with tab_runtime:
                                 FallplateSectionPosition(
                                     production_phase_id=finalized_phase.id,
                                     section_number=int(section_number),
+                                    distance_from_trough_mm=distance_from_trough_mm or None,
                                     position_mm=position_mm or None,
+                                    actuator_position=actuator_position or None,
                                     angle_deg=angle_deg or None,
                                     notes=fp_notes,
                                 )
@@ -1983,7 +2038,9 @@ with tab_runtime:
                                             FallplateSectionPosition(
                                                 production_phase_id=finalized_phase.id,
                                                 section_number=int(row["section_number"]),
+                                                distance_from_trough_mm=row.get("distance_from_trough_mm"),
                                                 position_mm=row.get("position_mm"),
+                                                actuator_position=row.get("actuator_position"),
                                                 angle_deg=row.get("angle_deg"),
                                                 notes=str(row.get("notes", "") or ""),
                                             )
@@ -2006,8 +2063,10 @@ with tab_runtime:
                         pd.DataFrame(
                             [
                                 {
-                                    "Section": fp.section_number,
-                                    "Position (mm)": fp.position_mm,
+                                    "Point ID": fp.section_number,
+                                    "Distance from trough (mm)": fp.distance_from_trough_mm,
+                                    "Height above datum (mm)": fp.position_mm,
+                                    "Actuator position": fp.actuator_position,
                                     "Angle (deg)": fp.angle_deg,
                                     "Notes": fp.notes,
                                 }

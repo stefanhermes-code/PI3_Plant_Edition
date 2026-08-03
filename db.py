@@ -714,22 +714,71 @@ class ComponentStreamReading(Base):
 # ---------------------------------------------------------------------------
 # 6h. fallplate_section_positions (structured laydown geometry per phase)
 #
-# Replaces free-text-only section_positions_note with actual mm/degree
-# values per section, since fall-plate lines commonly have 4-6 independently
-# positioned sections that materially affect density profile and bun
-# squareness.
+# Replaces free-text-only section_positions_note with actual per-point
+# values, since fall-plate lines commonly have 4-6 independently adjustable
+# joints/supports that materially affect density profile and bun squareness.
+#
+# Field shape follows how a Laader Berg Maxfoam actually defines a fall-plate
+# profile (2026-08-03, per user-supplied machine reference): NOT one overall
+# plate angle, but a series of vertical positions at the plate joints/
+# support points between the trough outlet and the horizontal conveyor -
+#
+#   Trough outlet (FP start) -> FP1 -> FP2 -> FP3 -> ... -> horizontal conveyor
+#
+# - each point's height above the conveyor datum (or its raw actuator/
+# encoder position, on older machines that don't report a calculated
+# height) is the setting actually entered on the machine; because plate
+# lengths and horizontal spacing are mechanically fixed, the angle of each
+# individual plate section can be derived from the adjacent points' heights
+# - so angle_deg is recorded as a calculated-or-recorded value, not the
+# primary setting. section_number is this point's position in that
+# sequence (1 = closest to the trough outlet); MAXFOAM_FALLPLATE_SECTION_
+# COUNTS below gives the expected number of adjustable points for known
+# Maxfoam models, purely as an entry-form guide (nothing here enforces it -
+# other OEMs/models, or a Maxfoam generation not in that table, just use as
+# many rows as the machine actually has).
 # ---------------------------------------------------------------------------
 class FallplateSectionPosition(Base):
     __tablename__ = "fallplate_section_positions"
 
     id = Column(Integer, primary_key=True)
     production_phase_id = Column(Integer, ForeignKey("production_phases.id"), nullable=False)
-    section_number = Column(Integer, nullable=False)
-    position_mm = Column(Float)
-    angle_deg = Column(Float)
+    section_number = Column(Integer, nullable=False)  # point ID along the fall profile, 1 = nearest the trough outlet
+    distance_from_trough_mm = Column(Float)  # horizontal distance from the trough outlet to this point
+    position_mm = Column(Float)  # vertical height above the conveyor datum (the primary machine setting)
+    actuator_position = Column(Float)  # raw actuator/encoder/screw position, for machines that don't report a calculated height
+    angle_deg = Column(Float)  # this plate section's angle - calculated from adjacent points' heights, or recorded directly
     notes = Column(Text)
 
     phase = relationship("ProductionPhase")
+
+
+# Expected adjustable fall-plate section count per Laader Berg Maxfoam
+# model - an entry-form guide only (see FallplateSectionPosition above),
+# not a validation rule. Sourced from user-supplied machine reference,
+# 2026-08-03; not independently verified against a Laader Berg operating
+# manual (none was publicly available), so treat as indicative and correct
+# it here if a real HMI/manual says otherwise for a given generation.
+MAXFOAM_FALLPLATE_SECTION_COUNTS = {
+    "Maxfoam 5010": 4,
+    "Maxfoam 5020": 5,
+    "Maxfoam 5025": 6,
+    "Maxfoam 5035": 6,
+}
+
+
+def expected_fallplate_section_count(machine):
+    """Best-effort lookup of MAXFOAM_FALLPLATE_SECTION_COUNTS for a given
+    Machine row (matches if its `model` text contains one of the known
+    Maxfoam model keys) - returns None (no guidance available) for any
+    other OEM/model/generation, or if machine is None."""
+    if machine is None or not machine.model:
+        return None
+    model_text = machine.model.strip().lower()
+    for key, count in MAXFOAM_FALLPLATE_SECTION_COUNTS.items():
+        if key.lower() in model_text:
+            return count
+    return None
 
 
 # ---------------------------------------------------------------------------

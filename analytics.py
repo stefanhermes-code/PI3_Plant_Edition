@@ -129,6 +129,7 @@ PHASE_SETTING_FIELDS = [
     "ambient_temperature_c",
     "ambient_humidity_pct",
     "rise_time",
+    "top_flat_system_used",
 ]
 
 PHASE_SETTING_LABELS = {
@@ -142,7 +143,30 @@ PHASE_SETTING_LABELS = {
     "ambient_temperature_c": "Ambient temperature (°C)",
     "ambient_humidity_pct": "Ambient humidity (%)",
     "rise_time": "Rise time (s)",
+    "top_flat_system_used": "Top-flat system in use",
 }
+
+# Yes/No fields in the list above - added 2026-08-03 (top_flat_system_used
+# has a direct impact on block geometry, per user feedback, so it belongs
+# in the same correlation/optimization pipeline as the continuous settings).
+# Every consumer of PHASE_SETTING_FIELDS still treats these as numeric
+# (0.0/1.0/NaN - see run_settings_dataframe below), so correlation (a valid
+# point-biserial correlation) and quantile bucketing both work unmodified;
+# this set exists only so the bucket-range label can read "Yes"/"No"
+# instead of the literal "0-0"/"1-1" a raw min/max format would produce.
+BOOLEAN_SETTING_FIELDS = {"top_flat_system_used"}
+
+
+def format_setting_range(field, series):
+    """Human-readable label for one qcut bucket's range of a given setting
+    field - "Yes"/"No" for boolean fields (see BOOLEAN_SETTING_FIELDS),
+    "{min}-{max}" for every continuous field. Shared by
+    rank_setting_optimization below and the Machine Settings Optimization
+    page's own drill-down bucketing, so the two never disagree on how a
+    bucket is labeled."""
+    if field in BOOLEAN_SETTING_FIELDS:
+        return "Yes" if series.max() >= 0.5 else "No"
+    return f"{series.min():g}–{series.max():g}"
 
 
 @st.cache_data(ttl=_DATA_CACHE_TTL, show_spinner=False)
@@ -208,6 +232,14 @@ def run_settings_dataframe(_session, foam_grade_id=None):
                 # setting - sourced from the run's recipe version instead of
                 # getattr(phase, ...) like every other field here.
                 row[field] = run.recipe_version.ratio_index if run.recipe_version else None
+            elif field in BOOLEAN_SETTING_FIELDS:
+                # Coerced to 0.0/1.0/NaN (not left as True/False/None) right
+                # here - the single point every downstream consumer (.corr(),
+                # pd.qcut, reports.py's getattr loop, Root-Cause Assistant's
+                # pct-change comparison) reads from, so none of them need
+                # their own True/False handling.
+                raw = getattr(phase, field) if phase else None
+                row[field] = (1.0 if raw else 0.0) if raw is not None else None
             else:
                 row[field] = getattr(phase, field) if phase else None
         rows.append(row)
@@ -443,12 +475,22 @@ def rank_setting_optimization(session, foam_grade_id, property_name, normalize_p
         sub.loc[sub["target_value"].isna() | (sub["target_value"] == 0), "deviation_pct"] = float("nan")
 
         range_col = None
-        for q, labels in ((3, ["Low", "Medium", "High"]), (2, ["Low", "High"])):
-            try:
-                range_col = pd.qcut(sub[field], q=q, labels=labels, duplicates="drop")
-                break
-            except ValueError:
-                continue
+        if field in BOOLEAN_SETTING_FIELDS:
+            # A strictly 0/1 field is a group comparison, not a quantile
+            # split - pd.qcut is the wrong tool here regardless, and
+            # actively fails (raises ValueError under duplicates="drop")
+            # for the skewed splits a Yes/No setting produces in practice
+            # (e.g. 5 Yes vs 2 No), which would otherwise fall through to
+            # the "not enough variation" empty row even though a clean
+            # two-group comparison exists. Map directly to Yes/No instead.
+            range_col = sub[field].map({1.0: "Yes", 0.0: "No"})
+        else:
+            for q, labels in ((3, ["Low", "Medium", "High"]), (2, ["Low", "High"])):
+                try:
+                    range_col = pd.qcut(sub[field], q=q, labels=labels, duplicates="drop")
+                    break
+                except ValueError:
+                    continue
         if range_col is None or range_col.nunique(dropna=True) < 2:
             empty_row["n"] = len(sub)
             rows.append(empty_row)
@@ -457,7 +499,7 @@ def rank_setting_optimization(session, foam_grade_id, property_name, normalize_p
         sub["range"] = range_col
         summary = (
             sub.groupby("range", observed=True)
-            .agg(avg_dev=("deviation_pct", "mean"), setting_range=(field, lambda s: f"{s.min():g}–{s.max():g}"))
+            .agg(avg_dev=("deviation_pct", "mean"), setting_range=(field, lambda s: format_setting_range(field, s)))
             .dropna(subset=["avg_dev"])
         )
         if summary.empty:
