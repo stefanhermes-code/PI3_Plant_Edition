@@ -33,6 +33,20 @@ the "Setup" ProductionPhase row) and Runtime Data (hardcoded to the
 "Finalized" ProductionPhase row, now also carrying rise_time/curing_notes —
 the two fields RuntimeDataRecord had that nothing else captured). See
 RuntimeDataRecord in db.py for why that table is still there but retired.
+
+Setup's field set was narrowed again on 2026-08-03, after feedback that
+several fields shown there weren't actually Setup-appropriate: foam_height_mm
+(a measured outcome of the foaming process, not something planned) and the
+ambient temperature/humidity readings (observed conditions, not configured)
+moved to Runtime Data only; ratio_index moved off ProductionPhase entirely
+onto RecipeVersion (it's a formulation constant, not a per-run setting - see
+db.py); the free-text "laydown_mode" field was renamed "Foaming mode" and
+converted to a controlled dropdown (FOAMING_MODES: LLD/Trough/Traverse); the
+free-text "Other geometry notes" field was dropped now that fall-plate
+section positions are captured in structured form below it; and a new
+top_flat_system_used yes/no field was added. Both Setup and Runtime Data
+still carry the shared machine settings (mixer/conveyor/air/sidewall/foaming
+mode/top-flat), so the plan-vs-actual comparison still works for those.
 """
 
 import datetime as dt
@@ -45,6 +59,7 @@ from auth import current_user, logout_button, require_login
 from cascades import delete_production_run_cascade, production_run_dependency_counts
 from db import (
     EVENT_TYPES,
+    FOAMING_MODES,
     SEVERITIES,
     AdjustmentConclusion,
     ApprovalRecord,
@@ -93,17 +108,29 @@ RUN_OPTIONAL_COLUMNS = [
 # and "Finalized" respectively) - each tab is hardcoded to its own phase_name,
 # so imports need production_run_id only; phase_name is implied by which tab
 # you're importing into, not a file column.
+#
+# Setup's column set is deliberately narrower than Runtime Data's as of
+# 2026-08-03: foam_height_mm (a measured outcome, not something planned) and
+# ambient_temperature_c/ambient_humidity_pct (observed environmental
+# conditions, not configured) were removed from Setup - both still exist on
+# Runtime Data, the actual/observed snapshot. ratio_index was removed from
+# both (it is now a recipe-level field - see RecipeVersion.ratio_index).
+# laydown_mode was renamed foaming_mode and section_positions_note was
+# dropped (superseded by the structured Fall-plate positions sub-tab) - see
+# db.py's ProductionPhase for the full rationale on each.
 SETUP_REQUIRED_COLUMNS = ["production_run_id"]
 SETUP_OPTIONAL_COLUMNS = [
     "phase_start", "phase_end",
     "mixer_rpm", "conveyor_speed", "air_injection_rate", "air_pressure_bar",
-    "ratio_index", "laydown_mode", "section_positions_note",
-    "sidewall_width_mm", "foam_height_mm",
-    "ambient_temperature_c", "ambient_humidity_pct", "notes",
+    "foaming_mode", "top_flat_system_used",
+    "sidewall_width_mm", "notes",
 ]
 
 RUNTIME_REQUIRED_COLUMNS = ["production_run_id"]
-RUNTIME_OPTIONAL_COLUMNS = SETUP_OPTIONAL_COLUMNS + ["rise_time", "curing_notes"]
+RUNTIME_OPTIONAL_COLUMNS = SETUP_OPTIONAL_COLUMNS + [
+    "foam_height_mm", "ambient_temperature_c", "ambient_humidity_pct",
+    "rise_time", "curing_notes",
+]
 
 # Component stream readings are actual measurements taken once production is
 # running, so they only ever attach to a run's Finalized phase — never to
@@ -641,38 +668,26 @@ with tab_setup:
                         "Sidewall width (mm)", min_value=0.0, step=1.0,
                         value=float(setup_phase.sidewall_width_mm or 0.0), key=f"edit_setup_sidewall_{setup_phase.id}",
                     )
-                    foam_height_mm = c6.number_input(
-                        "Foam height (mm)", min_value=0.0, step=1.0,
-                        value=float(setup_phase.foam_height_mm or 0.0), key=f"edit_setup_height_{setup_phase.id}",
+                    foaming_mode_options = [None] + FOAMING_MODES
+                    foaming_mode = c6.selectbox(
+                        "Foaming mode", foaming_mode_options,
+                        index=(
+                            foaming_mode_options.index(setup_phase.foaming_mode)
+                            if setup_phase.foaming_mode in FOAMING_MODES else 0
+                        ),
+                        format_func=lambda m: "— not set —" if m is None else m,
+                        key=f"edit_setup_foaming_mode_{setup_phase.id}",
                     )
-                    ratio_index = c7.number_input(
-                        "Ratio / index", min_value=0.0, step=0.1,
-                        value=float(setup_phase.ratio_index or 0.0), key=f"edit_setup_ratio_{setup_phase.id}",
-                        help="Stoichiometric ratio/index for this phase.",
-                    )
-
-                    st.markdown("**Ambient conditions**")
-                    c8, c9 = st.columns(2)
-                    ambient_temperature_c = c8.number_input(
-                        "Ambient temperature (°C)", step=0.1,
-                        value=float(setup_phase.ambient_temperature_c or 0.0),
-                        key=f"edit_setup_ambient_temp_{setup_phase.id}",
-                    )
-                    ambient_humidity_pct = c9.number_input(
-                        "Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5,
-                        value=float(setup_phase.ambient_humidity_pct or 0.0),
-                        key=f"edit_setup_ambient_hum_{setup_phase.id}",
+                    top_flat_system_used = c7.selectbox(
+                        "Top-flat system in use?", [None, True, False],
+                        index=(
+                            0 if setup_phase.top_flat_system_used is None
+                            else (1 if setup_phase.top_flat_system_used else 2)
+                        ),
+                        format_func=lambda v: "— not set —" if v is None else ("Yes" if v else "No"),
+                        key=f"edit_setup_topflat_{setup_phase.id}",
                     )
 
-                    laydown_mode = st.text_input(
-                        "Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)",
-                        value=setup_phase.laydown_mode or "", key=f"edit_setup_laydown_{setup_phase.id}",
-                    )
-                    section_positions_note = st.text_area(
-                        "Other geometry notes (structured fall-plate section positions are entered in the "
-                        "Fall-plate positions sub-tab)",
-                        value=setup_phase.section_positions_note or "", key=f"edit_setup_geom_note_{setup_phase.id}",
-                    )
                     notes = st.text_area(
                         "Notes", value=setup_phase.notes or "", key=f"edit_setup_notes_{setup_phase.id}"
                     )
@@ -688,13 +703,9 @@ with tab_setup:
                             setup_phase.conveyor_speed = conveyor_speed or None
                             setup_phase.air_injection_rate = air_injection_rate or None
                             setup_phase.air_pressure_bar = air_pressure_bar or None
-                            setup_phase.ratio_index = ratio_index or None
-                            setup_phase.ambient_temperature_c = ambient_temperature_c or None
-                            setup_phase.ambient_humidity_pct = ambient_humidity_pct or None
-                            setup_phase.laydown_mode = laydown_mode
-                            setup_phase.section_positions_note = section_positions_note
+                            setup_phase.foaming_mode = foaming_mode
+                            setup_phase.top_flat_system_used = top_flat_system_used
                             setup_phase.sidewall_width_mm = sidewall_width_mm or None
-                            setup_phase.foam_height_mm = foam_height_mm or None
                             setup_phase.notes = notes
                             session.commit()
                             st.success("Setup data updated.")
@@ -749,35 +760,17 @@ with tab_setup:
                     sidewall_width_mm = c5.number_input(
                         "Sidewall width (mm)", min_value=0.0, step=1.0, key=f"new_setup_sidewall_{run.id}"
                     )
-                    foam_height_mm = c6.number_input(
-                        "Foam height (mm)", min_value=0.0, step=1.0, key=f"new_setup_height_{run.id}"
+                    foaming_mode = c6.selectbox(
+                        "Foaming mode", [None] + FOAMING_MODES,
+                        format_func=lambda m: "— not set —" if m is None else m,
+                        key=f"new_setup_foaming_mode_{run.id}",
                     )
-                    ratio_index = c7.number_input(
-                        "Ratio / index", min_value=0.0, step=0.1, key=f"new_setup_ratio_{run.id}",
-                        help="Stoichiometric ratio/index for this phase. Enter the intended value here and "
-                        "the reconstructed actual value on the Runtime Data tab — comparing the two is the "
-                        "single strongest diagnostic for explaining density/compression/cure drift.",
-                    )
-
-                    st.markdown("**Ambient conditions**")
-                    c8, c9 = st.columns(2)
-                    ambient_temperature_c = c8.number_input(
-                        "Ambient temperature (°C)", step=0.1, key=f"new_setup_ambient_temp_{run.id}",
-                    )
-                    ambient_humidity_pct = c9.number_input(
-                        "Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5,
-                        key=f"new_setup_ambient_hum_{run.id}",
+                    top_flat_system_used = c7.selectbox(
+                        "Top-flat system in use?", [None, True, False],
+                        format_func=lambda v: "— not set —" if v is None else ("Yes" if v else "No"),
+                        key=f"new_setup_topflat_{run.id}",
                     )
 
-                    laydown_mode = st.text_input(
-                        "Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)",
-                        key=f"new_setup_laydown_{run.id}",
-                    )
-                    section_positions_note = st.text_area(
-                        "Other geometry notes (structured fall-plate section positions are entered in the "
-                        "Fall-plate positions sub-tab)",
-                        key=f"new_setup_geom_note_{run.id}",
-                    )
                     notes = st.text_area("Notes", key=f"new_setup_notes_{run.id}")
 
                     submitted = st.form_submit_button("Save Setup data", disabled=not page_usable)
@@ -795,13 +788,9 @@ with tab_setup:
                                     conveyor_speed=conveyor_speed or None,
                                     air_injection_rate=air_injection_rate or None,
                                     air_pressure_bar=air_pressure_bar or None,
-                                    ratio_index=ratio_index or None,
-                                    ambient_temperature_c=ambient_temperature_c or None,
-                                    ambient_humidity_pct=ambient_humidity_pct or None,
-                                    laydown_mode=laydown_mode,
-                                    section_positions_note=section_positions_note,
+                                    foaming_mode=foaming_mode,
+                                    top_flat_system_used=top_flat_system_used,
                                     sidewall_width_mm=sidewall_width_mm or None,
-                                    foam_height_mm=foam_height_mm or None,
                                     notes=notes,
                                     source_file_reference="manual entry",
                                 )
@@ -863,13 +852,17 @@ with tab_setup:
                                         conveyor_speed=row.get("conveyor_speed"),
                                         air_injection_rate=row.get("air_injection_rate"),
                                         air_pressure_bar=row.get("air_pressure_bar"),
-                                        ratio_index=row.get("ratio_index"),
-                                        ambient_temperature_c=row.get("ambient_temperature_c"),
-                                        ambient_humidity_pct=row.get("ambient_humidity_pct"),
-                                        laydown_mode=str(row.get("laydown_mode", "") or ""),
-                                        section_positions_note=str(row.get("section_positions_note", "") or ""),
+                                        foaming_mode=(
+                                            str(row.get("foaming_mode")).strip()
+                                            if str(row.get("foaming_mode", "") or "").strip() in FOAMING_MODES
+                                            else None
+                                        ),
+                                        top_flat_system_used=(
+                                            bool(row.get("top_flat_system_used"))
+                                            if pd.notna(row.get("top_flat_system_used"))
+                                            else None
+                                        ),
                                         sidewall_width_mm=row.get("sidewall_width_mm"),
-                                        foam_height_mm=row.get("foam_height_mm"),
                                         notes=str(row.get("notes", "") or ""),
                                         source_file_reference=uploaded.name,
                                     )
@@ -1626,14 +1619,24 @@ with tab_runtime:
                         "Sidewall width (mm)", min_value=0.0, step=1.0,
                         value=float(finalized_phase.sidewall_width_mm or 0.0), key=f"edit_runtime_sidewall_{finalized_phase.id}",
                     )
-                    foam_height_mm = c6.number_input(
-                        "Foam height (mm)", min_value=0.0, step=1.0,
-                        value=float(finalized_phase.foam_height_mm or 0.0), key=f"edit_runtime_height_{finalized_phase.id}",
+                    foaming_mode_options = [None] + FOAMING_MODES
+                    foaming_mode = c6.selectbox(
+                        "Foaming mode", foaming_mode_options,
+                        index=(
+                            foaming_mode_options.index(finalized_phase.foaming_mode)
+                            if finalized_phase.foaming_mode in FOAMING_MODES else 0
+                        ),
+                        format_func=lambda m: "— not set —" if m is None else m,
+                        key=f"edit_runtime_foaming_mode_{finalized_phase.id}",
                     )
-                    ratio_index = c7.number_input(
-                        "Ratio / index", min_value=0.0, step=0.1,
-                        value=float(finalized_phase.ratio_index or 0.0), key=f"edit_runtime_ratio_{finalized_phase.id}",
-                        help="Stoichiometric ratio/index for this phase.",
+                    top_flat_system_used = c7.selectbox(
+                        "Top-flat system in use?", [None, True, False],
+                        index=(
+                            0 if finalized_phase.top_flat_system_used is None
+                            else (1 if finalized_phase.top_flat_system_used else 2)
+                        ),
+                        format_func=lambda v: "— not set —" if v is None else ("Yes" if v else "No"),
+                        key=f"edit_runtime_topflat_{finalized_phase.id}",
                     )
 
                     st.markdown("**Ambient conditions**")
@@ -1650,6 +1653,11 @@ with tab_runtime:
                     )
 
                     st.markdown("**Runtime outcomes**")
+                    foam_height_mm = st.number_input(
+                        "Foam height (mm)", min_value=0.0, step=1.0,
+                        value=float(finalized_phase.foam_height_mm or 0.0), key=f"edit_runtime_height_{finalized_phase.id}",
+                        help="A result of the foaming process, measured here — not a Setup-tab setting.",
+                    )
                     rise_time = st.number_input(
                         "Rise time (s)", min_value=0.0, step=1.0, value=float(finalized_phase.rise_time or 0.0),
                         key=f"edit_runtime_rise_{finalized_phase.id}",
@@ -1659,15 +1667,6 @@ with tab_runtime:
                         key=f"edit_runtime_curing_{finalized_phase.id}",
                     )
 
-                    laydown_mode = st.text_input(
-                        "Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)",
-                        value=finalized_phase.laydown_mode or "", key=f"edit_runtime_laydown_{finalized_phase.id}",
-                    )
-                    section_positions_note = st.text_area(
-                        "Other geometry notes (structured fall-plate section positions are entered in the "
-                        "Fall-plate positions sub-tab)",
-                        value=finalized_phase.section_positions_note or "", key=f"edit_runtime_geom_note_{finalized_phase.id}",
-                    )
                     notes = st.text_area(
                         "Notes", value=finalized_phase.notes or "", key=f"edit_runtime_notes_{finalized_phase.id}"
                     )
@@ -1683,13 +1682,12 @@ with tab_runtime:
                             finalized_phase.conveyor_speed = conveyor_speed or None
                             finalized_phase.air_injection_rate = air_injection_rate or None
                             finalized_phase.air_pressure_bar = air_pressure_bar or None
-                            finalized_phase.ratio_index = ratio_index or None
                             finalized_phase.ambient_temperature_c = ambient_temperature_c or None
                             finalized_phase.ambient_humidity_pct = ambient_humidity_pct or None
                             finalized_phase.rise_time = rise_time or None
                             finalized_phase.curing_notes = curing_notes
-                            finalized_phase.laydown_mode = laydown_mode
-                            finalized_phase.section_positions_note = section_positions_note
+                            finalized_phase.foaming_mode = foaming_mode
+                            finalized_phase.top_flat_system_used = top_flat_system_used
                             finalized_phase.sidewall_width_mm = sidewall_width_mm or None
                             finalized_phase.foam_height_mm = foam_height_mm or None
                             finalized_phase.notes = notes
@@ -1745,13 +1743,15 @@ with tab_runtime:
                     sidewall_width_mm = c5.number_input(
                         "Sidewall width (mm)", min_value=0.0, step=1.0, key=f"new_runtime_sidewall_{run.id}"
                     )
-                    foam_height_mm = c6.number_input(
-                        "Foam height (mm)", min_value=0.0, step=1.0, key=f"new_runtime_height_{run.id}"
+                    foaming_mode = c6.selectbox(
+                        "Foaming mode", [None] + FOAMING_MODES,
+                        format_func=lambda m: "— not set —" if m is None else m,
+                        key=f"new_runtime_foaming_mode_{run.id}",
                     )
-                    ratio_index = c7.number_input(
-                        "Ratio / index", min_value=0.0, step=0.1, key=f"new_runtime_ratio_{run.id}",
-                        help="Stoichiometric ratio/index for this phase. Compare to the Setup tab's intended "
-                        "value — the single strongest diagnostic for explaining density/compression/cure drift.",
+                    top_flat_system_used = c7.selectbox(
+                        "Top-flat system in use?", [None, True, False],
+                        format_func=lambda v: "— not set —" if v is None else ("Yes" if v else "No"),
+                        key=f"new_runtime_topflat_{run.id}",
                     )
 
                     st.markdown("**Ambient conditions**")
@@ -1765,18 +1765,13 @@ with tab_runtime:
                     )
 
                     st.markdown("**Runtime outcomes**")
+                    foam_height_mm = st.number_input(
+                        "Foam height (mm)", min_value=0.0, step=1.0, key=f"new_runtime_height_{run.id}",
+                        help="A result of the foaming process, measured here — not a Setup-tab setting.",
+                    )
                     rise_time = st.number_input("Rise time (s)", min_value=0.0, step=1.0, key=f"new_runtime_rise_{run.id}")
                     curing_notes = st.text_area("Curing / cutting timing notes", key=f"new_runtime_curing_{run.id}")
 
-                    laydown_mode = st.text_input(
-                        "Laydown mode (e.g. trough, fall-plate, liquid laydown, traversing)",
-                        key=f"new_runtime_laydown_{run.id}",
-                    )
-                    section_positions_note = st.text_area(
-                        "Other geometry notes (structured fall-plate section positions are entered in the "
-                        "Fall-plate positions sub-tab)",
-                        key=f"new_runtime_geom_note_{run.id}",
-                    )
                     notes = st.text_area("Notes", key=f"new_runtime_notes_{run.id}")
 
                     submitted = st.form_submit_button("Save Runtime Data", disabled=not page_usable)
@@ -1794,13 +1789,12 @@ with tab_runtime:
                                     conveyor_speed=conveyor_speed or None,
                                     air_injection_rate=air_injection_rate or None,
                                     air_pressure_bar=air_pressure_bar or None,
-                                    ratio_index=ratio_index or None,
                                     ambient_temperature_c=ambient_temperature_c or None,
                                     ambient_humidity_pct=ambient_humidity_pct or None,
                                     rise_time=rise_time or None,
                                     curing_notes=curing_notes,
-                                    laydown_mode=laydown_mode,
-                                    section_positions_note=section_positions_note,
+                                    foaming_mode=foaming_mode,
+                                    top_flat_system_used=top_flat_system_used,
                                     sidewall_width_mm=sidewall_width_mm or None,
                                     foam_height_mm=foam_height_mm or None,
                                     notes=notes,
@@ -1867,13 +1861,20 @@ with tab_runtime:
                                         conveyor_speed=row.get("conveyor_speed"),
                                         air_injection_rate=row.get("air_injection_rate"),
                                         air_pressure_bar=row.get("air_pressure_bar"),
-                                        ratio_index=row.get("ratio_index"),
                                         ambient_temperature_c=row.get("ambient_temperature_c"),
                                         ambient_humidity_pct=row.get("ambient_humidity_pct"),
                                         rise_time=row.get("rise_time"),
                                         curing_notes=str(row.get("curing_notes", "") or ""),
-                                        laydown_mode=str(row.get("laydown_mode", "") or ""),
-                                        section_positions_note=str(row.get("section_positions_note", "") or ""),
+                                        foaming_mode=(
+                                            str(row.get("foaming_mode")).strip()
+                                            if str(row.get("foaming_mode", "") or "").strip() in FOAMING_MODES
+                                            else None
+                                        ),
+                                        top_flat_system_used=(
+                                            bool(row.get("top_flat_system_used"))
+                                            if pd.notna(row.get("top_flat_system_used"))
+                                            else None
+                                        ),
                                         sidewall_width_mm=row.get("sidewall_width_mm"),
                                         foam_height_mm=row.get("foam_height_mm"),
                                         notes=str(row.get("notes", "") or ""),

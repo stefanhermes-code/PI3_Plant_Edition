@@ -220,7 +220,14 @@ def build_run_report_data(session, run_id):
     for phase in phases:
         row = {"Phase": phase.phase_name}
         for field in PHASE_SETTING_FIELDS:
-            row[PHASE_SETTING_LABELS[field]] = getattr(phase, field)
+            if field == "ratio_index":
+                # Recipe-level constant since 2026-08-03 (see
+                # RecipeVersion.ratio_index in db.py) - same value for every
+                # phase of this run, sourced from the recipe rather than
+                # getattr(phase, ...) like every other field here.
+                row[PHASE_SETTING_LABELS[field]] = recipe.ratio_index if recipe else None
+            else:
+                row[PHASE_SETTING_LABELS[field]] = getattr(phase, field)
         phase_settings.append(row)
 
     quality_results = [

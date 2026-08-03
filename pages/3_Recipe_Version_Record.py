@@ -46,7 +46,7 @@ from helpers import (
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company
 
 RECIPE_VERSION_REQUIRED_COLUMNS = ["foam_grade_id", "version_label"]
-RECIPE_VERSION_OPTIONAL_COLUMNS = ["effective_date", "change_note", "approval_status", "created_by"]
+RECIPE_VERSION_OPTIONAL_COLUMNS = ["effective_date", "change_note", "approval_status", "created_by", "ratio_index"]
 
 COMPONENT_REQUIRED_COLUMNS = ["recipe_version_id", "raw_material_name"]
 COMPONENT_OPTIONAL_COLUMNS = ["supplier", "php", "role_in_formulation", "notes"]
@@ -148,6 +148,11 @@ with tab_create:
             change_note = st.text_area("Change note (why this recipe exists) *")
             approval_status = st.selectbox("Approval status", APPROVAL_STATUSES)
             created_by = st.text_input("Created by")
+            ratio_index = st.number_input(
+                "Ratio / index", min_value=0.0, step=0.01, format="%.3f",
+                help="Stoichiometric ratio/index for this formulation - determines the isocyanate php. "
+                "A property of the recipe, not of any single production run.",
+            )
             submitted = st.form_submit_button("Save recipe")
             if submitted:
                 if not version_label or not change_note:
@@ -160,6 +165,7 @@ with tab_create:
                         change_note=change_note,
                         approval_status=approval_status,
                         created_by=created_by,
+                        ratio_index=ratio_index or None,
                         # Explicitly False at creation, not the column's own
                         # True default: the DB now enforces at most one
                         # active version per foam grade (see db.py's
@@ -248,6 +254,12 @@ with tab_edit:
                 with st.form(f"edit_recipe_{edit_grade.id}"):
                     new_effective = st.date_input("Effective date", value=dt.date.today())
                     new_status = st.selectbox("Approval status", APPROVAL_STATUSES, index=0)
+                    new_ratio_index = st.number_input(
+                        "Ratio / index", min_value=0.0, step=0.01, format="%.3f",
+                        value=float(active_version.ratio_index or 0.0),
+                        help="Stoichiometric ratio/index for this formulation - determines the isocyanate "
+                        "php. Carried over from the version being replaced; adjust if this revision changes it.",
+                    )
                     save_edit = st.form_submit_button("Save as new version")
                     if save_edit:
                         clean_rows = [
@@ -268,6 +280,7 @@ with tab_edit:
                                 change_note=new_change_note,
                                 approval_status=new_status,
                                 created_by=new_created_by,
+                                ratio_index=new_ratio_index or None,
                                 # See the identical note in the Create tab above:
                                 # must not flush as active while this grade's
                                 # current version still is - the DB now enforces
@@ -364,6 +377,7 @@ with tab_import:
                             approval_status=status if status in APPROVAL_STATUSES else "Draft",
                             created_by=str(row.get("created_by", "") or ""),
                             is_active=make_active,
+                            ratio_index=row.get("ratio_index") if pd.notna(row.get("ratio_index")) else None,
                         )
                     )
                 session.commit()
@@ -494,6 +508,9 @@ else:
             + ("🟢 Active" if v.is_active else "")
         )
         st.caption(f"Effective {v.effective_date or '—'} | Created by {v.created_by or '—'} | Status `{v.approval_status}`")
+        st.caption(
+            f"Ratio / index: **{v.ratio_index:.3f}**" if v.ratio_index is not None else "Ratio / index: not set"
+        )
         st.write(v.change_note)
 
         if not v.is_active and page_usable:
@@ -529,6 +546,11 @@ else:
                         key=f"edit_version_status_{v.id}",
                     )
                     e_created_by = st.text_input("Created by", value=v.created_by or "", key=f"edit_version_by_{v.id}")
+                    e_ratio_index = st.number_input(
+                        "Ratio / index", min_value=0.0, step=0.01, format="%.3f",
+                        value=float(v.ratio_index or 0.0), key=f"edit_version_ratio_{v.id}",
+                        help="Stoichiometric ratio/index for this formulation - determines the isocyanate php.",
+                    )
                     if st.form_submit_button("Save changes"):
                         if not e_label.strip() or not e_change_note.strip():
                             st.error("Version label and change note are required.")
@@ -539,6 +561,7 @@ else:
                             v.change_note = e_change_note
                             v.approval_status = e_status
                             v.created_by = e_created_by
+                            v.ratio_index = e_ratio_index or None
                             session.commit()
                             st.success("Recipe version updated.")
                             st.rerun()

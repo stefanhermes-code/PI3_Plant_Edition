@@ -116,6 +116,7 @@ def seed_demo_data(session) -> str:
         approval_status="Approved",
         created_by="R&D",
         is_active=False,
+        ratio_index=0.90,
     )
     session.add(v04)
     session.flush()
@@ -137,6 +138,7 @@ def seed_demo_data(session) -> str:
         approval_status="Approved",
         created_by="R&D",
         is_active=False,
+        ratio_index=0.95,
     )
     session.add(v05)
     session.flush()
@@ -158,6 +160,7 @@ def seed_demo_data(session) -> str:
         approval_status="Draft",
         created_by="Technical Manager",
         is_active=True,
+        ratio_index=1.05,
     )
     session.add(v06)
     session.flush()
@@ -277,12 +280,14 @@ def seed_demo_data(session) -> str:
         session.add(run)
         session.flush()
 
-        # Finalized-phase machine settings. ratio_index climbs steadily
-        # across T1->T5 alongside the hardness recovery (121 -> 141 N),
-        # illustrating exactly the process-vs-quality correlation the
-        # Industrial Intelligence pages are built to surface. rise_time/
-        # curing_notes live here (not on the retired RuntimeDataRecord) as
-        # of 2026-08-02 - see db.py's ProductionPhase.
+        # Finalized-phase machine settings. rise_time/curing_notes live here
+        # (not on the retired RuntimeDataRecord) as of 2026-08-02 - see
+        # db.py's ProductionPhase. ratio_index moved to RecipeVersion as of
+        # 2026-08-03 (see v04/v05/v06 above) - it now climbs across the
+        # trial series via the recipe change (v05 -> v06 at trial 5)
+        # alongside the hardness recovery (121 -> 141 N), rather than via a
+        # per-phase value, which is the physically accurate picture (the
+        # ratio/index is fixed by the recipe in use, not set per run).
         phase_start = dt.datetime.combine(run.run_date, dt.time(8, 0))
         session.add(
             ProductionPhase(
@@ -294,13 +299,14 @@ def seed_demo_data(session) -> str:
                 conveyor_speed=3.1 + i * 0.025,
                 air_injection_rate=12.0 + i * 0.1,
                 air_pressure_bar=2.1 + i * 0.03,
-                ratio_index=0.92 + (i - 1) * 0.0325,
                 foam_height_mm=195 + i * 2.5,
                 sidewall_width_mm=1180,
                 ambient_temperature_c=24.0,
                 ambient_humidity_pct=d["humidity"],
                 rise_time=95.0,
                 curing_notes="Standard curing unless noted in trial.",
+                foaming_mode="LLD",
+                top_flat_system_used=True,
                 notes="Demo data - not a real production run.",
                 source_file_reference="demo seed",
             )
@@ -417,13 +423,14 @@ def seed_demo_data(session) -> str:
                 conveyor_speed=3.22,
                 air_injection_rate=12.6,
                 air_pressure_bar=2.28,
-                ratio_index=1.05,
                 foam_height_mm=207.5,
                 sidewall_width_mm=1180,
                 ambient_temperature_c=24.0,
                 ambient_humidity_pct=60.0,
                 rise_time=95.0,
                 curing_notes="Standard curing, routine batch.",
+                foaming_mode="Trough",
+                top_flat_system_used=False,
                 notes="Demo data - routine batch, not a trial.",
                 source_file_reference="demo seed",
             )

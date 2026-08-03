@@ -110,6 +110,14 @@ EVENT_TYPES = [
 ]
 SEVERITIES = ["Low", "Medium", "High"]
 
+# How the foam is laid down onto the conveyor. Controlled vocabulary (was a
+# free-text "laydown mode" field until 2026-08-03): LLD (liquid laydown
+# device - pours directly), Trough, or Traverse (a moving/oscillating LLD
+# head). Deliberately just these three - anything else is genuinely rare
+# enough on the lines this app targets that it isn't worth an "Other" escape
+# hatch yet.
+FOAMING_MODES = ["LLD", "Trough", "Traverse"]
+
 # Most common conditioning situations for flexible PU foam testing, per
 # ISO 291 (standard atmospheres) and ASTM D3574 conditioning practice.
 # Each maps to a suggested (temperature_c, relative_humidity_pct) default -
@@ -474,6 +482,15 @@ class RecipeVersion(Base):
     # silently succeeding. Zero active versions per grade is still allowed.
     is_active = Column(Boolean, default=True)
 
+    # Stoichiometric ratio/index - moved here from ProductionPhase on
+    # 2026-08-03. It is a formulation constant that determines the
+    # isocyanate php in this recipe, not something set or measured per
+    # production run: every run of this recipe version uses the same
+    # ratio/index, so it belongs on the recipe, not duplicated on each
+    # Setup/Finalized phase snapshot. See ProductionPhase.ratio_index below
+    # for the (now-legacy, read-only) per-phase field this replaced.
+    ratio_index = Column(Float)
+
     foam_grade = relationship("FoamGrade", back_populates="recipe_versions")
     components = relationship("RecipeComponent", back_populates="recipe_version")
     production_runs = relationship("ProductionRun", back_populates="recipe_version")
@@ -615,25 +632,43 @@ class ProductionPhase(Base):
     conveyor_speed = Column(Float)  # m/min
     air_injection_rate = Column(Float)  # NL/min or % command
     air_pressure_bar = Column(Float)
-    laydown_mode = Column(String(100))  # trough / fall-plate / liquid laydown / traversing / direct
-    section_positions_note = Column(Text)  # free-text for geometry not covered by structured fall-plate rows below
+    # Controlled vocabulary (FOAMING_MODES) since 2026-08-03 - renamed from
+    # "laydown_mode" (incorrect/confusing wording) and converted from free
+    # text to LLD / Trough / Traverse. Column name kept as foaming_mode.
+    foaming_mode = Column(String(100))
+    # Whether the top-flat system is in use for this phase - a distinct
+    # yes/no equipment-configuration question, not part of foaming_mode.
+    # Nullable (not a plain default-False Boolean): NULL means "not
+    # recorded", not "confirmed not in use" - important for legacy rows
+    # entered before this field existed.
+    top_flat_system_used = Column(Boolean)
+    # RETIRED 2026-08-03: replaced by the structured FallplateSectionPosition
+    # rows below (section_number/position_mm/angle_deg), which now cover
+    # fall-plate geometry directly. Column kept, unread/unwritten by the app,
+    # so historical free-text notes already entered are never destroyed -
+    # same precedent as RuntimeDataRecord further down this file.
+    section_positions_note = Column(Text)
     sidewall_width_mm = Column(Float)
+    # RETIRED FROM THE SETUP TAB 2026-08-03: foam height is a measured
+    # outcome of the foaming process, not something planned/configured at
+    # Setup - it no longer appears on the Setup form. Still recorded on the
+    # Finalized/Runtime Data phase, where it belongs as an observed result.
     foam_height_mm = Column(Float)
 
     # Ambient plant-floor conditions at the time this phase was recorded -
-    # measured, not set (like foam_height_mm/sidewall_width_mm above), but
-    # tracked per phase for the same reason: Setup captures the
-    # expected/planned reading, Finalized the actual reading during the
-    # run, so the two can be compared. A genuine per-batch confound for
-    # foam rise/cure behavior, so it belongs alongside the other process
-    # settings rather than as a single value on ProductionRun.
+    # measured, not set. RETIRED FROM THE SETUP TAB 2026-08-03: ambient
+    # conditions are environmental, not something planned/configured before
+    # a run starts, so they no longer appear on the Setup form - only on
+    # Runtime Data (Finalized), which is the actual/observed snapshot.
     ambient_temperature_c = Column(Float)
     ambient_humidity_pct = Column(Float)
 
-    # Stoichiometric ratio/index for this phase - the report's single
-    # highest-value diagnostic field (explains density/compression/cure
-    # drift better than any individual stream reading). Compare the Setup
-    # row's value to the Finalized row's value for the plan-vs-actual read.
+    # RETIRED 2026-08-03: ratio/index is a recipe-level formulation constant
+    # (it determines the isocyanate php in a recipe), not something that
+    # varies per production phase - moved to RecipeVersion.ratio_index (see
+    # db.py's RecipeVersion class). This column is no longer read or written
+    # by the app; kept only so historical per-phase values already recorded
+    # are never destroyed, same precedent as RuntimeDataRecord.
     ratio_index = Column(Float)
 
     # Rise time and curing notes - moved here from the now-retired

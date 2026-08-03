@@ -202,7 +202,14 @@ def run_settings_dataframe(_session, foam_grade_id=None):
             "machine": run.machine.name if run.machine else None,
         }
         for field in PHASE_SETTING_FIELDS:
-            row[field] = getattr(phase, field) if phase else None
+            if field == "ratio_index":
+                # Recipe-level formulation constant since 2026-08-03 (see
+                # RecipeVersion.ratio_index in db.py), not a per-phase
+                # setting - sourced from the run's recipe version instead of
+                # getattr(phase, ...) like every other field here.
+                row[field] = run.recipe_version.ratio_index if run.recipe_version else None
+            else:
+                row[field] = getattr(phase, field) if phase else None
         rows.append(row)
 
     df = pd.DataFrame(rows)
