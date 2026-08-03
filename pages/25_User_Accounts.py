@@ -23,6 +23,7 @@ import datetime as dt
 
 import streamlit as st
 
+import audit_log
 from auth import current_user, hash_password, logout_button, require_login, require_role
 from db import Company, Role, User, get_session, init_db
 from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
@@ -115,18 +116,24 @@ with st.expander("Add user", expanded=False):
             elif session.query(User).filter(User.username == username_clean).first():
                 st.error(f"Username '{username_clean}' is already taken.")
             else:
-                session.add(
-                    User(
-                        company_id=company_filter.id,
-                        username=username_clean,
-                        password_hash=hash_password(password),
-                        display_name=display_name or username_clean,
-                        role_id=role.id,
-                        active=active,
-                        valid_from=valid_from or None,
-                        valid_until=valid_until or None,
-                        is_super_admin=super_admin,
-                    )
+                new_user = User(
+                    company_id=company_filter.id,
+                    username=username_clean,
+                    password_hash=hash_password(password),
+                    display_name=display_name or username_clean,
+                    role_id=role.id,
+                    active=active,
+                    valid_from=valid_from or None,
+                    valid_until=valid_until or None,
+                    is_super_admin=super_admin,
+                )
+                session.add(new_user)
+                session.flush()
+                audit_log.log_role_change(
+                    session, target_type="user",
+                    change_summary=f"Created user '{username_clean}' with role '{role.name}'" + (" (super admin)" if super_admin else ""),
+                    changed_by_user_id=user["id"], company_id=company_filter.id,
+                    target_id=new_user.id, target_label=username_clean,
                 )
                 session.commit()
                 st.success(f"User '{username_clean}' added.")
@@ -195,6 +202,21 @@ else:
                     value=selected.is_super_admin, key=f"edit_user_super_{selected.id}",
                 )
             if st.form_submit_button("Save changes"):
+                changes = []
+                old_role = next((r for r in roles_for_edit if r.id == selected.role_id), None)
+                if e_role.id != selected.role_id:
+                    changes.append(f"role: '{old_role.name if old_role else '—'}' → '{e_role.name}'")
+                if e_active != selected.active:
+                    changes.append(f"active: {selected.active} → {e_active}")
+                if e_super_admin != selected.is_super_admin:
+                    changes.append(f"super admin: {selected.is_super_admin} → {e_super_admin}")
+                if (e_valid_from or None) != selected.valid_from:
+                    changes.append(f"valid from: {selected.valid_from or '—'} → {e_valid_from or '—'}")
+                if (e_valid_until or None) != selected.valid_until:
+                    changes.append(f"valid until: {selected.valid_until or '—'} → {e_valid_until or '—'}")
+                if e_new_password:
+                    changes.append("password reset")
+
                 selected.display_name = e_display
                 selected.role_id = e_role.id
                 selected.valid_from = e_valid_from or None
@@ -203,11 +225,24 @@ else:
                 selected.is_super_admin = e_super_admin
                 if e_new_password:
                     selected.password_hash = hash_password(e_new_password)
+                if changes:
+                    audit_log.log_role_change(
+                        session, target_type="user",
+                        change_summary=f"Updated user '{selected.username}': " + "; ".join(changes),
+                        changed_by_user_id=user["id"], company_id=selected.company_id,
+                        target_id=selected.id, target_label=selected.username,
+                    )
                 session.commit()
                 st.success("User updated.")
                 st.rerun()
 
-        def _do_delete_user(_session=session, _id=selected.id):
+        def _do_delete_user(_session=session, _id=selected.id, _username=selected.username, _company_id=selected.company_id):
+            audit_log.log_role_change(
+                _session, target_type="user",
+                change_summary=f"Deleted user '{_username}'",
+                changed_by_user_id=user["id"], company_id=_company_id,
+                target_id=_id, target_label=_username,
+            )
             _session.query(User).filter(User.id == _id).delete(synchronize_session=False)
             _session.commit()
             st.session_state.pop("user_selected_id", None)

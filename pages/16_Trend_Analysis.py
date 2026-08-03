@@ -42,6 +42,7 @@ from helpers import (
     render_data_table,
     render_function_action_intro,
     render_pi3_docx_download,
+    render_pi3_feedback_control,
     render_save_to_expert_notes_button,
     view_only_notice,
 )
@@ -536,10 +537,12 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "the statistical vocabulary that should disappear, not the underlying facts."
         )
         with st.spinner("Using PI3..."):
-            answer = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
+            answer, interaction_log_id = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
         if answer:
             st.session_state[f"trend_ai_answer_{unit['state_key']}_{property_name}"] = answer
+            st.session_state[f"trend_ai_interaction_id_{unit['state_key']}_{property_name}"] = interaction_log_id
             st.session_state.pop(f"trend_fixed_{unit['state_key']}_{property_name}_saved_note_id", None)
+            st.session_state.pop(f"trend_fixed_{unit['state_key']}_{property_name}_feedback_submitted", None)
 
     ai_answer = st.session_state.get(f"trend_ai_answer_{unit['state_key']}_{property_name}")
     if ai_answer:
@@ -550,6 +553,10 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "acting on it."
         )
         st.write(ai_answer)
+        render_pi3_feedback_control(
+            session, st.session_state.get(f"trend_ai_interaction_id_{unit['state_key']}_{property_name}"),
+            key_prefix=f"trend_fixed_{unit['state_key']}_{property_name}",
+        )
         trend_question_label = f"PI3 interpretation of {property_name} for {subject_desc}"
         trend_dl_col, trend_save_col = st.columns([1, 1])
         with trend_dl_col:

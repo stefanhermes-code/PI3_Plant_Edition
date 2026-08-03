@@ -35,6 +35,7 @@ from helpers import (
     expert_note_foam_grade_id_for_link,
     expert_note_link_label,
     expert_note_plant_id_for_link,
+    log_export_click,
     page_setup,
     render_function_action_intro,
     view_only_notice,
@@ -253,6 +254,8 @@ else:
                 file_name=f"pi3_report_expert_note_{selected.id}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 key=f"expert_note_{selected.id}_download_docx",
+                on_click=log_export_click, args=("expert_note_pi3_docx",),
+                kwargs={"description": f"Expert Note #{selected.id}"},
             )
         with st.form(f"edit_note_{selected.id}"):
             e_text = st.text_area("Note *", value=selected.note_text, key=f"edit_note_text_{selected.id}")

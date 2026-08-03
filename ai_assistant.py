@@ -68,12 +68,14 @@ problem shows a friendly st.error instead of crashing the page.
 
 import json
 import os
+import time
 
 import streamlit as st
 
 import analytics
+import audit_log
 import pi3_query_tool
-from db import RAW_MATERIAL_CATEGORIES, FoamGrade, PI3AIConnectionSetting, Plant
+from db import RAW_MATERIAL_CATEGORIES, FoamGrade, PI3AIConnectionSetting, Plant, get_session
 
 # Balances answer quality against cost for a fairly detailed, rule-heavy
 # system prompt (SYSTEM_PROMPT below has many formatting/structure
@@ -392,6 +394,99 @@ def _client():
     return OpenAI(api_key=_get_secret("OPENAI_API_KEY"))
 
 
+def _extract_token_usage(response):
+    """Item 50. response.usage on the Responses API is an SDK object, not
+    a dict - field names have shifted across SDK/API versions, so every
+    field is read defensively via getattr rather than assumed present.
+    Returns (prompt_tokens, completion_tokens, total_tokens), any of
+    which may be None if the SDK in use doesn't expose it."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None, None, None
+    prompt_tokens = getattr(usage, "input_tokens", None)
+    completion_tokens = getattr(usage, "output_tokens", None)
+    total_tokens = getattr(usage, "total_tokens", None)
+    if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+        total_tokens = prompt_tokens + completion_tokens
+    return prompt_tokens, completion_tokens, total_tokens
+
+
+def _estimate_cost_usd(prompt_tokens, completion_tokens):
+    """Item 50. Cost is derived from optional per-1M-token rates in
+    st.secrets (PI3_INPUT_COST_PER_1M_TOKENS / PI3_OUTPUT_COST_PER_1M_TOKENS,
+    both USD) rather than a rate hard-coded here - OpenAI pricing changes
+    over time and can vary by contract, so a baked-in figure would go
+    stale silently and mislead whoever reviews the pilot-analysis page
+    (Item 56). Returns None (no fabricated figure) if either rate isn't
+    configured or either token count is unknown."""
+    if prompt_tokens is None or completion_tokens is None:
+        return None
+    try:
+        input_rate = _get_secret("PI3_INPUT_COST_PER_1M_TOKENS")
+        output_rate = _get_secret("PI3_OUTPUT_COST_PER_1M_TOKENS")
+        if input_rate is None or output_rate is None:
+            return None
+        return (prompt_tokens / 1_000_000) * float(input_rate) + (completion_tokens / 1_000_000) * float(output_rate)
+    except Exception:
+        return None
+
+
+def _record_pi3_interaction(
+    call_site, question_text, response_text, company_id=None, plant_id=None,
+    prompt_tokens=None, completion_tokens=None, total_tokens=None, start_time=None,
+):
+    """Items 49-51. Called from both ask_assistant() and
+    ask_plant_question() right after a successful call, so every PI3
+    question/answer across every call site (all 5 fixed-prompt Intelligence
+    sections plus every free-form 'Ask PI3' box) is captured the same way
+    with no per-page wiring needed. Token counts are passed in already
+    extracted (see _extract_token_usage) rather than a raw response object,
+    since ask_plant_question's tool-calling loop makes several Responses
+    API calls per question and needs to sum usage across all of them, not
+    just the last one. Returns the new PI3InteractionLog row (or None on
+    failure) - callers that want to attach a feedback control (Item 55)
+    should hold onto its .id."""
+    estimated_cost_usd = _estimate_cost_usd(prompt_tokens, completion_tokens)
+    response_time_ms = (time.monotonic() - start_time) * 1000 if start_time is not None else None
+    try:
+        session = get_session()
+        return audit_log.log_pi3_interaction(
+            session,
+            call_site=call_site,
+            question_text=question_text,
+            response_text=response_text,
+            user_id=st.session_state.get("user_id"),
+            company_id=company_id,
+            plant_id=plant_id,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            estimated_cost_usd=estimated_cost_usd,
+            response_time_ms=response_time_ms,
+        )
+    except Exception:
+        return None
+
+
+def _record_pi3_error(call_site, exc, company_id=None, plant_id=None):
+    """Item 52. Records a failed PI3 call - this is one of the two
+    highest-value error points in the app (the other being DB session
+    recovery, see db.py), so it's captured here centrally rather than
+    waiting on the broader app-wide error-logging pass."""
+    try:
+        session = get_session()
+        audit_log.log_error(
+            session,
+            error_message=f"PI3 call failed in {call_site}",
+            exc=exc,
+            user_id=st.session_state.get("user_id"),
+            company_id=company_id,
+            page_name=st.session_state.get("_current_page_title"),
+        )
+    except Exception:
+        pass
+
+
 def _vector_stores_api(client):
     """The vector_stores endpoints have moved around between SDK versions
     (some releases don't expose client.beta.vector_stores despite the
@@ -533,8 +628,14 @@ def _file_search_filters(company_id):
 
 def ask_assistant(prompt, company_id=None):
     """Send a prompt to PI3 (file_search over the configured vector store,
-    via the Responses API) and return its text response, or None (with an
-    st.error already shown) on failure/timeout.
+    via the Responses API) and return (answer, interaction_log_id) - answer
+    is the text response, or None (with an st.error already shown) on
+    failure/timeout; interaction_log_id is the id of the PI3InteractionLog
+    row this call was recorded under (see _record_pi3_interaction, Gate 6
+    Items 49-51), or None if that logging itself failed. Callers that show
+    a feedback control (Item 55 - see helpers.render_pi3_feedback_control)
+    need this id to link a thumbs up/down back to the specific answer it's
+    reacting to.
 
     SYSTEM_PROMPT (above) is passed as `instructions` on every call - it
     is the general PI3/PU ExpertCenter behavior. `prompt` is this app's
@@ -552,9 +653,10 @@ def ask_assistant(prompt, company_id=None):
     searching every company's documents.
     """
     if not prompt or not prompt.strip():
-        return None
+        return None, None
     if not is_configured():
-        return None
+        return None, None
+    start_time = time.monotonic()
     try:
         client = _client()
         vector_store_id = _get_secret("PI3_VECTOR_STORE_ID")
@@ -572,10 +674,23 @@ def ask_assistant(prompt, company_id=None):
             tools=[file_search_tool],
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
-        return response.output_text or None
+        answer = response.output_text or None
+        prompt_tokens, completion_tokens, total_tokens = _extract_token_usage(response)
+        log_row = _record_pi3_interaction(
+            call_site="ask_assistant",
+            question_text=prompt,
+            response_text=answer,
+            company_id=company_id,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            start_time=start_time,
+        )
+        return answer, (log_row.id if log_row is not None else None)
     except Exception as exc:
+        _record_pi3_error("ask_assistant", exc, company_id=company_id)
         st.error("Could not reach PI3 right now. Try again in a moment, or contact your administrator if this continues.")
-        return None
+        return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -843,18 +958,22 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
     API, up to MAX_TOOL_ITERATIONS tool round-trips, then returns the
     final text answer.
 
-    Returns (answer, tool_log) where tool_log is a list of dicts recording
-    every tool call made (the exact SQL run, or the verified-analysis
-    arguments) - callers should show this alongside the answer so a
-    reviewer can check PI3's work rather than trust it blindly, per this
-    feature's own design. Returns (None, []) if PI3 isn't configured, the
-    question is empty, or a call fails (an st.error is already shown in
-    that case, same as ask_assistant())."""
+    Returns (answer, tool_log, interaction_log_id) where tool_log is a list
+    of dicts recording every tool call made (the exact SQL run, or the
+    verified-analysis arguments) - callers should show this alongside the
+    answer so a reviewer can check PI3's work rather than trust it
+    blindly, per this feature's own design. interaction_log_id is the id
+    of the PI3InteractionLog row this call was recorded under (see
+    _record_pi3_interaction, Gate 6 Items 49-51) - callers that show a
+    feedback control (Item 55) need this to link a thumbs up/down back to
+    the specific answer. Returns (None, [], None) if PI3 isn't configured,
+    the question is empty, or a call fails (an st.error is already shown
+    in that case, same as ask_assistant())."""
     tool_log = []
     if not question or not question.strip():
-        return None, tool_log
+        return None, tool_log, None
     if not is_configured():
-        return None, tool_log
+        return None, tool_log, None
 
     vector_store_id = _get_secret("PI3_VECTOR_STORE_ID")
     model = _get_secret("PI3_MODEL") or DEFAULT_MODEL
@@ -880,6 +999,21 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
     if page_context:
         input_text = f"Context: {page_context}\n\nQuestion: {question.strip()}"
 
+    start_time = time.monotonic()
+    prompt_tokens_sum = 0
+    completion_tokens_sum = 0
+    usage_seen = False
+
+    def _accumulate_usage(resp):
+        nonlocal prompt_tokens_sum, completion_tokens_sum, usage_seen
+        pt, ct, _ = _extract_token_usage(resp)
+        if pt is not None:
+            prompt_tokens_sum += pt
+            usage_seen = True
+        if ct is not None:
+            completion_tokens_sum += ct
+            usage_seen = True
+
     try:
         client = _client()
         response = client.responses.create(
@@ -889,6 +1023,7 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
             tools=tools,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
+        _accumulate_usage(response)
 
         for _ in range(MAX_TOOL_ITERATIONS):
             function_calls = [item for item in response.output if getattr(item, "type", None) == "function_call"]
@@ -948,11 +1083,25 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
                 tools=tools,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
+            _accumulate_usage(response)
 
-        return response.output_text or None, tool_log
+        answer = response.output_text or None
+        log_row = _record_pi3_interaction(
+            call_site="ask_plant_question",
+            question_text=input_text,
+            response_text=answer,
+            company_id=company_id,
+            plant_id=plant_id,
+            prompt_tokens=prompt_tokens_sum if usage_seen else None,
+            completion_tokens=completion_tokens_sum if usage_seen else None,
+            total_tokens=(prompt_tokens_sum + completion_tokens_sum) if usage_seen else None,
+            start_time=start_time,
+        )
+        return answer, tool_log, (log_row.id if log_row is not None else None)
     except Exception as exc:
+        _record_pi3_error("ask_plant_question", exc, company_id=company_id, plant_id=plant_id)
         st.error("Could not reach PI3 right now. Try again in a moment, or contact your administrator if this continues.")
-        return None, tool_log
+        return None, tool_log, None
 
 
 def extract_raw_material_from_tds(tds_text, sds_text=None):

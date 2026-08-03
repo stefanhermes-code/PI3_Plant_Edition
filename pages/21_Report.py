@@ -19,7 +19,7 @@ import streamlit as st
 
 from auth import current_user, logout_button, require_login
 from db import FoamGrade, Plant, ProductFamily, ProductionRun, TrialRecord, get_session, init_db
-from helpers import page_setup, render_data_table, render_function_action_intro
+from helpers import log_export_click, page_setup, render_data_table, render_function_action_intro
 from tenant_scope import apply_scope, company_picker, family_ids_for_plants, plant_ids_for_company, run_ids_for_company
 import reports
 
@@ -106,12 +106,16 @@ with tab_run:
             "Download PDF", data=reports.render_run_report_pdf(data),
             file_name=f"production_run_{data['run_id']}_report.pdf", mime="application/pdf",
             key="run_report_pdf",
+            on_click=log_export_click, args=("production_run_report_pdf",),
+            kwargs={"description": f"Run #{data['run_id']}"},
         )
         dl2.download_button(
             "Download Excel", data=reports.render_run_report_excel(data),
             file_name=f"production_run_{data['run_id']}_report.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="run_report_excel",
+            on_click=log_export_click, args=("production_run_report_excel",),
+            kwargs={"description": f"Run #{data['run_id']}"},
         )
 
 # ---------------------------------------------------------------------------
@@ -170,12 +174,16 @@ with tab_period:
         "Download PDF", data=reports.render_period_summary_pdf(data),
         file_name=f"period_summary_{period_label}.pdf", mime="application/pdf",
         key="period_report_pdf",
+        on_click=log_export_click, args=("period_summary_report_pdf",),
+        kwargs={"description": f"{data['plant']} · {data['product_family']} · {period_label}"},
     )
     dl2.download_button(
         "Download Excel", data=reports.render_period_summary_excel(data),
         file_name=f"period_summary_{period_label}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="period_report_excel",
+        on_click=log_export_click, args=("period_summary_report_excel",),
+        kwargs={"description": f"{data['plant']} · {data['product_family']} · {period_label}"},
     )
 
 # ---------------------------------------------------------------------------
@@ -229,10 +237,14 @@ with tab_trial:
             "Download PDF", data=reports.render_trial_report_pdf(data),
             file_name=f"trial_{data['trial_id']}_closeout_report.pdf", mime="application/pdf",
             key="trial_report_pdf",
+            on_click=log_export_click, args=("trial_closeout_report_pdf",),
+            kwargs={"description": f"Trial #{data['trial_id']}"},
         )
         dl2.download_button(
             "Download Excel", data=reports.render_trial_report_excel(data),
             file_name=f"trial_{data['trial_id']}_closeout_report.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="trial_report_excel",
+            on_click=log_export_click, args=("trial_closeout_report_excel",),
+            kwargs={"description": f"Trial #{data['trial_id']}"},
         )

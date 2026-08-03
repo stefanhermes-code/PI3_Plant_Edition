@@ -46,6 +46,7 @@ import datetime as dt
 import bcrypt
 import streamlit as st
 
+import audit_log
 from db import User, get_session
 
 
@@ -105,6 +106,10 @@ def _start_db_session(session, user):
     st.session_state["is_platform_owner"] = bool(user.company and user.company.is_platform_owner)
     st.session_state["is_super_admin"] = bool(user.is_super_admin)
     user.last_login_at = dt.datetime.utcnow()
+    audit_log.log_login_event(
+        session, "login_success", username_attempted=user.username,
+        user_id=user.id, company_id=user.company_id,
+    )
     session.commit()
 
 
@@ -121,6 +126,30 @@ def _start_legacy_session(username, user_record):
     # disappears out from under them.
     st.session_state["is_platform_owner"] = True
     st.session_state["is_super_admin"] = True
+
+
+def _log_page_view():
+    """Item 48. Called from require_login()'s already-authenticated paths -
+    both the AUTH_DISABLED dev bypass and the normal fast path - so it
+    fires on every page a reviewer actually lands on, without touching
+    any of the ~27 individual page files. page_setup() (see helpers.py)
+    stashes the page's display title into session_state as the literal
+    first line of every page, before require_login() runs; the dedup
+    against re-running the SAME page (a widget click causes a rerun, not
+    a navigation) lives in audit_log.log_page_view_if_new."""
+    page_name = st.session_state.get("_current_page_title")
+    if not page_name:
+        return
+    try:
+        session = get_session()
+        audit_log.log_page_view_if_new(
+            session, st.session_state,
+            user_id=st.session_state.get("user_id"),
+            company_id=st.session_state.get("company_id"),
+            page_name=page_name,
+        )
+    except Exception:
+        pass
 
 
 def require_login():
@@ -145,9 +174,11 @@ def require_login():
         st.session_state.setdefault("company_id", None)
         st.session_state.setdefault("is_platform_owner", True)
         st.session_state.setdefault("is_super_admin", True)
+        _log_page_view()
         return
 
     if st.session_state.get("authenticated"):
+        _log_page_view()
         return
 
     session = get_session()
@@ -174,6 +205,9 @@ def require_login():
         if db_has_users:
             user, error = _check_db_login(session, username, password)
             if error:
+                audit_log.log_login_event(
+                    session, "login_failure", username_attempted=username, detail=error,
+                )
                 st.error(error)
             else:
                 _start_db_session(session, user)
@@ -181,9 +215,17 @@ def require_login():
         else:
             user_record = legacy_users.get(username)
             if user_record and password == user_record.get("password"):
+                audit_log.log_login_event(
+                    session, "login_success", username_attempted=username,
+                    detail="legacy secrets.toml login",
+                )
                 _start_legacy_session(username, user_record)
                 st.rerun()
             else:
+                audit_log.log_login_event(
+                    session, "login_failure", username_attempted=username,
+                    detail="invalid legacy credentials",
+                )
                 st.error("Invalid username or password.")
 
     st.stop()
@@ -191,6 +233,7 @@ def require_login():
 
 def current_user():
     return {
+        "id": st.session_state.get("user_id"),
         "username": st.session_state.get("username"),
         "display_name": st.session_state.get("display_name"),
         "role": st.session_state.get("role", "viewer"),
@@ -227,9 +270,19 @@ def logout_button():
         user = current_user()
         st.markdown(f"**{user['display_name']}**  \nRole: `{user['role']}`")
         if st.button("Log out"):
+            try:
+                session = get_session()
+                audit_log.log_login_event(
+                    session, "logout", username_attempted=user["username"],
+                    user_id=user["id"], company_id=user["company_id"],
+                )
+                session.commit()
+            except Exception:
+                pass
             for key in (
                 "authenticated", "auth_source", "user_id", "username", "display_name",
                 "role", "role_id", "company_id", "is_platform_owner", "is_super_admin",
+                "_audit_last_page_logged",
             ):
                 st.session_state.pop(key, None)
             st.rerun()

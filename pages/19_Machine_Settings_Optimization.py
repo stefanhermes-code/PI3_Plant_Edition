@@ -26,6 +26,7 @@ from helpers import (
     page_setup,
     render_data_table,
     render_function_action_intro,
+    render_pi3_feedback_control,
     render_scatter_chart_no_zero,
     view_only_notice,
 )
@@ -270,9 +271,11 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "to change a setting to a specific value."
         )
         with st.spinner("Using PI3..."):
-            answer = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
+            answer, interaction_log_id = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
         if answer:
             st.session_state[f"optimization_ai_answer_{unit['state_key']}_{property_name}"] = answer
+            st.session_state[f"optimization_ai_interaction_id_{unit['state_key']}_{property_name}"] = interaction_log_id
+            st.session_state.pop(f"optimization_fixed_{unit['state_key']}_{property_name}_feedback_submitted", None)
 
     ai_answer = st.session_state.get(f"optimization_ai_answer_{unit['state_key']}_{property_name}")
     if ai_answer:
@@ -282,6 +285,10 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "historical cases. Confirm through your own investigation before acting on it."
         )
         st.write(ai_answer)
+        render_pi3_feedback_control(
+            session, st.session_state.get(f"optimization_ai_interaction_id_{unit['state_key']}_{property_name}"),
+            key_prefix=f"optimization_fixed_{unit['state_key']}_{property_name}",
+        )
 elif user["is_platform_owner"]:
     # Only the platform owner sees why PI3 is unavailable here - a customer
     # whose subscription/plant simply doesn't have it enabled shouldn't be

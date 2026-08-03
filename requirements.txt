@@ -1,28 +1,42 @@
-# Upper/lower bounds here are deliberate, not decoration - see the
-# "dependency drift" troubleshooting entry in README.md before loosening
-# any of these. Streamlit Community Cloud forces the Python version (no
-# runtime.txt support) and had moved to Python 3.14 by 2026-07-31; Streamlit
-# only gained real Python 3.14 support in 1.60.0 (a PEP 649 deferred-
-# annotation-evaluation fix), so streamlit MUST be >=1.60 here or the app
-# silently fails to route through its own st.navigation()/sidebar code on
-# Cloud (no traceback - it just falls back to Streamlit's default flat page
-# list and default centered layout, which is what made this so confusing
-# to diagnose). Separately, pandas 3.0 changed Arrow/dtype handling strictly
-# enough to crash a real page (Subscription Types, mixed int/str column -
-# also fixed in code), so pandas stays <3.0. Verified 2026-07-31 that
+# Exact pins, not ranges (Gate 7, Item 61 of the Duroflex pilot readiness
+# list - see PI3_Application_Changes_Needed.docx, section 3.2): a bare
+# range silently resolves to whatever's newest on PyPI on the day someone
+# runs `pip install`, which is exactly how the streamlit/pandas/pyarrow
+# incident below happened in the first place. Every version below was
+# confirmed on 2026-08-03 to resolve together with no conflicts (`pip
+# install --dry-run` against this exact file). Bumping any pin here is a
+# deliberate action, not something that happens automatically on the next
+# deploy - re-run that same dry-run check (or a real install) before
+# raising any of these, especially streamlit/pandas/pyarrow together (see
+# the history below) and reportlab (major version 5.0.0, bumped from the
+# 4.x this app was originally built against - re-verify PDF report
+# generation, reports.py, after ANY reportlab version change).
+#
+# History kept for context - see also the "dependency drift"
+# troubleshooting entry in README.md. Streamlit Community Cloud forces the
+# Python version (no runtime.txt support) and had moved to Python 3.14 by
+# 2026-07-31; Streamlit only gained real Python 3.14 support in 1.60.0 (a
+# PEP 649 deferred-annotation-evaluation fix), so streamlit MUST be >=1.60
+# here or the app silently fails to route through its own
+# st.navigation()/sidebar code on Cloud (no traceback - it just falls back
+# to Streamlit's default flat page list and default centered layout, which
+# is what made this so confusing to diagnose). Separately, pandas 3.0
+# changed Arrow/dtype handling strictly enough to crash a real page
+# (Subscription Types, mixed int/str column - also fixed in code), so
+# pandas stays below 3.0. Verified 2026-07-31 that
 # streamlit>=1.60,<1.61 + pandas<3.0 + pyarrow<25 resolves cleanly together
-# (streamlit 1.60.0 / pandas 2.3.3 / pyarrow 24.0.0) - don't assume that
-# stays true for future streamlit 1.6x releases without re-checking.
-streamlit>=1.60,<1.61
-bcrypt>=4.0
-SQLAlchemy>=2.0
-psycopg2-binary>=2.9
-pandas>=2.0,<3.0
-numpy>=1.24,<3.0
-pyarrow<25
-scipy>=1.11
-openpyxl>=3.1
-openai>=2.0
-reportlab>=4.0
-pdfplumber>=0.11
-python-docx>=1.1
+# (streamlit 1.60.0 / pandas 2.3.3 / pyarrow 24.0.0) - pinned exactly to
+# that combination below.
+streamlit==1.60.0
+bcrypt==5.0.0
+SQLAlchemy==2.0.51
+psycopg2-binary==2.9.12
+pandas==2.3.3
+numpy==2.2.6
+pyarrow==24.0.0
+scipy==1.15.3
+openpyxl==3.1.5
+openai==2.52.0
+reportlab==5.0.0
+pdfplumber==0.11.10
+python-docx==1.2.0

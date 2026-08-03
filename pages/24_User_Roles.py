@@ -23,6 +23,7 @@ company.
 
 import streamlit as st
 
+import audit_log
 from access_control import current_access_states, save_access_states
 from auth import current_user, logout_button, require_login, require_role
 from db import Company, Role, RolePagePermission, User, get_session, init_db
@@ -72,13 +73,19 @@ with st.expander("Add custom role", expanded=False):
                 st.error("Pick a company for this role.")
             else:
                 target_company_id = company_for_role.id if is_platform_owner else own_company_id
-                session.add(
-                    Role(
-                        company_id=target_company_id,
-                        name=name.strip(),
-                        description=description,
-                        is_builtin=False,
-                    )
+                new_role = Role(
+                    company_id=target_company_id,
+                    name=name.strip(),
+                    description=description,
+                    is_builtin=False,
+                )
+                session.add(new_role)
+                session.flush()
+                audit_log.log_role_change(
+                    session, target_type="role",
+                    change_summary=f"Created custom role '{name.strip()}'",
+                    changed_by_user_id=user["id"], company_id=target_company_id,
+                    target_id=new_role.id, target_label=name.strip(),
                 )
                 session.commit()
                 st.success(f"Role '{name}' added.")
@@ -143,8 +150,20 @@ else:
                 elif not e_name.strip():
                     st.error("Role name is required.")
                 else:
+                    changes = []
+                    if e_name.strip() != selected.name:
+                        changes.append(f"name: '{selected.name}' → '{e_name.strip()}'")
+                    if e_description != (selected.description or ""):
+                        changes.append("description updated")
                     selected.name = e_name.strip()
                     selected.description = e_description
+                    if changes:
+                        audit_log.log_role_change(
+                            session, target_type="role",
+                            change_summary=f"Updated role '{selected.name}': " + "; ".join(changes),
+                            changed_by_user_id=user["id"], company_id=selected.company_id,
+                            target_id=selected.id, target_label=selected.name,
+                        )
                     session.commit()
                     st.success("Role updated.")
                     st.rerun()
@@ -154,7 +173,19 @@ else:
         with st.form(f"edit_role_pages_{selected.id}"):
             selections = page_access_grid(current_states, key_prefix=f"perm_{selected.id}")
             if st.form_submit_button("Save page access"):
+                changed_pages = [
+                    f"{page_key}: {current_states.get(page_key, 'Full access')} → {new_state}"
+                    for page_key, new_state in selections.items()
+                    if current_states.get(page_key, "Full access") != new_state
+                ]
                 save_access_states(session, selected.id, selections)
+                if changed_pages:
+                    audit_log.log_role_change(
+                        session, target_type="permission",
+                        change_summary=f"Updated page access for role '{selected.name}': " + "; ".join(changed_pages),
+                        changed_by_user_id=user["id"], company_id=selected.company_id,
+                        target_id=selected.id, target_label=selected.name,
+                    )
                 session.commit()
                 st.success("Page access updated.")
                 st.rerun()
@@ -167,7 +198,13 @@ else:
                 f"{users_with_role} user(s) currently have this role - reassign them before deleting it."
             )
         else:
-            def _do_delete_role(_session=session, _id=selected.id):
+            def _do_delete_role(_session=session, _id=selected.id, _name=selected.name, _company_id=selected.company_id):
+                audit_log.log_role_change(
+                    _session, target_type="role",
+                    change_summary=f"Deleted custom role '{_name}'",
+                    changed_by_user_id=user["id"], company_id=_company_id,
+                    target_id=_id, target_label=_name,
+                )
                 _session.query(RolePagePermission).filter(RolePagePermission.role_id == _id).delete(
                     synchronize_session=False
                 )

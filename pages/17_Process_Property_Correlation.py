@@ -29,6 +29,7 @@ from helpers import (
     render_data_table,
     render_function_action_intro,
     render_pi3_docx_download,
+    render_pi3_feedback_control,
     render_save_to_expert_notes_button,
     render_scatter_chart_no_zero,
     view_only_notice,
@@ -207,10 +208,12 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "instructions to change a setting."
         )
         with st.spinner("Using PI3..."):
-            answer = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
+            answer, interaction_log_id = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
         if answer:
             st.session_state[f"correlation_ai_answer_{unit['state_key']}_{property_name}"] = answer
+            st.session_state[f"correlation_ai_interaction_id_{unit['state_key']}_{property_name}"] = interaction_log_id
             st.session_state.pop(f"correlation_fixed_{unit['state_key']}_{property_name}_saved_note_id", None)
+            st.session_state.pop(f"correlation_fixed_{unit['state_key']}_{property_name}_feedback_submitted", None)
 
     ai_answer = st.session_state.get(f"correlation_ai_answer_{unit['state_key']}_{property_name}")
     if ai_answer:
@@ -220,6 +223,10 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "historical cases. Confirm through your own investigation before acting on it."
         )
         st.write(ai_answer)
+        render_pi3_feedback_control(
+            session, st.session_state.get(f"correlation_ai_interaction_id_{unit['state_key']}_{property_name}"),
+            key_prefix=f"correlation_fixed_{unit['state_key']}_{property_name}",
+        )
         corr_question_label = f"PI3 interpretation of process-setting correlation for {property_name}, {unit['label']}"
         corr_dl_col, corr_save_col = st.columns([1, 1])
         with corr_dl_col:

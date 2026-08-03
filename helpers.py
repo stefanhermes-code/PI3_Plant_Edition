@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 import ai_assistant
+import audit_log
 import reports
 from auth import current_user
 from db import ExpertNote, FoamGrade, Plant, ProductFamily, ProductionRun, RecipeVersion, TrialRecord, get_session
@@ -160,9 +161,15 @@ def page_setup(title: str):
     """Kept for compatibility with existing pages, which all call this as
     their first Streamlit command. Page config, sidebar logo, and global
     styling are now set once in app.py (which runs first on every page view
-    under st.navigation), so this is intentionally a no-op — calling
-    st.set_page_config() a second time would raise an error."""
-    pass
+    under st.navigation), so this is otherwise a no-op — calling
+    st.set_page_config() a second time would raise an error.
+
+    Also stashes the page's display title into session_state under
+    "_current_page_title" - this is the one thing every page's call site
+    already provides for free, and it's what auth.require_login()'s
+    already-authenticated fast path reads to log page-view usage (Gate 6,
+    Item 48) without needing every individual page file touched."""
+    st.session_state["_current_page_title"] = title
 
 
 def render_function_action_intro(function_text: str, action_text: str = None, action_steps=None, action_note: str = None):
@@ -709,6 +716,29 @@ def csv_excel_uploader(required_cols, optional_cols=None, key=None):
     return df, uploaded.name
 
 
+def log_export_click(export_type, description=None):
+    """Item 53 (Gate 6). Meant to be passed as a download button's
+    on_click callback (args=(export_type,), kwargs={"description": ...}) -
+    Streamlit's st.download_button supports on_click/args/kwargs in this
+    app's installed version, so this fires exactly when the reviewer
+    actually clicks Download, not merely when the button is rendered on
+    screen. export_type is a short stable label (e.g. "production_run_report_pdf"),
+    description an optional human-readable detail (e.g. the run number or
+    report period) shown on the HTC pilot-analysis review page (Item 56)."""
+    try:
+        session = get_session()
+        user = current_user()
+        audit_log.log_export(
+            session,
+            export_type=export_type,
+            description=description,
+            user_id=user.get("id"),
+            company_id=user.get("company_id"),
+        )
+    except Exception:
+        pass
+
+
 def render_pi3_docx_download(
     session, plant_id, key_prefix, question_label, answer, tool_log=None,
     page_context="", foam_grade_id=None,
@@ -748,6 +778,9 @@ def render_pi3_docx_download(
         file_name=f"pi3_report_{key_prefix}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         key=f"{key_prefix}_download_docx",
+        on_click=log_export_click,
+        args=("pi3_answer_docx",),
+        kwargs={"description": question_label},
     )
 
 
@@ -804,6 +837,51 @@ def render_save_to_expert_notes_button(
         session.commit()
         st.session_state[f"{key_prefix}_saved_note_id"] = note.id
         st.rerun()
+
+
+def render_pi3_feedback_control(session, interaction_log_id, key_prefix):
+    """Item 55 (Gate 6). Thumbs up/down + optional comment on one specific
+    PI3 answer, linked back to the PI3InteractionLog row that answer was
+    recorded under (see ai_assistant.ask_assistant/ask_plant_question,
+    which both now return that row's id for exactly this purpose). Renders
+    nothing if interaction_log_id is None - logging the interaction itself
+    can fail (see audit_log's best-effort design), and a feedback control
+    with nothing to link to would be worse than none at all.
+
+    Once submitted, the buttons are replaced with a thank-you and the
+    control won't re-render for this answer - callers don't need to guard
+    against double submission themselves. Same dedup pattern as
+    render_save_to_expert_notes_button: whenever a NEW answer replaces the
+    one this feedback was about, pop f"{key_prefix}_feedback_submitted"
+    from session_state (mirroring the existing "_saved_note_id" pop) or
+    this will keep showing "thanks" for an answer that was never rated."""
+    if interaction_log_id is None:
+        return
+    if st.session_state.get(f"{key_prefix}_feedback_submitted"):
+        st.caption("✓ Thanks for the feedback.")
+        return
+
+    st.caption("Was this answer useful?")
+    up_col, down_col, _ = st.columns([1, 1, 6])
+    rating_key = f"{key_prefix}_feedback_rating"
+    if up_col.button("👍", key=f"{key_prefix}_feedback_up"):
+        st.session_state[rating_key] = "up"
+    if down_col.button("👎", key=f"{key_prefix}_feedback_down"):
+        st.session_state[rating_key] = "down"
+
+    rating = st.session_state.get(rating_key)
+    if rating:
+        comment = st.text_input(
+            "Anything to add? (optional)", key=f"{key_prefix}_feedback_comment"
+        )
+        if st.button("Submit feedback", key=f"{key_prefix}_feedback_submit"):
+            audit_log.log_pi3_feedback(
+                session, interaction_log_id, rating,
+                user_id=current_user().get("id"), comment=comment or None,
+            )
+            st.session_state[f"{key_prefix}_feedback_submitted"] = True
+            st.session_state.pop(rating_key, None)
+            st.rerun()
 
 
 def render_ask_pi3_section(
@@ -870,7 +948,7 @@ def render_ask_pi3_section(
 
     if st.button("Ask PI3", key=f"{key_prefix}_ask_btn", disabled=disabled or not question.strip()):
         with st.spinner("Using PI3..."):
-            answer, tool_log = ai_assistant.ask_plant_question(
+            answer, tool_log, interaction_log_id = ai_assistant.ask_plant_question(
                 session,
                 plant_id,
                 question,
@@ -881,7 +959,9 @@ def render_ask_pi3_section(
             st.session_state[f"{key_prefix}_answer"] = answer
             st.session_state[f"{key_prefix}_tool_log"] = tool_log
             st.session_state[f"{key_prefix}_asked"] = question
+            st.session_state[f"{key_prefix}_interaction_log_id"] = interaction_log_id
             st.session_state.pop(f"{key_prefix}_saved_note_id", None)
+            st.session_state.pop(f"{key_prefix}_feedback_submitted", None)
 
     answer = st.session_state.get(f"{key_prefix}_answer")
     if answer:
@@ -889,6 +969,9 @@ def render_ask_pi3_section(
         st.write(answer)
         tool_log = st.session_state.get(f"{key_prefix}_tool_log") or []
         st.caption("Confirm through your own investigation before acting on this.")
+        render_pi3_feedback_control(
+            session, st.session_state.get(f"{key_prefix}_interaction_log_id"), key_prefix=key_prefix,
+        )
 
         dl_col, save_col = st.columns([1, 1])
         with dl_col:

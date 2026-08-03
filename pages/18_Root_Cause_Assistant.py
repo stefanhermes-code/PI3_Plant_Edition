@@ -20,6 +20,7 @@ from helpers import (
     render_ask_pi3_section,
     render_function_action_intro,
     render_pi3_docx_download,
+    render_pi3_feedback_control,
     render_save_to_expert_notes_button,
     view_only_notice,
 )
@@ -213,10 +214,12 @@ if ai_assistant.is_enabled_for_plant(session, run.plant_id):
             f"What was different:\n{change_summary}\n"
         )
         with st.spinner("Using PI3..."):
-            answer = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
+            answer, interaction_log_id = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
         if answer:
             st.session_state[f"root_cause_ai_answer_{obs.id}"] = answer
+            st.session_state[f"root_cause_ai_interaction_id_{obs.id}"] = interaction_log_id
             st.session_state.pop(f"root_cause_fixed_{obs.id}_saved_note_id", None)
+            st.session_state.pop(f"root_cause_fixed_{obs.id}_feedback_submitted", None)
 
     ai_answer = st.session_state.get(f"root_cause_ai_answer_{obs.id}")
     if ai_answer:
@@ -226,6 +229,10 @@ if ai_assistant.is_enabled_for_plant(session, run.plant_id):
             "cases. Confirm any hypothesis through your own investigation before acting on it."
         )
         st.write(ai_answer)
+        render_pi3_feedback_control(
+            session, st.session_state.get(f"root_cause_ai_interaction_id_{obs.id}"),
+            key_prefix=f"root_cause_fixed_{obs.id}",
+        )
 
         rc_question_label = f"PI3 root-cause hypothesis for {obs.observation_type} on run #{run.id} ({grade.grade_name})"
         rc_dl_col, rc_save_col = st.columns([1, 1])

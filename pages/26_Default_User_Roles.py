@@ -27,8 +27,9 @@ Platform-owner-only (see auth.require_platform_owner).
 
 import streamlit as st
 
+import audit_log
 from access_control import current_access_states, protected_role_name, save_access_states
-from auth import logout_button, require_login, require_platform_owner
+from auth import current_user, logout_button, require_login, require_platform_owner
 from db import Role, RolePagePermission, get_session, init_db
 from helpers import clickable_table, delete_with_confirm, page_access_grid, page_setup, render_function_action_intro
 
@@ -56,6 +57,7 @@ render_function_action_intro(
     ),
 )
 session = get_session()
+user = current_user()
 
 with st.expander("Add default role", expanded=False):
     with st.form("add_default_role"):
@@ -65,10 +67,16 @@ with st.expander("Add default role", expanded=False):
             if not new_name.strip():
                 st.error("Role name is required.")
             else:
-                session.add(
-                    Role(
-                        company_id=None, name=new_name.strip(), description=new_description, is_builtin=True,
-                    )
+                new_template = Role(
+                    company_id=None, name=new_name.strip(), description=new_description, is_builtin=True,
+                )
+                session.add(new_template)
+                session.flush()
+                audit_log.log_role_change(
+                    session, target_type="role",
+                    change_summary=f"Created default role template '{new_name.strip()}'",
+                    changed_by_user_id=user["id"], company_id=None,
+                    target_id=new_template.id, target_label=new_name.strip(),
                 )
                 session.commit()
                 st.success(f"Default role '{new_name}' added. New companies will be seeded with it.")
@@ -121,6 +129,13 @@ else:
             if st.form_submit_button("Save name/description"):
                 if is_protected:
                     st.info("Protected role - description can still be saved, but the name can't change.")
+                    if e_description != (selected.description or ""):
+                        audit_log.log_role_change(
+                            session, target_type="role",
+                            change_summary=f"Updated default role template '{selected.name}': description updated",
+                            changed_by_user_id=user["id"], company_id=None,
+                            target_id=selected.id, target_label=selected.name,
+                        )
                     selected.description = e_description
                     session.commit()
                     st.success("Description updated.")
@@ -128,8 +143,20 @@ else:
                 elif not e_name.strip():
                     st.error("Role name is required.")
                 else:
+                    changes = []
+                    if e_name.strip() != selected.name:
+                        changes.append(f"name: '{selected.name}' → '{e_name.strip()}'")
+                    if e_description != (selected.description or ""):
+                        changes.append("description updated")
                     selected.name = e_name.strip()
                     selected.description = e_description
+                    if changes:
+                        audit_log.log_role_change(
+                            session, target_type="role",
+                            change_summary=f"Updated default role template '{selected.name}': " + "; ".join(changes),
+                            changed_by_user_id=user["id"], company_id=None,
+                            target_id=selected.id, target_label=selected.name,
+                        )
                     session.commit()
                     st.success("Default role updated.")
                     st.rerun()
@@ -139,7 +166,19 @@ else:
         with st.form(f"edit_default_role_pages_{selected.id}"):
             selections = page_access_grid(current_states, key_prefix=f"default_perm_{selected.id}")
             if st.form_submit_button("Save default page access"):
+                changed_pages = [
+                    f"{page_key}: {current_states.get(page_key, 'Full access')} → {new_state}"
+                    for page_key, new_state in selections.items()
+                    if current_states.get(page_key, "Full access") != new_state
+                ]
                 save_access_states(session, selected.id, selections)
+                if changed_pages:
+                    audit_log.log_role_change(
+                        session, target_type="permission",
+                        change_summary=f"Updated default page access for role template '{selected.name}': " + "; ".join(changed_pages),
+                        changed_by_user_id=user["id"], company_id=None,
+                        target_id=selected.id, target_label=selected.name,
+                    )
                 session.commit()
                 st.success(f"Default page access for '{selected.name}' updated for future companies.")
                 st.rerun()
@@ -147,7 +186,13 @@ else:
         if is_protected:
             st.caption("Protected role - can't be deleted.")
         else:
-            def _do_delete_template(_session=session, _id=selected.id):
+            def _do_delete_template(_session=session, _id=selected.id, _name=selected.name):
+                audit_log.log_role_change(
+                    _session, target_type="role",
+                    change_summary=f"Deleted default role template '{_name}'",
+                    changed_by_user_id=user["id"], company_id=None,
+                    target_id=_id, target_label=_name,
+                )
                 _session.query(RolePagePermission).filter(RolePagePermission.role_id == _id).delete(
                     synchronize_session=False
                 )

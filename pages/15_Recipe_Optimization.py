@@ -38,6 +38,7 @@ from helpers import (
     render_data_table,
     render_function_action_intro,
     render_pi3_docx_download,
+    render_pi3_feedback_control,
     render_save_to_expert_notes_button,
     view_only_notice,
 )
@@ -586,10 +587,12 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             f"Target properties requested:\n{target_properties.strip()}\n"
         )
         with st.spinner("Using PI3..."):
-            answer = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
+            answer, interaction_log_id = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
         if answer:
             st.session_state[f"recipe_opt_ai_answer_{grade.id}"] = answer
+            st.session_state[f"recipe_opt_ai_interaction_id_{grade.id}"] = interaction_log_id
             st.session_state.pop(f"recipe_opt_fixed_{grade.id}_saved_note_id", None)
+            st.session_state.pop(f"recipe_opt_fixed_{grade.id}_feedback_submitted", None)
 
     ai_answer = st.session_state.get(f"recipe_opt_ai_answer_{grade.id}")
     if ai_answer:
@@ -600,6 +603,10 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "historical cases. For your technical team to evaluate and confirm before applying."
         )
         st.write(ai_answer)
+        render_pi3_feedback_control(
+            session, st.session_state.get(f"recipe_opt_ai_interaction_id_{grade.id}"),
+            key_prefix=f"recipe_opt_fixed_{grade.id}",
+        )
         ro_question_label = f"PI3 formulation recommendation for {grade.grade_name}"
         ro_dl_col, ro_save_col = st.columns([1, 1])
         with ro_dl_col:

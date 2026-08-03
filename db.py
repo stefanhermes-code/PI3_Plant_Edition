@@ -1374,6 +1374,173 @@ class PerformanceLog(Base):
 
 
 # ---------------------------------------------------------------------------
+# 16a-16g. Audit / usage / pilot-learning logging package
+#
+# Added 2026-08-03 for Gate 6, Items 47-56 of the Duroflex pilot readiness
+# list (see PI3_Application_Changes_Needed.docx, section 3.2) - before this,
+# none of the ten items existed: no login history, no page-usage tracking,
+# only one of the six PI3 call sites optionally persisted its Q&A (and only
+# if the reviewer chose to save it to Expert Notes), no token/cost or
+# response-time capture, no error log, no export/access log, no role-change
+# history, no PI3 answer feedback, and no HTC review page. All seven tables
+# below are deliberately append-only (application code only ever INSERTs -
+# see audit_log.py, the shared module every logging call goes through) and
+# all seven use nullable user_id/company_id: a login FAILURE has no user_id
+# yet (the username may not even exist), and any of these could in principle
+# fire from a legacy/dev session (AUTH_DISABLED) with no real User row
+# behind it - a NOT NULL FK would silently break logging in exactly the
+# cases most worth capturing (e.g. a failed login attempt).
+# ---------------------------------------------------------------------------
+class LoginEvent(Base):
+    """Item 47 - append-only login/logout history. One row per attempt,
+    not per session: a failed login (bad password, deactivated account,
+    outside its valid_from/valid_until window - see auth._check_db_login)
+    is just as important to retain as a success. username_attempted is
+    kept separately from user_id because a failed attempt against a
+    username that doesn't exist at all has no User row to link to."""
+    __tablename__ = "login_events"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    username_attempted = Column(String(150))
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    event_type = Column(String(20), nullable=False)  # login_success / login_failure / logout
+    detail = Column(String(300))  # e.g. "invalid password", "account deactivated", "outside valid window"
+    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
+
+    user = relationship("User")
+    company = relationship("Company")
+
+
+class PageViewEvent(Base):
+    """Item 48 - page/module usage tracking. One row per NAVIGATION to a
+    page, not per Streamlit rerun (a rerun fires on every widget
+    interaction within the same page - see audit_log.log_page_view_if_new
+    for how a duplicate row per click is avoided)."""
+    __tablename__ = "page_view_events"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    page_name = Column(String(200), nullable=False)
+    viewed_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
+
+    user = relationship("User")
+    company = relationship("Company")
+
+
+class PI3InteractionLog(Base):
+    """Items 49-51 - every PI3 question and response, across all call
+    sites (the 5 fixed-prompt Intelligence-page sections AND every
+    free-form 'Ask PI3' box - see ai_assistant.ask_assistant() /
+    ask_plant_question(), which both write here directly so no call site
+    can be missed), plus OpenAI token usage/estimated cost and response
+    time for each call. call_site is a short stable label identifying
+    which page/section asked (see ai_assistant.py's callers) - not a
+    controlled vocabulary at the DB level, since new call sites will keep
+    being added as the app grows."""
+    __tablename__ = "pi3_interaction_logs"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    plant_id = Column(Integer, ForeignKey("plants.id"))
+    call_site = Column(String(100), nullable=False)
+    question_text = Column(Text)
+    response_text = Column(Text)
+    prompt_tokens = Column(Integer)
+    completion_tokens = Column(Integer)
+    total_tokens = Column(Integer)
+    estimated_cost_usd = Column(Float)
+    response_time_ms = Column(Float)
+    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
+
+    user = relationship("User")
+    company = relationship("Company")
+    plant = relationship("Plant")
+
+
+class PI3Feedback(Base):
+    """Item 55 - user feedback (thumbs up/down + optional comment) on one
+    specific PI3 answer, linked back to the PI3InteractionLog row it's
+    reacting to - see helpers.render_pi3_feedback_control."""
+    __tablename__ = "pi3_feedback"
+
+    id = Column(Integer, primary_key=True)
+    pi3_interaction_log_id = Column(Integer, ForeignKey("pi3_interaction_logs.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    rating = Column(String(10), nullable=False)  # 'up' / 'down'
+    comment = Column(Text)
+    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
+
+    interaction = relationship("PI3InteractionLog")
+    user = relationship("User")
+
+
+class ErrorLog(Base):
+    """Item 52 - application errors and failed operations that would
+    otherwise only ever reach the user via a transient st.error()/
+    st.warning() and then vanish with the next rerun. Not exhaustive of
+    every possible exception in the app (that would mean wrapping every
+    single try/except) - covers the highest-value points where a real
+    failure has historically shown up (PI3 API calls, DB session
+    recovery) - see audit_log.log_error()."""
+    __tablename__ = "error_logs"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    page_name = Column(String(200))
+    error_message = Column(Text, nullable=False)
+    traceback_text = Column(Text)
+    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
+
+    user = relationship("User")
+    company = relationship("Company")
+
+
+class ExportLog(Base):
+    """Item 53 - recipe/report/PI3-answer export and access events.
+    Logged via st.download_button's on_click callback (see
+    audit_log.log_export and its call sites in pages/21_Report.py and
+    helpers.render_pi3_docx_download) - fires exactly when the reviewer
+    actually clicks Download, not merely when the button is rendered."""
+    __tablename__ = "export_logs"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    export_type = Column(String(100), nullable=False)
+    description = Column(String(300))
+    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
+
+    user = relationship("User")
+    company = relationship("Company")
+
+
+class RoleChangeLog(Base):
+    """Item 54 - user and role/permission change history. Logs a
+    human-readable summary of what changed rather than a full per-field
+    old/new diff (the User Roles page access grid alone has one entry per
+    page x 3 access levels - a full diff would be a lot of machinery for
+    a pilot-scale audit trail); target_type is 'user', 'role', or
+    'permission' (page-access grid saves)."""
+    __tablename__ = "role_change_logs"
+
+    id = Column(Integer, primary_key=True)
+    changed_by_user_id = Column(Integer, ForeignKey("users.id"))
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    target_type = Column(String(20), nullable=False)  # user / role / permission
+    target_id = Column(Integer)
+    target_label = Column(String(200))
+    change_summary = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
+
+    changed_by = relationship("User")
+    company = relationship("Company")
+
+
+# ---------------------------------------------------------------------------
 # 16. maintenance_and_license_records
 # ---------------------------------------------------------------------------
 # NOTE (corrected 2026-08-01, PI3_Gaps_and_Ambiguities.docx finding 1.1):
@@ -1425,6 +1592,13 @@ ALL_MODELS = [
     SimilarCaseLink,
     PI3AIConnectionSetting,
     PerformanceLog,
+    LoginEvent,
+    PageViewEvent,
+    PI3InteractionLog,
+    PI3Feedback,
+    ErrorLog,
+    ExportLog,
+    RoleChangeLog,
 ]
 
 
@@ -1498,7 +1672,7 @@ def close_out_session():
         return
     try:
         session.commit()
-    except Exception:
+    except Exception as commit_exc:
         # If the underlying connection itself has gone bad (e.g. the server
         # killed it - idle-in-transaction timeout, a restart, ...), rollback()
         # can also fail. In that case don't leave this same broken Session
@@ -1507,6 +1681,7 @@ def close_out_session():
         # did a full page reload. Discard it instead so the next
         # get_session() call builds a fresh Session (and checks out a fresh,
         # pool_pre_ping-verified connection) on the very next rerun.
+        discarded = False
         try:
             session.rollback()
         except Exception:
@@ -1515,3 +1690,31 @@ def close_out_session():
             except Exception:
                 pass
             st.session_state.pop("_sa_session", None)
+            discarded = True
+
+        # Item 52 (Gate 6) - this is one of the two highest-value error
+        # points in the app (the other being failed PI3 calls - see
+        # ai_assistant.py's _record_pi3_error), so it's logged here
+        # directly rather than waiting on individual pages to catch it.
+        # audit_log is imported locally, not at module level: audit_log.py
+        # imports its ORM model classes FROM this module, so a top-level
+        # `import audit_log` here would be circular. By the time this
+        # function actually runs, db.py has already finished importing (this
+        # is a function body, not import-time code), so the deferred import
+        # resolves cleanly. A fresh session is used for the write itself,
+        # since the original one is either broken or was just discarded.
+        try:
+            import audit_log
+
+            log_session = get_session()
+            audit_log.log_error(
+                log_session,
+                error_message="Database transaction commit failed" + (" (session discarded)" if discarded else " (rolled back)"),
+                exc=commit_exc,
+                user_id=st.session_state.get("user_id"),
+                company_id=st.session_state.get("company_id"),
+                page_name=st.session_state.get("_current_page_title"),
+            )
+            log_session.commit()
+        except Exception:
+            pass
