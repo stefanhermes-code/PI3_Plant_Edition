@@ -15,7 +15,16 @@ import streamlit as st
 
 import quality_issue_taxonomy
 from access_control import can_use_page
-from db import CONFIDENCE_LEVELS, SEVERITIES, ProductionRun, QualityObservation, TrialRecord, get_session, init_db
+from db import (
+    CONFIDENCE_LEVELS,
+    SEVERITIES,
+    FoamGrade,
+    ProductionRun,
+    QualityObservation,
+    TrialRecord,
+    get_session,
+    init_db,
+)
 from auth import current_user, logout_button, require_login
 from helpers import (
     clickable_table,
@@ -26,11 +35,12 @@ from helpers import (
     page_setup,
     render_data_table,
     render_function_action_intro,
+    render_pareto_chart,
     set_pending_banner,
     show_pending_banner,
     view_only_notice,
 )
-from tenant_scope import apply_scope, company_picker, run_ids_for_company
+from tenant_scope import apply_scope, company_picker, grade_ids_for_company, run_ids_for_company
 
 OBSERVATION_REQUIRED_COLUMNS = ["production_run_id", "observation_type"]
 OBSERVATION_OPTIONAL_COLUMNS = [
@@ -308,13 +318,53 @@ with tab_obs_import:
 st.divider()
 st.subheader("Quality issues")
 
-severity_filter = st.multiselect("Severity filter", SEVERITIES, default=SEVERITIES)
-observations = (
-    apply_scope(session.query(QualityObservation), QualityObservation.production_run_id, scoped_run_ids)
-    .filter(QualityObservation.severity.in_(severity_filter))
-    .order_by(QualityObservation.observed_at.desc())
-    .all()
-)
+filter_col1, filter_col2 = st.columns([1, 1])
+with filter_col1:
+    severity_filter = st.multiselect("Severity filter", SEVERITIES, default=SEVERITIES)
+with filter_col2:
+    # Foam scope - same "All foam grades / Foam grade / Foam family" pattern
+    # as the Quality Test Result page's breakdown chart, so both pages let
+    # you ask "which issue is most common for this grade/family" the same
+    # way. This filter set and the Pareto chart below both read from the
+    # same scoped_grade_ids, so the chart always matches the table.
+    scoped_grades = (
+        apply_scope(session.query(FoamGrade), FoamGrade.id, grade_ids_for_company(session, active_company_id))
+        .order_by(FoamGrade.grade_name)
+        .all()
+    )
+    foam_scope_mode = st.radio(
+        "Foam scope", ["All foam grades", "Foam grade", "Foam family"], key="qi_foam_scope_mode"
+    )
+    if foam_scope_mode == "All foam grades" or not scoped_grades:
+        scope_grade_ids = None
+        scope_label = "all foam grades"
+    elif foam_scope_mode == "Foam grade":
+        scope_grade = st.selectbox(
+            "Foam grade", scoped_grades, format_func=lambda g: g.grade_name, key="qi_foam_scope_grade"
+        )
+        scope_grade_ids = [scope_grade.id] if scope_grade else []
+        scope_label = scope_grade.grade_name if scope_grade else "—"
+    else:
+        families = sorted({g.product_family for g in scoped_grades if g.product_family}, key=lambda f: f.name)
+        if not families:
+            st.caption("No foam family available for these grades yet.")
+            scope_grade_ids = []
+            scope_label = "—"
+        else:
+            scope_family = st.selectbox(
+                "Foam family", families, format_func=lambda f: f.name, key="qi_foam_scope_family"
+            )
+            scope_grade_ids = [g.id for g in scoped_grades if g.product_family_id == scope_family.id]
+            scope_label = scope_family.name
+
+observations_query = apply_scope(
+    session.query(QualityObservation), QualityObservation.production_run_id, scoped_run_ids
+).filter(QualityObservation.severity.in_(severity_filter))
+if scope_grade_ids is not None:
+    observations_query = observations_query.join(
+        ProductionRun, QualityObservation.production_run_id == ProductionRun.id
+    ).filter(ProductionRun.foam_grade_id.in_(scope_grade_ids))
+observations = observations_query.order_by(QualityObservation.observed_at.desc()).all()
 
 if not observations:
     st.info("No quality issues match this filter.")
@@ -338,6 +388,36 @@ else:
         st.session_state["obs_selected_id"] = observations[idx].id
     else:
         st.session_state.pop("obs_selected_id", None)
+
+    # -------------------------------------------------------------------
+    # Breakdown by issue - same filtered set as the table above (Severity
+    # and foam scope both apply), grouped either by the specific issue type
+    # or by its taxonomy category (see quality_issue_taxonomy.py) - e.g.
+    # Severity = High + Foam scope = a foam family, grouped by issue type,
+    # to see which specific fault is most common for that family; or
+    # grouped by category for the coarser "which broad kind of problem"
+    # view when individual issue types are too scattered to be actionable.
+    st.divider()
+    st.subheader("Breakdown by issue")
+    group_by = st.radio("Group by", ["Issue type", "Issue category"], key="qi_breakdown_group_by", horizontal=True)
+    if group_by == "Issue type":
+        breakdown_labels = [o.observation_type for o in observations]
+        breakdown_col = "Issue type"
+    else:
+        breakdown_labels = [
+            (quality_issue_taxonomy.lookup(o.observation_type) or {}).get("category")
+            or "Other / not yet classified"
+            for o in observations
+        ]
+        breakdown_col = "Issue category"
+    st.caption(f"{len(observations)} issue(s) for {scope_label}, using the Severity filter above.")
+    breakdown_counts = (
+        pd.Series(breakdown_labels, name=breakdown_col)
+        .value_counts()
+        .rename_axis(breakdown_col)
+        .reset_index(name="Count")
+    )
+    render_pareto_chart(breakdown_counts, category_col=breakdown_col, count_col="Count")
 
     selected_id = st.session_state.get("obs_selected_id")
     selected = next((o for o in observations if o.id == selected_id), None) or (
