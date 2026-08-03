@@ -766,6 +766,15 @@ MAXFOAM_FALLPLATE_SECTION_COUNTS = {
     "Maxfoam 5035": 6,
 }
 
+# Sentinel for "the machine is a Laader Berg but not one of the known Maxfoam
+# generations above" - lets the Machine setup form offer a controlled
+# dropdown for Laader Berg (so expected_fallplate_section_count reliably
+# matches instead of depending on free text) while still allowing any
+# generation not yet in MAXFOAM_FALLPLATE_SECTION_COUNTS to be recorded via
+# a free-text fallback.
+OTHER_LAADER_BERG_MODEL = "Other Laader Berg model (specify below)"
+MAXFOAM_MODELS = list(MAXFOAM_FALLPLATE_SECTION_COUNTS.keys()) + [OTHER_LAADER_BERG_MODEL]
+
 
 def expected_fallplate_section_count(machine):
     """Best-effort lookup of MAXFOAM_FALLPLATE_SECTION_COUNTS for a given

@@ -5,7 +5,17 @@ import streamlit as st
 from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from cascades import delete_plant_cascade, plant_dependency_counts
-from db import MACHINE_OEMS, Company, Machine, Plant, ProductionRun, get_session, init_db
+from db import (
+    MACHINE_OEMS,
+    MAXFOAM_MODELS,
+    OTHER_LAADER_BERG_MODEL,
+    Company,
+    Machine,
+    Plant,
+    ProductionRun,
+    get_session,
+    init_db,
+)
 from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro, view_only_notice
 from tenant_scope import company_picker
 
@@ -183,6 +193,27 @@ else:
             st.session_state.pop("plant_selected_id", None)
             st.rerun()
 
+def _machine_model_picker(oem, current_model, key_prefix):
+    """Model input for the Add/Edit machine forms below. Called *before*
+    opening the surrounding st.form (same reason as the Expert Notes
+    "Link to" picker: widgets inside a form don't trigger a rerun until
+    submit, so if OEM lived inside the form, switching it wouldn't swap
+    this field until after Save) - when OEM is Laader Berg this offers a
+    controlled dropdown of the known Maxfoam generations (so
+    expected_fallplate_section_count on the Production Run page reliably
+    matches instead of depending on free text), with a free-text fallback
+    for any generation not in that list; every other OEM stays plain free
+    text as before."""
+    if oem == "Laader Berg":
+        default_index = MAXFOAM_MODELS.index(current_model) if current_model in MAXFOAM_MODELS else 0
+        choice = st.selectbox("Model", MAXFOAM_MODELS, index=default_index, key=f"{key_prefix}_model_choice")
+        if choice == OTHER_LAADER_BERG_MODEL:
+            other_default = current_model if current_model and current_model not in MAXFOAM_MODELS else ""
+            return st.text_input("Model (specify)", value=other_default, key=f"{key_prefix}_model_other")
+        return choice
+    return st.text_input("Model", value=current_model or "", key=f"{key_prefix}_model_text")
+
+
 st.divider()
 st.subheader("Machines / foaming lines")
 st.caption(
@@ -197,12 +228,13 @@ else:
         if not page_usable:
             st.caption("View-only access - adding a machine is restricted for your role.")
         else:
+            oem = st.selectbox("OEM / manufacturer", MACHINE_OEMS, key="add_machine_oem")
+            model = _machine_model_picker(oem, "", "add_machine")
             with st.form("add_machine"):
                 plant_for_machine = st.selectbox("Plant *", plants, format_func=lambda p: p.name)
                 name = st.text_input("Machine / line name * (e.g. Line 1, Maxfoam A)")
                 machine_code = st.text_input("Machine code")
-                oem = st.selectbox("OEM / manufacturer", MACHINE_OEMS)
-                model = st.text_input("Model")
+                st.caption(f"OEM: **{oem}** · Model: **{model or '—'}** (change above, outside this form)")
                 active = st.checkbox("Active", value=True)
                 notes = st.text_area("Notes")
                 submitted = st.form_submit_button("Save machine")
@@ -256,6 +288,16 @@ else:
             if not page_usable:
                 st.caption("View-only access - editing and deleting is restricted for your role.")
             else:
+                # e_oem/e_model live outside the form, same reason as the
+                # Add-machine picker above - switching OEM needs to swap
+                # the Model widget immediately, which a form can't do
+                # until submit.
+                e_oem = st.selectbox(
+                    "OEM / manufacturer", MACHINE_OEMS,
+                    index=MACHINE_OEMS.index(selected_machine.oem) if selected_machine.oem in MACHINE_OEMS else 0,
+                    key=f"edit_machine_oem_{selected_machine.id}",
+                )
+                e_model = _machine_model_picker(e_oem, selected_machine.model, f"edit_machine_{selected_machine.id}")
                 with st.form(f"edit_machine_{selected_machine.id}"):
                     e_plant = st.selectbox(
                         "Plant *", plants,
@@ -266,12 +308,7 @@ else:
                     e_code = st.text_input(
                         "Machine code", value=selected_machine.machine_code or "", key=f"edit_machine_code_{selected_machine.id}"
                     )
-                    e_oem = st.selectbox(
-                        "OEM / manufacturer", MACHINE_OEMS,
-                        index=MACHINE_OEMS.index(selected_machine.oem) if selected_machine.oem in MACHINE_OEMS else 0,
-                        key=f"edit_machine_oem_{selected_machine.id}",
-                    )
-                    e_model = st.text_input("Model", value=selected_machine.model or "", key=f"edit_machine_model_{selected_machine.id}")
+                    st.caption(f"OEM: **{e_oem}** · Model: **{e_model or '—'}** (change above, outside this form)")
                     e_active = st.checkbox("Active", value=selected_machine.active, key=f"edit_machine_active_{selected_machine.id}")
                     e_notes = st.text_area("Notes", value=selected_machine.notes or "", key=f"edit_machine_notes_{selected_machine.id}")
                     if st.form_submit_button("Save changes"):
