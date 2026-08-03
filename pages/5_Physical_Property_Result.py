@@ -34,6 +34,7 @@ import streamlit as st
 from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from db import (
+    FoamGrade,
     PhysicalPropertyDefinition,
     PhysicalPropertyMethod,
     PhysicalPropertyResult,
@@ -52,12 +53,13 @@ from helpers import (
     page_setup,
     render_data_table,
     render_function_action_intro,
+    render_pareto_chart,
     set_pending_banner,
     show_pending_banner,
     view_only_notice,
 )
 from quality_standards import compute_pass_fail, tolerance_label
-from tenant_scope import apply_scope, company_picker, run_ids_for_company
+from tenant_scope import apply_scope, company_picker, grade_ids_for_company, run_ids_for_company
 
 RESULT_REQUIRED_COLUMNS = ["production_run_id", "property_name", "test_method", "unit", "actual_value"]
 RESULT_OPTIONAL_COLUMNS = [
@@ -368,21 +370,63 @@ with tab_result_import:
 st.divider()
 st.subheader("Quality test results")
 
-pass_fail_options = ["Pass", "Fail", "Not computed"]
-pass_fail_filter = st.multiselect("Pass/Fail filter", pass_fail_options, default=pass_fail_options)
-
-property_name_options = sorted({p.name for p in property_defs}) if property_defs else []
-property_filter = (
-    st.multiselect("Property filter", property_name_options, default=property_name_options)
-    if property_name_options
-    else None
-)
+filter_col1, filter_col2, filter_col3 = st.columns([1, 1, 1])
+with filter_col1:
+    pass_fail_options = ["Pass", "Fail", "Not computed"]
+    pass_fail_filter = st.multiselect("Pass/Fail filter", pass_fail_options, default=pass_fail_options)
+with filter_col2:
+    property_name_options = sorted({p.name for p in property_defs}) if property_defs else []
+    property_filter = (
+        st.multiselect("Property filter", property_name_options, default=property_name_options)
+        if property_name_options
+        else None
+    )
+with filter_col3:
+    # Foam scope - "All foam grades" pools the whole company's results (the
+    # common case: which properties fail most, overall), while Foam
+    # grade/family narrows to one grade or a whole family (e.g. "Comfort
+    # foams that failed") - both this filter set and the Pareto chart below
+    # read from the same scoped_grade_ids, so the chart always matches
+    # exactly what the table above it shows.
+    scoped_grades = (
+        apply_scope(session.query(FoamGrade), FoamGrade.id, grade_ids_for_company(session, active_company_id))
+        .order_by(FoamGrade.grade_name)
+        .all()
+    )
+    foam_scope_mode = st.radio(
+        "Foam scope", ["All foam grades", "Foam grade", "Foam family"], key="qtr_foam_scope_mode"
+    )
+    if foam_scope_mode == "All foam grades" or not scoped_grades:
+        scope_grade_ids = None
+        scope_label = "all foam grades"
+    elif foam_scope_mode == "Foam grade":
+        scope_grade = st.selectbox(
+            "Foam grade", scoped_grades, format_func=lambda g: g.grade_name, key="qtr_foam_scope_grade"
+        )
+        scope_grade_ids = [scope_grade.id] if scope_grade else []
+        scope_label = scope_grade.grade_name if scope_grade else "—"
+    else:
+        families = sorted({g.product_family for g in scoped_grades if g.product_family}, key=lambda f: f.name)
+        if not families:
+            st.caption("No foam family available for these grades yet.")
+            scope_grade_ids = []
+            scope_label = "—"
+        else:
+            scope_family = st.selectbox(
+                "Foam family", families, format_func=lambda f: f.name, key="qtr_foam_scope_family"
+            )
+            scope_grade_ids = [g.id for g in scoped_grades if g.product_family_id == scope_family.id]
+            scope_label = scope_family.name
 
 results_query = apply_scope(
     session.query(PhysicalPropertyResult), PhysicalPropertyResult.production_run_id, run_ids
 )
 if property_filter is not None:
     results_query = results_query.filter(PhysicalPropertyResult.property_name.in_(property_filter))
+if scope_grade_ids is not None:
+    results_query = results_query.join(
+        ProductionRun, PhysicalPropertyResult.production_run_id == ProductionRun.id
+    ).filter(ProductionRun.foam_grade_id.in_(scope_grade_ids))
 all_results = results_query.order_by(PhysicalPropertyResult.tested_at.desc()).all()
 
 # Pass/Fail is recomputed live rather than trusted from the stored column -
@@ -423,6 +467,27 @@ else:
         st.session_state["result_selected_id"] = filtered_results[idx][0].id
     else:
         st.session_state.pop("result_selected_id", None)
+
+    # -----------------------------------------------------------------------
+    # Breakdown by property - same filtered set as the table above (Pass/
+    # Fail, Property, and foam scope filters all apply), grouped by property
+    # instead of listed row by row. Answers "which properties are behind
+    # most of these results" at a glance - e.g. Pass/Fail = Fail, Foam scope
+    # = a foam family, to see which property fails most often for that
+    # family - rather than scrolling the raw table counting rows by eye.
+    st.divider()
+    st.subheader("Breakdown by property")
+    st.caption(
+        f"{len(filtered_results)} result(s) for {scope_label}, using the Pass/Fail and Property "
+        "filters above."
+    )
+    property_counts = (
+        pd.Series([r.property_name for r, _ in filtered_results], name="Property")
+        .value_counts()
+        .rename_axis("Property")
+        .reset_index(name="Count")
+    )
+    render_pareto_chart(property_counts, category_col="Property", count_col="Count")
 
 selected_result_id = st.session_state.get("result_selected_id")
 selected_result = (

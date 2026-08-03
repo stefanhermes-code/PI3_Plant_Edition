@@ -219,6 +219,44 @@ def render_scatter_chart_no_zero(df, x, y, color=None):
     st.caption(CHART_ZOOM_HINT)
 
 
+def render_pareto_chart(df, category_col, count_col, category_title=None):
+    """Classic Pareto chart: bars = count per category (sorted highest to
+    lowest, left to right), overlaid with a line marking the running
+    cumulative percentage of the total - the standard quality-engineering
+    view for "which few categories account for most of the total" (e.g.
+    which properties account for most of a foam grade/family's failed
+    quality test results). df must already be one row per category with
+    its count in count_col; this function does the sorting and cumulative-%
+    math itself, so callers just pass in raw counts.
+
+    Two independent y-axes (count on the left, 0-100% on the right) since
+    the two series are on unrelated scales - resolve_scale(y="independent")
+    is what keeps Altair from forcing them to share one axis."""
+    df = df.sort_values(count_col, ascending=False).reset_index(drop=True)
+    total = df[count_col].sum()
+    df = df.copy()
+    df["Cumulative %"] = (df[count_col].cumsum() / total * 100) if total else 0.0
+    order = df[category_col].tolist()
+
+    bar = alt.Chart(df).mark_bar(color="#4C78A8").encode(
+        x=alt.X(f"{category_col}:N", sort=order, title=category_title or category_col),
+        y=alt.Y(f"{count_col}:Q", title="Count"),
+        tooltip=[category_col, count_col],
+    )
+    line = alt.Chart(df).mark_line(color="#E45756", point=True).encode(
+        x=alt.X(f"{category_col}:N", sort=order, title=category_title or category_col),
+        y=alt.Y("Cumulative %:Q", title="Cumulative %", scale=alt.Scale(domain=[0, 100])),
+        tooltip=[category_col, alt.Tooltip("Cumulative %:Q", format=".1f")],
+    )
+    chart = alt.layer(bar, line).resolve_scale(y="independent").properties(height=380)
+    st.altair_chart(chart, use_container_width=True)
+    st.caption(
+        "Bars (left axis): count per category. Red line (right axis): cumulative % of the total, "
+        "reading left to right - where it crosses 80% marks the few categories responsible for most "
+        "of the total (the classic 80/20 pattern)."
+    )
+
+
 def activate_recipe_version(session, foam_grade_id, new_version):
     """Marks new_version as the active recipe for its foam grade, and
     deactivates whatever was active before it. Recipe versions don't
