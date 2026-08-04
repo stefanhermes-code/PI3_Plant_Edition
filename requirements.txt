@@ -27,14 +27,28 @@
 # streamlit>=1.60,<1.61 + pandas<3.0 + pyarrow<25 resolves cleanly together
 # (streamlit 1.60.0 / pandas 2.3.3 / pyarrow 24.0.0) - pinned exactly to
 # that combination below.
+#
+# 2026-08-04: numpy==2.2.6 and scipy==1.15.3 (the versions in use since the
+# Trend Analysis feature) predate PyPI's Python 3.14 wheel builds for those
+# two packages, so Streamlit Cloud's `uv pip install` fell back to building
+# scipy from source - which needs a Fortran compiler (gfortran) that isn't
+# present in the Cloud build image, so the deploy failed outright ("Unknown
+# compiler(s): [gfortran, ...]"). numpy alone can build from source without
+# Fortran (slow but works), which is why only scipy's build actually
+# errored. Bumped both to the first release line carrying real cp314
+# wheels (confirmed on pypi.org: numpy 2.5.1 and scipy 1.18.0 both ship
+# manylinux_2_27/2_28 x86_64 cp314 wheels) so Cloud installs a prebuilt
+# wheel instead of compiling anything. scipy's only call site is
+# analytics.py's `scipy_stats.linregress` (Trend Analysis trend test) -
+# that API is unchanged across this range.
 streamlit==1.60.0
 bcrypt==5.0.0
 SQLAlchemy==2.0.51
 psycopg2-binary==2.9.12
 pandas==2.3.3
-numpy==2.2.6
+numpy==2.5.1
 pyarrow==24.0.0
-scipy==1.15.3
+scipy==1.18.0
 openpyxl==3.1.5
 openai==2.52.0
 reportlab==5.0.0
