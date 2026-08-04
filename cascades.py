@@ -17,7 +17,6 @@ grade) so a whole master-data delete is one all-or-nothing transaction.
 
 from db import (
     ComponentStreamReading,
-    ConditioningSegment,
     CustomerTrial,
     FallplateSectionPosition,
     FoamGrade,
@@ -76,11 +75,6 @@ def production_run_dependency_counts(session, run_id):
         "quality issue(s)": session.query(QualityObservation)
         .filter(QualityObservation.production_run_id == run_id).count(),
         "sample(s)": len(sample_ids),
-        "conditioning segment(s)": (
-            session.query(ConditioningSegment)
-            .filter(ConditioningSegment.sample_id.in_(sample_ids)).count()
-            if sample_ids else 0
-        ),
     }
 
 
@@ -101,10 +95,6 @@ def delete_production_run_cascade(session, run_id):
         ).delete(synchronize_session=False)
         session.query(FallplateSectionPosition).filter(
             FallplateSectionPosition.production_phase_id.in_(phase_ids)
-        ).delete(synchronize_session=False)
-    if sample_ids:
-        session.query(ConditioningSegment).filter(
-            ConditioningSegment.sample_id.in_(sample_ids)
         ).delete(synchronize_session=False)
 
     session.query(ProductionEvent).filter(
@@ -142,8 +132,8 @@ def _merge_counts(total, addition):
 # added 2026-08-03 (see db.py's SAMPLE_SOURCE_TYPES / CustomerTrial /
 # OptimizationTrial). Unlike a production run, these have no
 # ProductionPhase underneath (no machine/process settings), so their
-# dependency tree is much shallower: just samples (+ their conditioning
-# history) and quality results/issues keyed directly to the trial.
+# dependency tree is much shallower: just samples and quality results/
+# issues keyed directly to the trial.
 # ---------------------------------------------------------------------------
 
 def _sample_ids_for_customer_trial(session, customer_trial_id):
@@ -157,11 +147,6 @@ def customer_trial_dependency_counts(session, customer_trial_id):
     sample_ids = _sample_ids_for_customer_trial(session, customer_trial_id)
     return {
         "sample(s)": len(sample_ids),
-        "conditioning segment(s)": (
-            session.query(ConditioningSegment)
-            .filter(ConditioningSegment.sample_id.in_(sample_ids)).count()
-            if sample_ids else 0
-        ),
         "quality test result(s)": session.query(PhysicalPropertyResult)
         .filter(PhysicalPropertyResult.customer_trial_id == customer_trial_id).count(),
         "quality issue(s)": session.query(QualityObservation)
@@ -170,11 +155,6 @@ def customer_trial_dependency_counts(session, customer_trial_id):
 
 
 def delete_customer_trial_cascade(session, customer_trial_id):
-    sample_ids = _sample_ids_for_customer_trial(session, customer_trial_id)
-    if sample_ids:
-        session.query(ConditioningSegment).filter(
-            ConditioningSegment.sample_id.in_(sample_ids)
-        ).delete(synchronize_session=False)
     session.query(PhysicalPropertyResult).filter(
         PhysicalPropertyResult.customer_trial_id == customer_trial_id
     ).delete(synchronize_session=False)
@@ -198,11 +178,6 @@ def optimization_trial_dependency_counts(session, optimization_trial_id):
     sample_ids = _sample_ids_for_optimization_trial(session, optimization_trial_id)
     return {
         "sample(s)": len(sample_ids),
-        "conditioning segment(s)": (
-            session.query(ConditioningSegment)
-            .filter(ConditioningSegment.sample_id.in_(sample_ids)).count()
-            if sample_ids else 0
-        ),
         "quality test result(s)": session.query(PhysicalPropertyResult)
         .filter(PhysicalPropertyResult.optimization_trial_id == optimization_trial_id).count(),
         "quality issue(s)": session.query(QualityObservation)
@@ -211,11 +186,6 @@ def optimization_trial_dependency_counts(session, optimization_trial_id):
 
 
 def delete_optimization_trial_cascade(session, optimization_trial_id):
-    sample_ids = _sample_ids_for_optimization_trial(session, optimization_trial_id)
-    if sample_ids:
-        session.query(ConditioningSegment).filter(
-            ConditioningSegment.sample_id.in_(sample_ids)
-        ).delete(synchronize_session=False)
     session.query(PhysicalPropertyResult).filter(
         PhysicalPropertyResult.optimization_trial_id == optimization_trial_id
     ).delete(synchronize_session=False)

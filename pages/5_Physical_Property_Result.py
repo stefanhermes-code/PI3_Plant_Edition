@@ -1,13 +1,16 @@
 """Screen 6: Quality Test Result
 
-Sample and conditioning capture moved to its own page (Samples &
-Conditioning, in Trials & Samples) on 2026-08-02 - this page had been
-doing three jobs (samples, conditioning, and the result itself), which
-crowded a single screen with tasks a reviewer does at different points in
-the workflow. A lab result is still only comparable if it is tied to where
-in the block the sample came from, its cure age, and its conditioning
-history - that context now lives on the other page; a result here links
-back to a sample by id, same as before.
+Sample capture moved to its own pages on 2026-08-02 - this page had been
+doing two jobs (samples and the result itself), which crowded a single
+screen with tasks a reviewer does at different points in the workflow.
+A lab result is still only comparable if it is tied to where in the block
+the sample came from - that context now lives on the sample's own page
+(Production Samples / Customer Trials & Samples / Optimization Trials &
+Samples, all under Samples & Trials, per source); a result here links
+back to a sample by id, same as before. Conditioning history was tracked
+here too until 2026-08-04, when the whole conditioning feature was
+eliminated per user direction - a result's traceability now stops at
+which sample/zone it came from.
 
 Keyed to exactly one of a production run, a customer trial, or an
 optimization trial (see db.SAMPLE_SOURCE_TYPES) - the "Record against"
@@ -134,14 +137,14 @@ render_function_action_intro(
         "Records the lab results that prove out (or flag) a batch against the property/method/"
         "unit master list - density, 40% IFD/hardness, tensile strength, elongation, compression "
         "set, resilience, and so on - each compared to a target value and marked pass or fail. "
-        "Link a result to a sample (recorded on the Samples & Conditioning page) for full "
-        "traceability back to where in the block it was cut, its cure age, and what conditioning "
-        "it went through before testing."
+        "Link a result to a sample (recorded on its source's own page under Samples & Trials) for "
+        "full traceability back to where in the block it was cut."
     ),
     action_text=(
-        "Add the sample(s) first, on the Samples & Conditioning page (in Trials & Samples), if you "
-        "want results traceable back to block location. Then pick which of the three you're "
-        "recording against (Production Run / Customer Trial / Optimization Trial), the property, "
+        "Add the sample(s) first, on the relevant Samples & Trials page (Production Samples / "
+        "Customer Trials & Samples / Optimization Trials & Samples), if you want results traceable "
+        "back to block location. Then pick which of the three you're recording against (Production "
+        "Run / Customer Trial / Optimization Trial), the property, "
         "test method, and unit from the master list here, and link the result back to its sample "
         "if one applies. Use the CSV/Excel import tab to bulk-load a batch of results at once "
         "instead of entering them one by one."
@@ -211,11 +214,10 @@ with tab_result_manual:
                 or (s == "Customer Trial" and customer_trials)
                 or (s == "Optimization Trial" and optimization_trials)
             ]
-            # Source picker lives outside the form, same reasoning as
-            # Samples & Conditioning's own source picker - which parent-
-            # picker (and whether the trial-record link even applies) shows
-            # below depends on this choice, and form-internal widgets don't
-            # rerun until submit.
+            # Source picker lives outside the form, same reasoning as the
+            # Samples & Trials pages' own source pickers - which parent-
+            # picker shows below depends on this choice, and form-internal
+            # widgets don't rerun until submit.
             source_type = st.selectbox("Record against *", available_sources, key="result_source_type")
             if source_type == "Production Run":
                 run = st.selectbox(

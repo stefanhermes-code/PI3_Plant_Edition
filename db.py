@@ -118,23 +118,6 @@ SEVERITIES = ["Low", "Medium", "High"]
 # hatch yet.
 FOAMING_MODES = ["LLD", "Trough", "Traverse"]
 
-# Most common conditioning situations for flexible PU foam testing, per
-# ISO 291 (standard atmospheres) and ASTM D3574 conditioning practice.
-# Each maps to a suggested (temperature_c, relative_humidity_pct) default -
-# these prefill the numeric fields but are always editable, since the
-# actual chamber reading is what matters, not the nominal condition name.
-CONDITIONING_TYPE_DEFAULTS = {
-    "Standard 23°C / 50% RH": (23.0, 50.0),
-    "Ambient / plant floor (uncontrolled)": (None, None),
-    "Dry heat aging 70°C": (70.0, None),
-    "Dry heat aging 100°C": (100.0, None),
-    "Humid aging 50°C / 95% RH": (50.0, 95.0),
-    "Low temperature -20°C": (-20.0, None),
-    "Low temperature -40°C": (-40.0, None),
-    "Other (specify)": (None, None),
-}
-CONDITIONING_TYPES = list(CONDITIONING_TYPE_DEFAULTS.keys())
-
 RAW_MATERIAL_CATEGORIES = [
     "Polyol",
     "Isocyanate",
@@ -877,21 +860,17 @@ class Sample(Base):
 
 
 # ---------------------------------------------------------------------------
-# 6g. conditioning_segments (Mandatory-tier: conditioning history per sample)
+# 6g. conditioning_segments - REMOVED 2026-08-04 per user direction ("drop
+# conditioning, it is irrelevant, eliminate it from the functionality").
+# The conditioning_segments table itself was also dropped from Supabase in
+# the same batch (no migration system in this app - tables are created via
+# Base.metadata.create_all(), so there was no migration file to delete
+# either; the DROP TABLE was run directly). If conditioning history is ever
+# wanted again, it would need to be rebuilt from scratch, not restored from
+# here - unlike RuntimeDataRecord/MaintenanceAndLicenseRecord elsewhere in
+# this file, this model wasn't left in place, since the user explicitly
+# asked for the data itself to be gone, not just unused.
 # ---------------------------------------------------------------------------
-class ConditioningSegment(Base):
-    __tablename__ = "conditioning_segments"
-
-    id = Column(Integer, primary_key=True)
-    sample_id = Column(Integer, ForeignKey("samples.id"), nullable=False)
-    condition_type = Column(String(200))  # e.g. "Standard 23C/50%RH", "Ambient plant floor"
-    temperature_c = Column(Float)
-    relative_humidity_pct = Column(Float)
-    segment_start = Column(DateTime)
-    segment_end = Column(DateTime)
-    notes = Column(Text)
-
-    sample = relationship("Sample")
 
 
 # ---------------------------------------------------------------------------
@@ -1429,7 +1408,6 @@ ALL_MODELS = [
     ProductionEvent,
     RawMaterialLotUse,
     Sample,
-    ConditioningSegment,
     RuntimeDataRecord,
     CustomerTrial,
     OptimizationTrial,

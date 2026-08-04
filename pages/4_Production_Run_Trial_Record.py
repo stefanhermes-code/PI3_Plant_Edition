@@ -64,7 +64,6 @@ from db import (
     FOAMING_MODES,
     SEVERITIES,
     ComponentStreamReading,
-    ConditioningSegment,
     FallplateSectionPosition,
     FoamGrade,
     Machine,

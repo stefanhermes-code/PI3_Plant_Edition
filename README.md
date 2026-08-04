@@ -45,16 +45,20 @@ autonomous formulation optimization.
 12. Companies (platform-owner only: the tenant boundary)
 13. Subscription Types (platform-owner only: commercial tiers, limits/features, list prices)
 
-This list predates several pages added since (Raw Materials, Samples &
-Conditioning, Customer Trials, Optimization Trials, the five Industrial
-Intelligence screens, Report, Expert Notes) and postdates two removals:
-Similar Case Retrieval (dropped 2026-08-01) and the Trial / Experiment +
-Adjustment & Conclusion + Approval & Review trio (dropped 2026-08-04, once
-Customer Trial/Optimization Trial made that separate trial-closeout
-workflow redundant — see `access_control.py`'s docstring and
-`PI3_Gaps_and_Ambiguities.docx`). Treat `app.py`'s own nav-section lists as
-the actual source of truth for what screens exist, not this list's exact
-count.
+This list predates several pages added since (Raw Materials, Production
+Samples, Customer Trials & Samples, Optimization Trials & Samples, the
+five Industrial Intelligence screens, Report, Expert Notes) and postdates
+several removals: Similar Case Retrieval (dropped 2026-08-01), the Trial /
+Experiment + Adjustment & Conclusion + Approval & Review trio (dropped
+2026-08-04, once Customer Trial/Optimization Trial made that separate
+trial-closeout workflow redundant — see `access_control.py`'s docstring
+and `PI3_Gaps_and_Ambiguities.docx`), and conditioning tracking (dropped
+2026-08-04 per user direction — samples now live directly on the page for
+their source: Production Samples / Customer Trials & Samples /
+Optimization Trials & Samples, all under the Samples & Trials nav
+section, with no conditioning history behind them). Treat `app.py`'s own
+nav-section lists as the actual source of truth for what screens exist,
+not this list's exact count.
 
 ## Trial data model
 

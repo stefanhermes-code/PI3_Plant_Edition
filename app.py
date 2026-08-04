@@ -232,7 +232,7 @@ def render_overview():
     st.subheader("Quick actions")
     quick_actions = [
         ("pages/4_Production_Run_Trial_Record.py", "Add a production run", "➕", "production_run"),
-        ("pages/9_Samples_Conditioning.py", "Add a sample", "🧊", "samples_conditioning"),
+        ("pages/9_Samples_Conditioning.py", "Add a production sample", "🧊", "samples_conditioning"),
         ("pages/5_Physical_Property_Result.py", "Record a quality test result", "📏", "quality_test_result"),
         ("pages/6_Quality_Observation.py", "Add a quality issue", "📋", "quality_issue"),
     ]
@@ -258,9 +258,9 @@ production_pages = [
 ]
 
 experiment_pages = [
-    ("samples_conditioning", st.Page("pages/9_Samples_Conditioning.py", title="Samples & Conditioning", icon="🧊")),
-    ("customer_trials", st.Page("pages/11_Customer_Trials.py", title="Customer Trials", icon="🤝")),
-    ("optimization_trials", st.Page("pages/12_Optimization_Trials.py", title="Optimization Trials", icon="🚀")),
+    ("samples_conditioning", st.Page("pages/9_Samples_Conditioning.py", title="Production Samples", icon="🧊")),
+    ("customer_trials", st.Page("pages/11_Customer_Trials.py", title="Customer Trials & Samples", icon="🤝")),
+    ("optimization_trials", st.Page("pages/12_Optimization_Trials.py", title="Optimization Trials & Samples", icon="🚀")),
 ]
 
 # The value of PI3 Plant Edition is the join that already exists in the
@@ -300,7 +300,7 @@ platform_admin_pages = [
 nav_sections_with_keys = {
     "Setup": setup_pages,
     "Production": production_pages,
-    "Trials & Samples": experiment_pages,
+    "Samples & Trials": experiment_pages,
     "Industrial Intelligence": industrial_intelligence_pages,
     "Company Admin": admin_pages,
     "Application Admin": platform_admin_pages,
