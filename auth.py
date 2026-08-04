@@ -6,9 +6,12 @@ Users live in the `users` table (see db.py), not in st.secrets - this is
 what makes real customer accounts possible: hashed passwords, a per-account
 validity window (valid_from/valid_until), and company/role scoping. A
 "company" is the tenant boundary (see db.py Company); a user's role can be
-one of three built-in roles shared by every company (admin, technical,
-viewer - same semantics as before) or a custom role a company's own admin
-defines on the User Roles page.
+one of the built-in role templates shared by every company (see the
+Default User Roles page) or a custom role a company's own admin defines
+on the User Roles page. "Platform Admin" is the one structurally required
+template - see access_control.STRUCTURALLY_REQUIRED_ROLE_NAMES - every
+company always has a role by that exact name so its own admin pages stay
+reachable; renamed 2026-08-04 from the old literal "admin".
 
 Legacy fallback: if the `users` table has zero rows at all (a deployment
 that hasn't been through the new User Accounts admin page yet), login
@@ -18,13 +21,13 @@ user exists, secrets.toml-based login is ignored entirely - there is no
 way to have both active at once, to avoid two disagreeing sources of truth
 for who's allowed in.
 
-Roles: admin, technical, viewer
-- admin:     full access, including Maintenance/License Admin and PI3 connectivity toggle.
-             A company's own admin manages that company's users/custom roles; only a
-             platform-owner admin (HTC) can manage Companies or Subscription Types.
-- technical: can create/edit records, cannot approve their own trial closures
-             or change commercial/admin settings
-- viewer:    read-only access to all screens
+Roles: full access ("Platform Admin") down to read-only ("Read Only"),
+plus whatever else a company or the platform owner has added as a
+template on the Default User Roles page - not a fixed 3-tier list.
+"Platform Admin" gets full access, including Maintenance/License Admin
+and PI3 connectivity toggle; a company's own Platform Admin manages that
+company's users/custom roles, only the platform owner (HTC) can manage
+Companies or Subscription Types.
 
 is_super_admin (User.is_super_admin): an unconditional bypass of every
 RolePagePermission check, independent of role name or is_platform_owner -
@@ -38,7 +41,7 @@ Expected st.secrets structure for the legacy fallback only (see
 [users.jane]
 password = "changeme"
 display_name = "Jane Doe"
-role = "admin"
+role = "Platform Admin"
 """
 
 import datetime as dt
@@ -169,7 +172,7 @@ def require_login():
         st.session_state.setdefault("auth_source", "dev")
         st.session_state.setdefault("username", "dev")
         st.session_state.setdefault("display_name", "Dev (auth disabled)")
-        st.session_state.setdefault("role", "admin")
+        st.session_state.setdefault("role", "Platform Admin")
         st.session_state.setdefault("role_id", None)
         st.session_state.setdefault("company_id", None)
         st.session_state.setdefault("is_platform_owner", True)
@@ -258,8 +261,8 @@ def require_role(*allowed_roles):
 def require_platform_owner():
     """Call at the top of a page reserved for the platform owner (HTC) only
     - Companies and Subscription Types - regardless of the visiting user's
-    role name, since even another company's own 'admin' must not manage
-    other companies or the global subscription catalog."""
+    role name, since even another company's own 'Platform Admin' must not
+    manage other companies or the global subscription catalog."""
     if not st.session_state.get("is_platform_owner", False):
         st.error("This screen is only available to the platform administrator.")
         st.stop()

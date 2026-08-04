@@ -7,12 +7,13 @@ page. They exist for one purpose: role_provisioning.clone_builtin_roles_for_comp
 copies whatever's set here into a new company's own role clones the
 moment that company is created.
 
-Originally exactly 3 fixed templates (admin/technical/viewer); the
-platform owner can now add more, rename/describe any of them, and delete
-ones that aren't needed - except "admin", which is protected (see
-access_control.STRUCTURALLY_REQUIRED_ROLE_NAMES): every company needs a
-role literally named "admin" for its own User Roles/User Accounts pages
-to ever be reachable again.
+Originally exactly 3 fixed templates (admin/technical/viewer, since
+renamed/consolidated); the platform owner can now add more, rename/
+describe any of them, and delete ones that aren't needed - except
+"Platform Admin" (renamed 2026-08-04 from the old literal "admin"), which
+is protected (see access_control.STRUCTURALLY_REQUIRED_ROLE_NAMES): every
+company needs a role literally named "Platform Admin" for its own User
+Roles/User Accounts pages to ever be reachable again.
 
 Each template's access to every page is one of three states - Hidden /
 View only / Full access, not just a visibility checkbox - see db.py's
@@ -42,15 +43,15 @@ logout_button()
 st.title("Default User Roles")
 render_function_action_intro(
     function_text=(
-        "Defines the role templates every new company is seeded with (admin/technical/viewer, "
-        "plus any others added here) - not the roles themselves, which are cloned per company on "
+        "Defines the role templates every new company is seeded with (Platform Admin plus whatever "
+        "else has been added here) - not the roles themselves, which are cloned per company on "
         "creation so one company narrowing a role can never affect another's. For each page, a "
         "template grants Hidden (page not shown), View only (visible, read-only), or Full access "
         "(visible and fully usable)."
     ),
     action_text=(
-        "Add a template if the built-in three don't cover a role your customers commonly need. "
-        "Click a template to edit its name/description or its per-page access. 'admin' is "
+        "Add a template if the built-in ones don't cover a role your customers commonly need. "
+        "Click a template to edit its name/description or its per-page access. 'Platform Admin' is "
         "protected - every company needs a role by that exact name for its own admin pages to "
         "stay reachable - so it can't be renamed or deleted. Changes here only apply to companies "
         "created afterward; existing companies' clones are untouched."
@@ -116,8 +117,8 @@ else:
         st.markdown(f"**Edit default role: {selected.name}**")
         if is_protected:
             st.caption(
-                "This role is protected - every company needs a role named 'admin' for its own "
-                "admin pages to stay reachable, so its name can't be changed and it can't be deleted."
+                "This role is protected - every company needs a role named 'Platform Admin' for its "
+                "own admin pages to stay reachable, so its name can't be changed and it can't be deleted."
             )
         with st.form(f"edit_default_role_name_{selected.id}"):
             e_name = st.text_input(

@@ -318,9 +318,9 @@ class User(Base):
     # can_use_page's docstring) a platform-owner-company user assigned a
     # narrow role (e.g. "viewer") is still meant to be restricted like
     # anyone else, so HTC can give its own staff genuinely limited access
-    # too. But that same design means the platform owner's own "admin" role
-    # clone is just an ordinary row in the roles table - reachable and
-    # editable from the User Roles page like any other company's role - so
+    # too. But that same design means the platform owner's own "Platform
+    # Admin" role clone is just an ordinary row in the roles table -
+    # reachable and editable from the User Roles page like any other company's role - so
     # a platform-owner admin could accidentally narrow their OWN role out
     # from under themselves with no separate escape hatch. is_super_admin is
     # that escape hatch: a per-person flag, editable only on a platform-

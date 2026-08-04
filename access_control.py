@@ -101,11 +101,15 @@ ACCESS_STATE_LABELS = {
 }
 
 # Role names required by name-literal checks elsewhere in the app (see
-# auth.require_role("admin") on the User Roles and User Accounts pages,
-# and pages/10_PI3_AI_Connectivity.py's role == "admin" check) - a company
-# with no role named "admin" could never manage its own users or roles
-# again. Enforced as a delete/rename guard on the Default User Roles page.
-STRUCTURALLY_REQUIRED_ROLE_NAMES = frozenset({"admin"})
+# auth.require_role("Platform Admin") on the User Roles and User Accounts
+# pages, and pages/10_PI3_AI_Connectivity.py's role == "Platform Admin"
+# check) - a company with no role named "Platform Admin" could never
+# manage its own users or roles again. Enforced as a delete/rename guard
+# on the Default User Roles page. Renamed 2026-08-04 from "admin" (the
+# literal stored value, not just a label) per user direction - every
+# existing Role row named "admin" was updated to "Platform Admin" in the
+# same batch, in both Supabase and any local test databases.
+STRUCTURALLY_REQUIRED_ROLE_NAMES = frozenset({"platform admin"})
 
 # page_key -> title (title kept here only for the permission-matrix editor;
 # app.py's own st.Page(..., title=...) calls remain the source of truth for

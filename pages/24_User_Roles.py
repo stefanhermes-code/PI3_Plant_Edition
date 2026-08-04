@@ -1,12 +1,14 @@
 """Screen: User Roles
 
-Three built-in roles (admin, technical, viewer) ship for every company and
-can't be renamed or deleted - see auth.py's docstring for what each grants
-today, and db.py's Role docstring for why each company gets its own CLONE
-of these 3 roles (created automatically when the company is added) rather
-than sharing one global row: narrowing one company's "viewer" role must
-never narrow another company's. Every role shown here - built-in clone or
-custom - is scoped to exactly one company, so editing it is always safe.
+The built-in role templates (see the Default User Roles page - currently
+Platform Admin plus whatever else the platform owner has added) ship for
+every company and can't be renamed or deleted here - see auth.py's
+docstring for what Platform Admin grants today, and db.py's Role
+docstring for why each company gets its own CLONE of these roles (created
+automatically when the company is added) rather than sharing one global
+row: narrowing one company's role must never narrow another company's.
+Every role shown here - built-in clone or custom - is scoped to exactly
+one company, so editing it is always safe.
 
 Any company's own admin can also define custom roles scoped to just that
 company. Every role (built-in clone or custom) can have its page visibility
@@ -32,7 +34,7 @@ from helpers import clickable_table, delete_with_confirm, page_access_grid, page
 page_setup("User Roles")
 init_db()
 require_login()
-require_role("admin")
+require_role("Platform Admin")
 logout_button()
 
 st.title("User Roles")
