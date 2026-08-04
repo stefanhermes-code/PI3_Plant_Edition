@@ -56,7 +56,8 @@ render_function_action_intro(
         "you want to optimize toward, then read the ranked table - the setting at the top "
         "separates good from bad outcomes most clearly and is the one most worth reviewing on the "
         "floor. Use the PI3 synthesis further down for a plain-language interpretation before "
-        "proposing any setpoint change to your team."
+        "proposing any setpoint change to your team. Download the Machine Settings Optimization "
+        "Report further down for a shareable PDF/Excel summary of the ranked table above."
     ),
 )
 session = get_session()

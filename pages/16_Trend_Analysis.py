@@ -75,7 +75,9 @@ render_function_action_intro(
         "there is to spec, then CUSUM for a slower drift the control chart might miss, and the "
         "trend test to confirm whether an apparent trend is statistically real. If something "
         "flags, use 'Ask PI3' to get it interpreted against recipe changes, machine changes, and "
-        "quality-issue history before acting on it."
+        "quality-issue history before acting on it. Download the Trend Analysis Report further "
+        "down for a shareable PDF/Excel summary of the control chart, capability, CUSUM, and "
+        "trend-test results above."
     ),
 )
 session = get_session()

@@ -45,7 +45,8 @@ render_function_action_intro(
         "Select the quality issue you're investigating, review the run-vs-prior-run diff shown, "
         "and check whether any of the flagged differences line up with a plausible cause. Use "
         "'Ask PI3' if you want that diff interpreted alongside historical expert notes and "
-        "similar past cases before you commit to a root cause."
+        "similar past cases before you commit to a root cause. Download the Root-Cause "
+        "Comparison Report further down for a shareable PDF/Excel summary of the diff above."
     ),
 )
 session = get_session()

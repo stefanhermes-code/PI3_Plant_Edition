@@ -73,7 +73,9 @@ render_function_action_intro(
         "dosage correlates most strongly with a miss before adjusting anything on the floor. If "
         "the current formulation isn't meeting target, confirm the target properties further down "
         "and request a PI3 recommendation, then take that proposal to your technical team to trial "
-        "and confirm before releasing it as a new recipe version."
+        "and confirm before releasing it as a new recipe version. Download the Recipe Optimization "
+        "Report further down for a shareable PDF/Excel summary of the cost, target, and "
+        "correlation analysis above."
     ),
 )
 session = get_session()

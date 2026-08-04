@@ -61,17 +61,18 @@ logout_button()
 st.title("Report")
 render_function_action_intro(
     function_text=(
-        "Generates three standard report types - one production run's conformance record, a "
-        "plant/period summary, or a closed trial's formal writeup - each with an in-app preview "
-        "plus PDF and Excel download. Every logged-in user can generate these; it's not gated "
-        "behind PI3 connectivity."
+        "Generates four standard report types - one production run's conformance record, a "
+        "plant/period summary, a closed trial's formal writeup, or one sample's certificate of "
+        "analysis - each with an in-app preview plus PDF and Excel download. Every logged-in user "
+        "can generate these; it's not gated behind PI3 connectivity."
     ),
     action_text=(
-        "Pick the tab for the report you need, select the run, plant/period, or trial it should "
-        "cover, and preview it before downloading. Use the Batch Release / Conformance Record to "
-        "see whether a single batch met spec (and what else was going on if it didn't), the "
-        "Plant/Period Summary for a broader review across a date range, and the Trial Closeout "
-        "Report once a customer or optimization trial is formally closed."
+        "Pick the tab for the report you need, select the run, plant/period, trial, or sample it "
+        "should cover, and preview it before downloading. Use the Batch Release / Conformance "
+        "Record to see whether a single batch met spec (and what else was going on if it didn't), "
+        "the Plant/Period Summary for a broader review across a date range, the Trial Closeout "
+        "Report once a customer or optimization trial is formally closed, and the Sample "
+        "Certificate of Analysis for one sample's full result-and-recipe traceability."
     ),
 )
 session = get_session()

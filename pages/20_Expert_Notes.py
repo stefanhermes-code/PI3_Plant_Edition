@@ -52,12 +52,14 @@ render_function_action_intro(
     function_text=(
         "Captures qualitative expert knowledge that doesn't fit a structured field - a hunch "
         "about why a batch behaved oddly, a supplier quirk, a process tip - linked to a "
-        "production run or a foam grade. It also shows the PI3-sourced notes "
+        "production run, a foam grade, or a foam family. It also shows the PI3-sourced notes "
         "a reviewer chose to keep from Recipe Optimization, Trend Analysis, Process-Property "
-        "Correlation, or Root-Cause Assistant, each tagged with its originating question and "
-        "re-exportable as the same Word report the reviewer originally saw. When PI3 connectivity "
-        "is enabled for the relevant plant, a note saved here also feeds PI3 so future Similar "
-        "Case Retrieval searches and Root-Cause Assistant comparisons can retrieve it."
+        "Correlation, Root-Cause Assistant, or Machine Settings Optimization, each tagged with "
+        "its originating question and re-exportable as the same Word report the reviewer "
+        "originally saw. When PI3 connectivity is enabled for the relevant plant, a note saved "
+        "here also feeds PI3 so future free-form Ask PI3 questions and Root-Cause Assistant "
+        "comparisons can retrieve it. An aggregate report further down breaks all notes in scope "
+        "down by confidence level, source, and linked-entity type."
     ),
     action_text=(
         "Pick what the note is about (a production run, foam grade, or foam family), write it, set a "

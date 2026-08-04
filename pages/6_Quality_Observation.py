@@ -166,16 +166,14 @@ render_function_action_intro(
         "Captures what went wrong (or was noticed) on a batch - the issue type, severity, "
         "frequency, where in the block it showed up, suspected cause, and how confident the "
         "report is - building a factual, confidence-rated history of quality issues per foam "
-        "grade instead of word-of-mouth. It links primarily to the production run, since routine "
-        "batches get issues logged too, not only formal trials; linking to a trial is optional, "
-        "for when the issue was found during a deliberate investigation."
+        "grade instead of word-of-mouth. Each issue belongs to exactly one source: a routine "
+        "production run, a Customer Trial, or an Optimization Trial."
     ),
     action_text=(
         "Pick which of the three you're logging against (Production Run / Customer Trial / "
         "Optimization Trial), then log the issue type, severity, frequency, location in the block, "
         "suspected cause, and your confidence level in that assessment. Use the CSV/Excel import "
-        "tab to bulk-load a batch of issues instead of entering them one by one. Link to a trial "
-        "record only if this issue surfaced during a formal trial/experiment on a production run."
+        "tab to bulk-load a batch of issues instead of entering them one by one."
     ),
 )
 session = get_session()

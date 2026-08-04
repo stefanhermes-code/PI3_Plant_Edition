@@ -58,7 +58,9 @@ render_function_action_intro(
         "setting at the top has the strongest statistical association with that outcome across "
         "the recorded runs. Treat it as a lead to investigate, not a cause on its own: review it "
         "against current raw materials and process conditions before treating it as causal. Use "
-        "'Ask PI3' if you want the ranked pattern turned into a plain-language interpretation."
+        "'Ask PI3' if you want the ranked pattern turned into a plain-language interpretation. "
+        "Download the Process-Property Correlation Report further down for a shareable PDF/Excel "
+        "summary of the ranked table above."
     ),
 )
 session = get_session()

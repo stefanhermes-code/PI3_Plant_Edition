@@ -3,9 +3,12 @@
 The primary, self-sufficient record of a batch: recipe used, machine
 parameters, and (elsewhere) the quality results it produced. This is
 routine, everyday data entry - it does NOT require framing a run as an
-experiment. If a run is a deliberate trial/change investigation, flag it
-as one separately on the Trial / Experiment page; that is optional and
-most runs never need it.
+experiment. A deliberate trial/change investigation is captured as its own
+independent Customer Trial or Optimization Trial record instead (see
+pages/11_Customer_Trials.py / pages/12_Optimization_Trials.py) - the old
+"Trial / Experiment" flag on a production run itself, and the standalone
+Trial / Experiment page, were removed along with TrialRecord/
+AdjustmentConclusion/ApprovalRecord (see cascades.py/db.py history).
 
 Includes the Mandatory-tier process-data capture recommended in "Expanding
 PI3 Plant Edition Production-Trial Data Capture for Polyurethane Foaming
@@ -238,8 +241,9 @@ render_function_action_intro(
         "This is the master record for a production batch. It stores the recipe and machine the "
         "batch ran on, its Setup and Finalized process settings, the metered material flows, any "
         "production events, and the runtime data. Quality test results and issues are captured on "
-        "separate pages but always link back to the run created here. Framing a run as an "
-        "experiment is optional and handled on the Trial / Experiment page."
+        "separate pages but always link back to the run created here. A deliberate trial/change "
+        "investigation is its own independent record on the Customer Trials & Samples or "
+        "Optimization Trials & Samples page instead - most runs never need that."
     ),
     action_steps=[
         "Open the **Production Runs** tab and create the batch record: pick the foam grade, "
@@ -247,8 +251,8 @@ render_function_action_intro(
         "Open the **Setup** tab and log the planned/configured settings for this run, including "
         "ambient temperature and humidity.",
         "Open the **Runtime Data** tab once the run is finished and log what actually happened - "
-        "the same settings as Setup, plus line-speed, rise time and curing notes. Comparing Setup "
-        "to Runtime Data is the plan-vs-actual read.",
+        "the same settings as Setup, plus line-speed and rise time. Comparing Setup to Runtime "
+        "Data is the plan-vs-actual read.",
         "Open the **Component Stream Readings** tab and log the metered material flows. Readings "
         "always attach to the Runtime Data (Finalized) snapshot.",
         "Open the **Production Events** tab and log any alarms, interventions or grade changes.",
