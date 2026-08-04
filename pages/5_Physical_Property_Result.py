@@ -54,6 +54,7 @@ from helpers import (
     csv_excel_uploader,
     dedupe_import_rows,
     delete_with_confirm,
+    log_export_click,
     page_setup,
     render_data_table,
     render_function_action_intro,
@@ -63,6 +64,7 @@ from helpers import (
     view_only_notice,
 )
 from quality_standards import compute_pass_fail, tolerance_label
+import reports
 from tenant_scope import (
     apply_scope,
     company_picker,
@@ -609,6 +611,58 @@ else:
         .reset_index(name="Count")
     )
     render_pareto_chart(property_counts, category_col="Property", count_col="Count")
+
+    # -------------------------------------------------------------------
+    # Quality Test Result Report - exports exactly this selection (Pass/
+    # Fail + Property + Foam scope filters above), aggregated into a
+    # pass-rate summary, failure breakdown charts, and a curated table of
+    # just the failing results - not a dump of every row in the table
+    # above (the CSV export on that table already covers that). This
+    # report lives here rather than on the Report page because it needs
+    # this comprehensive selection built first, unlike the Report page's
+    # other reports which are each a single dropdown choice.
+    st.divider()
+    st.subheader("Quality Test Result Report")
+    if set(pass_fail_filter) == set(pass_fail_options):
+        pass_fail_label = "All"
+    elif pass_fail_filter:
+        pass_fail_label = ", ".join(pass_fail_filter)
+    else:
+        pass_fail_label = "None selected"
+    if property_filter is None or (property_name_options and set(property_filter) == set(property_name_options)):
+        property_label = "All properties"
+    elif not property_filter:
+        property_label = "None selected"
+    elif len(property_filter) <= 5:
+        property_label = ", ".join(property_filter)
+    else:
+        property_label = f"{len(property_filter)} of {len(property_name_options)} properties"
+    st.caption(f"Pass/Fail: {pass_fail_label} · Property: {property_label} · Foam scope: {scope_label}")
+
+    report_data = reports.build_quality_test_report_data(
+        session, [r.id for r, _ in filtered_results],
+        {"pass_fail_label": pass_fail_label, "property_label": property_label, "foam_scope_label": scope_label},
+    )
+    rc1, rc2, rc3 = st.columns(3)
+    rc1.metric("Results in selection", report_data["total_results"])
+    rc2.metric("Pass rate", f"{report_data['pass_rate']}%" if report_data["pass_rate"] is not None else "—")
+    rc3.metric("Failing results", report_data["fail_count"])
+    dl1, dl2 = st.columns(2)
+    dl1.download_button(
+        "Download PDF", data=reports.render_quality_test_report_pdf(report_data),
+        file_name="quality_test_result_report.pdf", mime="application/pdf",
+        key="quality_test_report_pdf",
+        on_click=log_export_click, args=("quality_test_report_pdf",),
+        kwargs={"description": f"{pass_fail_label} · {property_label} · {scope_label}"},
+    )
+    dl2.download_button(
+        "Download Excel", data=reports.render_quality_test_report_excel(report_data),
+        file_name="quality_test_result_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="quality_test_report_excel",
+        on_click=log_export_click, args=("quality_test_report_excel",),
+        kwargs={"description": f"{pass_fail_label} · {property_label} · {scope_label}"},
+    )
 
 selected_result_id = st.session_state.get("result_selected_id")
 selected_result = (

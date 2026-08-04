@@ -61,8 +61,8 @@ user direction, a report whose subject is a single simple choice (pick
 one run from a dropdown) belongs on the Report page alongside the other
 selector-driven reports; a report whose subject needs a comprehensive
 multi-field selection first (date range, foam grade, etc. - see the
-still-to-be-built Quality Test Result report) belongs on its own page
-instead, next to where that selection naturally happens.
+Quality Test Result report below) belongs on its own page instead, next
+to where that selection naturally happens.
 
 - build_batch_release_record_data() / render_batch_release_record_pdf()
   / render_batch_release_record_excel()
@@ -81,14 +81,33 @@ instead, next to where that selection naturally happens.
   document; a flagged one pulls in exactly what's relevant, not
   everything that exists.
 
-A fourth, narrower report type lives here too:
+A fifth report, added 2026-08-04, lives on its own page rather than the
+Report page - per the same placement principle stated above, this report's
+subject is a comprehensive multi-field selection (Pass/Fail, Property, and
+Foam scope), not a single dropdown choice, so it lives on
+pages/5_Physical_Property_Result.py, right below the filter controls and
+the existing on-page Pareto chart it shares its scope with:
+
+- build_quality_test_report_data() / render_quality_test_report_pdf()
+  / render_quality_test_report_excel()
+  Takes the exact set of PhysicalPropertyResult rows the page has already
+  scoped (tenant) and filtered (Pass/Fail, Property, Foam scope) - the
+  report never re-derives its own selection, so it always matches what's
+  on screen. Aggregates that set into a pass-rate summary, a failures-by-
+  property breakdown (bar chart), a pass/fail-by-foam-grade breakdown
+  (bar chart, only shown when the selection spans more than one grade),
+  and a curated table of just the failing results (target/actual/
+  deviation) - not the full underlying row set, which the page's own CSV
+  export already covers.
+
+A sixth, narrower report type lives here too:
 
 - build_pi3_qa_report_data() / render_pi3_qa_report_docx()
   A single "Ask PI3" question-and-answer exchange (see
   helpers.render_ask_pi3_section) - the question, PI3's answer, and an
   appendix of the exact data PI3 checked to produce it (SQL + rows
   returned, or the verified-analysis arguments and result). Unlike the
-  three reports above, this is DOCX only (no PDF/Excel - there's no
+  reports above, this is DOCX only (no PDF/Excel - there's no
   tabular data here that benefits from a spreadsheet), and it is always
   built from this same code path, so every export has identical
   formatting regardless of who generates it or what was asked - a
@@ -103,6 +122,10 @@ import re
 import pandas as pd
 from docx import Document
 from docx.shared import Cm, Pt, RGBColor
+from openpyxl.chart import BarChart, Reference
+from openpyxl.utils import get_column_letter
+from reportlab.graphics.charts.barcharts import VerticalBarChart
+from reportlab.graphics.shapes import Drawing
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
@@ -157,19 +180,93 @@ def _pdf_bytes(build_story):
     return buf.getvalue()
 
 
-def _excel_bytes(sheets):
+def _excel_bytes(sheets, charts=None):
     """sheets: dict of sheet_name -> list-of-dicts or DataFrame. Empty
     sections still get a sheet (with a placeholder row) so the workbook
-    structure is predictable regardless of what data exists."""
+    structure is predictable regardless of what data exists.
+
+    charts: optional list of (sheet_name, chart_builder) pairs. Each
+    chart_builder(ws, df) is called after every sheet has been written -
+    ExcelWriter needs the full workbook before a chart can reference
+    another sheet's cells - with the openpyxl worksheet and the exact
+    DataFrame written to it, so it can compute correct cell ranges. See
+    _add_bar_chart for the standard builder."""
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        written = {}
         for name, rows in sheets.items():
             df = rows if isinstance(rows, pd.DataFrame) else pd.DataFrame(rows)
             if df.empty:
                 df = pd.DataFrame({"—": ["No data recorded"]})
             # Excel sheet names are capped at 31 characters.
-            df.to_excel(writer, sheet_name=name[:31], index=False)
+            sheet_name = name[:31]
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+            written[name] = (writer.sheets[sheet_name], df)
+        for name, chart_builder in (charts or []):
+            ws_df = written.get(name)
+            if ws_df:
+                chart_builder(*ws_df)
     return buf.getvalue()
+
+
+def _add_bar_chart(ws, df, title, category_col, value_cols):
+    """Adds a native Excel bar chart to worksheet ws, built from the data
+    just written to it - category_col plus one or more value_cols (each
+    becomes its own series, e.g. Pass count / Fail count side by side).
+    Anchored a couple of columns to the right of the data table so it
+    doesn't overlap it. No-ops on the placeholder "No data recorded" sheet
+    (category_col won't be a real column in that case)."""
+    if df.empty or category_col not in df.columns:
+        return
+    n_rows = len(df)
+    col_idx = {c: i + 1 for i, c in enumerate(df.columns)}
+    chart = BarChart()
+    chart.type = "col"
+    chart.title = title
+    chart.y_axis.title = "Count"
+    chart.height, chart.width = 8, 16
+    cats = Reference(ws, min_col=col_idx[category_col], min_row=2, max_row=n_rows + 1)
+    for vcol in value_cols:
+        if vcol not in col_idx:
+            continue
+        data = Reference(ws, min_col=col_idx[vcol], min_row=1, max_row=n_rows + 1)
+        chart.add_data(data, titles_from_data=True)
+    if not chart.series:
+        return
+    chart.set_categories(cats)
+    anchor_col = get_column_letter(len(df.columns) + 2)
+    ws.add_chart(chart, f"{anchor_col}2")
+
+
+def _bar_chart(story, title, categories, values, note=None, width=460, height=170,
+                bar_color=colors.HexColor("#4A7A9D")):
+    """A simple vertical bar chart flowable for the PDF - categories/values
+    are same-length parallel lists. Used wherever a report should show a
+    breakdown at a glance rather than force the reader to scan a table for
+    it (e.g. failures by property)."""
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(title, STYLES["Heading3"]))
+    if note:
+        story.append(_p(note))
+    if not categories or not any(values):
+        story.append(_p("No data recorded."))
+        return
+    drawing = Drawing(width, height)
+    chart = VerticalBarChart()
+    chart.x = 45
+    chart.y = 30
+    chart.height = height - 60
+    chart.width = width - 65
+    chart.data = [values]
+    chart.categoryAxis.categoryNames = [str(c)[:16] for c in categories]
+    chart.categoryAxis.labels.angle = 30
+    chart.categoryAxis.labels.dy = -12
+    chart.categoryAxis.labels.dx = -6
+    chart.categoryAxis.labels.fontSize = 7
+    chart.valueAxis.valueMin = 0
+    chart.bars[0].fillColor = bar_color
+    drawing.add(chart)
+    story.append(drawing)
 
 
 def _p(text, style="Normal"):
@@ -1156,7 +1253,210 @@ def render_batch_release_record_excel(data):
 
 
 # ---------------------------------------------------------------------------
-# 6. PI3 Q&A Report (DOCX only)
+# 6. Quality Test Result Report (Physical Property Result page)
+#
+# Placement (per user direction 2026-08-04): this report's subject is a
+# comprehensive multi-field selection (Pass/Fail, Property, Foam scope) the
+# reader has to build up first, not a single dropdown choice - so it lives
+# on pages/5_Physical_Property_Result.py itself, right below the same
+# filter controls and Pareto chart it shares its scope with, rather than
+# on the Report page. build_quality_test_report_data() never re-derives
+# tenant scope or filters on its own - it purely aggregates the exact
+# PhysicalPropertyResult id set the page has already scoped and filtered,
+# so the report always matches what's on screen at the moment it's
+# generated.
+# ---------------------------------------------------------------------------
+
+def _qtr_source_and_grade(result):
+    """(source label, human-readable parent description, foam grade name)
+    for a PhysicalPropertyResult, resolving whichever of the three
+    mutually exclusive parents (production run / customer trial /
+    optimization trial - see db.SAMPLE_SOURCE_TYPES) it belongs to.
+    Mirrors pages/5_Physical_Property_Result.py's own
+    _result_source_desc()/_result_foam_grade_id() - kept as a local copy
+    here since reports.py doesn't import from page modules."""
+    if result.production_run_id is not None:
+        run = result.production_run
+        grade = run.foam_grade if run else None
+        desc = f"Run #{run.id} — {grade.grade_name if grade else '—'} · {run.run_date}" if run else f"Run #{result.production_run_id}"
+        return "Production Run", desc, grade.grade_name if grade else "—"
+    if result.customer_trial_id is not None:
+        t = result.customer_trial
+        grade = t.foam_grade if t else None
+        desc = f"Trial #{t.id} — {t.customer_name}" if t else f"Trial #{result.customer_trial_id}"
+        return "Customer Trial", desc, grade.grade_name if grade else "—"
+    if result.optimization_trial_id is not None:
+        t = result.optimization_trial
+        grade = t.foam_grade if t else None
+        ref = (t.improvement_initiative_reference or "(no reference)") if t else ""
+        desc = f"Trial #{t.id} — {ref}" if t else f"Trial #{result.optimization_trial_id}"
+        return "Optimization Trial", desc, grade.grade_name if grade else "—"
+    return "—", "—", "—"
+
+
+def build_quality_test_report_data(session, result_ids, scope):
+    """result_ids: PhysicalPropertyResult ids already scoped (tenant) and
+    filtered (Pass/Fail, Property, Foam scope) by the caller - see the
+    module-level note above. scope: dict of already-formatted display
+    strings describing what was selected - pass_fail_label,
+    property_label, foam_scope_label - shown in the report header so the
+    reader knows exactly what this report does and doesn't cover."""
+    results = (
+        session.query(PhysicalPropertyResult)
+        .filter(PhysicalPropertyResult.id.in_(result_ids)).all()
+        if result_ids else []
+    )
+
+    detail = []
+    for r in results:
+        verdict = compute_pass_fail(r.property_name, r.target_value, r.actual_value) or "Not computed"
+        source_label, source_desc, grade_name = _qtr_source_and_grade(r)
+        detail.append({
+            "result": r, "verdict": verdict,
+            "source_desc": source_desc, "grade_name": grade_name,
+        })
+
+    total = len(detail)
+    pass_count = sum(1 for d in detail if d["verdict"] == "Pass")
+    fail_count = sum(1 for d in detail if d["verdict"] == "Fail")
+    not_computed_count = total - pass_count - fail_count
+    total_scored = pass_count + fail_count
+    pass_rate = round(100 * pass_count / total_scored) if total_scored else None
+
+    # Failures by property - the same grouping as the on-page Pareto chart
+    # (helpers.render_pareto_chart), recomputed here since reports.py
+    # can't import a Streamlit-rendering helper. Fail-only, not
+    # pass+fail+not-computed per property, since "which properties are
+    # behind the failures" is the actionable question a Pareto answers.
+    property_fail_counts = {}
+    for d in detail:
+        if d["verdict"] == "Fail":
+            prop = d["result"].property_name
+            property_fail_counts[prop] = property_fail_counts.get(prop, 0) + 1
+    property_breakdown = [
+        {"Property": k, "Fail count": v}
+        for k, v in sorted(property_fail_counts.items(), key=lambda kv: -kv[1])
+    ]
+
+    grade_counts = {}
+    for d in detail:
+        bucket = grade_counts.setdefault(d["grade_name"], {"Pass": 0, "Fail": 0, "Not computed": 0})
+        bucket[d["verdict"]] += 1
+    grade_breakdown = [
+        {"Foam grade": g, "Pass count": c["Pass"], "Fail count": c["Fail"]}
+        for g, c in sorted(grade_counts.items())
+    ]
+    # Only meaningful as a chart when the selection actually spans more
+    # than one grade - a single-grade selection would just re-draw the
+    # header metrics as a one-bar "chart".
+    show_grade_breakdown = len(grade_counts) > 1
+
+    failing_results = [
+        {
+            "Source": d["source_desc"], "Property": d["result"].property_name,
+            "Target": d["result"].target_value, "Actual": d["result"].actual_value,
+            "Unit": d["result"].unit or "",
+            "Deviation": (
+                round(d["result"].actual_value - d["result"].target_value, 2)
+                if d["result"].actual_value is not None and d["result"].target_value is not None
+                else None
+            ),
+            "Foam grade": d["grade_name"], "Tested": d["result"].tested_at,
+        }
+        for d in sorted(detail, key=lambda d: (d["result"].property_name, d["source_desc"]))
+        if d["verdict"] == "Fail"
+    ]
+
+    return {
+        "scope": scope,
+        "total_results": total,
+        "pass_count": pass_count,
+        "fail_count": fail_count,
+        "not_computed_count": not_computed_count,
+        "pass_rate": pass_rate,
+        "property_breakdown": property_breakdown,
+        "grade_breakdown": grade_breakdown,
+        "show_grade_breakdown": show_grade_breakdown,
+        "failing_results": failing_results,
+    }
+
+
+def render_quality_test_report_pdf(data):
+    scope = data["scope"]
+
+    def build(story):
+        _title_block(
+            story, "Quality Test Result Report",
+            f"Pass/Fail: {scope['pass_fail_label']} · Property: {scope['property_label']} · "
+            f"Foam scope: {scope['foam_scope_label']}",
+        )
+        story.append(_key_value_table([
+            ("Results", data["total_results"]),
+            ("Pass rate", f"{data['pass_rate']}%" if data["pass_rate"] is not None else "—"),
+            ("Pass", data["pass_count"]), ("Fail", data["fail_count"]),
+            ("Not computed", data["not_computed_count"]), ("", ""),
+        ]))
+
+        _bar_chart(
+            story, "Pass / Fail breakdown",
+            ["Pass", "Fail", "Not computed"],
+            [data["pass_count"], data["fail_count"], data["not_computed_count"]],
+        )
+
+        prop_rows = data["property_breakdown"]
+        _bar_chart(
+            story, "Failures by property",
+            [row["Property"] for row in prop_rows], [row["Fail count"] for row in prop_rows],
+            note="Which tested properties are behind the failures in this selection." if prop_rows else None,
+        )
+
+        if data["show_grade_breakdown"]:
+            grade_rows = data["grade_breakdown"]
+            _bar_chart(
+                story, "Failures by foam grade",
+                [row["Foam grade"] for row in grade_rows], [row["Fail count"] for row in grade_rows],
+                note="Shown because this selection spans more than one foam grade.",
+            )
+
+        _section(story, "Failing results (target vs. actual)", data["failing_results"])
+    return _pdf_bytes(build)
+
+
+def render_quality_test_report_excel(data):
+    scope = data["scope"]
+    header = [{
+        "Pass/Fail filter": scope["pass_fail_label"], "Property filter": scope["property_label"],
+        "Foam scope": scope["foam_scope_label"], "Results in selection": data["total_results"],
+        "Pass rate": f"{data['pass_rate']}%" if data["pass_rate"] is not None else "—",
+        "Pass count": data["pass_count"], "Fail count": data["fail_count"],
+        "Not computed count": data["not_computed_count"],
+    }]
+    pass_fail_summary = [
+        {"Verdict": "Pass", "Count": data["pass_count"]},
+        {"Verdict": "Fail", "Count": data["fail_count"]},
+        {"Verdict": "Not computed", "Count": data["not_computed_count"]},
+    ]
+    sheets = {
+        "Header": header,
+        "Pass-Fail Summary": pass_fail_summary,
+        "Failures by Property": data["property_breakdown"],
+        "Failing Results": data["failing_results"],
+    }
+    charts = [
+        ("Pass-Fail Summary", lambda ws, df: _add_bar_chart(ws, df, "Pass / Fail breakdown", "Verdict", ["Count"])),
+        ("Failures by Property", lambda ws, df: _add_bar_chart(ws, df, "Failures by property", "Property", ["Fail count"])),
+    ]
+    if data["show_grade_breakdown"]:
+        sheets["Failures by Foam Grade"] = data["grade_breakdown"]
+        charts.append((
+            "Failures by Foam Grade",
+            lambda ws, df: _add_bar_chart(ws, df, "Failures by foam grade", "Foam grade", ["Fail count"]),
+        ))
+    return _excel_bytes(sheets, charts=charts)
+
+
+# ---------------------------------------------------------------------------
+# 7. PI3 Q&A Report (DOCX only)
 # ---------------------------------------------------------------------------
 
 _HTC_LOGO_PATH = "assets/htc_global_logo_blue_steel.png"
