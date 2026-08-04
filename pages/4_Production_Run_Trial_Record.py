@@ -88,7 +88,6 @@ from helpers import (
     dedupe_import_rows,
     delete_with_confirm,
     import_within_row_limit,
-    log_export_click,
     page_setup,
     parse_dt,
     render_data_table,
@@ -99,7 +98,6 @@ from helpers import (
     view_only_notice,
 )
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company, plant_ids_for_company
-import reports
 
 RUN_REQUIRED_COLUMNS = ["foam_grade_id", "recipe_version_id"]
 RUN_OPTIONAL_COLUMNS = [
@@ -410,63 +408,6 @@ with tab_runs:
                             session.commit()
                             st.success("Production run updated.")
                             st.rerun()
-
-                with st.expander("📄 Batch Release / Conformance Record report"):
-                    st.caption(
-                        "Did this batch meet spec, and is there anything on record to flag - the recipe "
-                        "used, in full, plus a rolled-up quality verdict and any quality issues. If a "
-                        "result failed or an issue was recorded, the report widens automatically to pull "
-                        "relevant context from every other tab on this page (Setup vs. Finalized process "
-                        "settings, actual component stream readings, and Production Events) - a clean "
-                        "run stays a short document, a flagged one shows what else was going on."
-                    )
-                    brr_data = reports.build_batch_release_record_data(session, selected_run.id)
-
-                    vcol1, vcol2 = st.columns(2)
-                    vcol1.metric("Quality verdict", brr_data["quality_verdict"])
-                    vcol2.metric("Recipe version used", brr_data["recipe_version_label"])
-                    if brr_data["has_flags"]:
-                        st.warning("Flagged: " + "; ".join(brr_data["flag_reasons"]))
-
-                    st.write("**Recipe used**")
-                    render_data_table(pd.DataFrame(brr_data["recipe_components"] or [{"—": "No data recorded"}]))
-                    st.write("**Quality test results**")
-                    render_data_table(pd.DataFrame(brr_data["quality_results"] or [{"—": "No data recorded"}]))
-                    st.write("**Quality issues**")
-                    render_data_table(pd.DataFrame(brr_data["quality_issues"] or [{"—": "No data recorded"}]))
-
-                    if brr_data["has_flags"]:
-                        st.write("**Process setting changes (Setup → Finalized)**")
-                        render_data_table(pd.DataFrame(brr_data["setup_deviations"] or [{"—": "No changes"}]))
-                        if brr_data["fallplate_deviations"]:
-                            st.write("**Fall-plate position changes (Setup → Finalized)**")
-                            render_data_table(pd.DataFrame(brr_data["fallplate_deviations"]))
-                        st.write("**Component stream readings (Finalized phase)**")
-                        render_data_table(pd.DataFrame(brr_data["stream_readings"] or [{"—": "No data recorded"}]))
-                        if brr_data["stream_calibration_flags"]:
-                            st.warning(
-                                "Non-valid calibration status recorded for: "
-                                + ", ".join(brr_data["stream_calibration_flags"])
-                            )
-                        st.write("**Production events during this run**")
-                        render_data_table(pd.DataFrame(brr_data["production_events"] or [{"—": "No data recorded"}]))
-
-                    brdl1, brdl2 = st.columns(2)
-                    brdl1.download_button(
-                        "Download PDF", data=reports.render_batch_release_record_pdf(brr_data),
-                        file_name=f"run_{selected_run.id}_batch_release_record.pdf", mime="application/pdf",
-                        key=f"batch_release_pdf_{selected_run.id}",
-                        on_click=log_export_click, args=("batch_release_record_pdf",),
-                        kwargs={"description": f"Run #{selected_run.id}"},
-                    )
-                    brdl2.download_button(
-                        "Download Excel", data=reports.render_batch_release_record_excel(brr_data),
-                        file_name=f"run_{selected_run.id}_batch_release_record.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key=f"batch_release_excel_{selected_run.id}",
-                        on_click=log_export_click, args=("batch_release_record_excel",),
-                        kwargs={"description": f"Run #{selected_run.id}"},
-                    )
 
                 counts = production_run_dependency_counts(session, selected_run.id)
                 total_related = sum(counts.values())

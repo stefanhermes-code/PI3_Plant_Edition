@@ -7,9 +7,20 @@ it did not exist as a dedicated page before. Not gated behind PI3
 connectivity - every logged-in user can generate these.
 
 Three report types, each with an in-app preview plus PDF and Excel
-download buttons: Production Run Report, Plant / Period Summary Report,
-and Trial Closeout Report. All data assembly and file rendering lives in
-reports.py; this page is just selectors + st.download_button wiring.
+download buttons: Batch Release / Conformance Record, Plant / Period
+Summary Report, and Trial Closeout Report. All data assembly and file
+rendering lives in reports.py; this page is just selectors +
+st.download_button wiring.
+
+Batch Release / Conformance Record lives here (rather than on the
+Production Run page itself) because selecting its subject is a single
+simple choice - pick one run from a dropdown - same as the other two
+reports on this page. A report needing a more involved, multi-field
+selection first (date range, foam grade, etc.) belongs on its own page
+instead, next to where that selection naturally happens - see reports.py's
+Recipe / Formulation Record and Where Used Report, both on the Recipes
+page. Replaced the older, flatter build_run_report_data()-based version
+2026-08-04 as part of the app-wide Reports redesign.
 """
 
 import datetime as dt
@@ -39,17 +50,17 @@ logout_button()
 st.title("Report")
 render_function_action_intro(
     function_text=(
-        "Generates three standard report types - a single production run's full record, a "
+        "Generates three standard report types - one production run's conformance record, a "
         "plant/period summary, or a closed trial's formal writeup - each with an in-app preview "
         "plus PDF and Excel download. Every logged-in user can generate these; it's not gated "
         "behind PI3 connectivity."
     ),
     action_text=(
         "Pick the tab for the report you need, select the run, plant/period, or trial it should "
-        "cover, and preview it before downloading. Use the Production Run Report to hand a "
-        "single batch's full record to someone outside the app, the Plant/Period Summary for a "
-        "broader review across a date range, and the Trial Closeout Report once a customer or "
-        "optimization trial is formally closed."
+        "cover, and preview it before downloading. Use the Batch Release / Conformance Record to "
+        "see whether a single batch met spec (and what else was going on if it didn't), the "
+        "Plant/Period Summary for a broader review across a date range, and the Trial Closeout "
+        "Report once a customer or optimization trial is formally closed."
     ),
 )
 session = get_session()
@@ -65,11 +76,19 @@ scoped_customer_trial_ids = customer_trial_ids_for_company(session, active_compa
 scoped_optimization_trial_ids = optimization_trial_ids_for_company(session, active_company_id)
 
 tab_run, tab_period, tab_trial = st.tabs(
-    ["Production Run Report", "Plant / Period Summary", "Trial Closeout Report"]
+    ["Batch Release / Conformance Record", "Plant / Period Summary", "Trial Closeout Report"]
 )
 
 # ---------------------------------------------------------------------------
-# 1. Production Run Report
+# 1. Batch Release / Conformance Record
+#
+# "Did this batch meet spec, and is there anything on record to flag" -
+# the recipe used in full, a rolled-up quality verdict, and any quality
+# issues. If a result failed or an issue was recorded, the report widens
+# automatically to pull relevant context from every other tab on the
+# Production Run page (Setup vs. Finalized process settings, actual
+# component stream readings, and Production Events) - a clean run stays
+# a short document, a flagged one shows what else was going on.
 # ---------------------------------------------------------------------------
 with tab_run:
     runs = (
@@ -89,38 +108,56 @@ with tab_run:
             ),
             key="report_run_select",
         )
-        data = reports.build_run_report_data(session, run.id)
+        data = reports.build_batch_release_record_data(session, run.id)
 
         st.subheader(f"Run #{data['run_id']} — {data['foam_grade']}")
         c1, c2, c3 = st.columns(3)
-        c1.metric("Plant", data["plant"])
-        c2.metric("Recipe version", data["recipe_version"])
-        c3.metric("Machine", data["machine"])
-        st.write(f"**Run date:** {data['run_date']} · **Batch reference:** {data['batch_reference']}")
+        c1.metric("Quality verdict", data["quality_verdict"])
+        c2.metric("Recipe version used", data["recipe_version_label"])
+        c3.metric("Plant", data["plant"])
+        st.write(
+            f"**Run date:** {data['run_date']} · **Batch reference:** {data['batch_reference']} · "
+            f"**Machine:** {data['machine']}"
+        )
+        if data["has_flags"]:
+            st.warning("Flagged: " + "; ".join(data["flag_reasons"]))
 
-        st.write("**Recipe components**")
-        render_data_table(pd.DataFrame(data["components"] or [{"—": "No data recorded"}]))
-        st.write("**Process settings (by phase)**")
-        render_data_table(pd.DataFrame(data["phase_settings"] or [{"—": "No data recorded"}]))
+        st.write("**Recipe used**")
+        render_data_table(pd.DataFrame(data["recipe_components"] or [{"—": "No data recorded"}]))
         st.write("**Quality test results**")
         render_data_table(pd.DataFrame(data["quality_results"] or [{"—": "No data recorded"}]))
         st.write("**Quality issues**")
         render_data_table(pd.DataFrame(data["quality_issues"] or [{"—": "No data recorded"}]))
 
+        if data["has_flags"]:
+            st.write("**Process setting changes (Setup → Finalized)**")
+            render_data_table(pd.DataFrame(data["setup_deviations"] or [{"—": "No changes"}]))
+            if data["fallplate_deviations"]:
+                st.write("**Fall-plate position changes (Setup → Finalized)**")
+                render_data_table(pd.DataFrame(data["fallplate_deviations"]))
+            st.write("**Component stream readings (Finalized phase)**")
+            render_data_table(pd.DataFrame(data["stream_readings"] or [{"—": "No data recorded"}]))
+            if data["stream_calibration_flags"]:
+                st.warning(
+                    "Non-valid calibration status recorded for: " + ", ".join(data["stream_calibration_flags"])
+                )
+            st.write("**Production events during this run**")
+            render_data_table(pd.DataFrame(data["production_events"] or [{"—": "No data recorded"}]))
+
         dl1, dl2 = st.columns(2)
         dl1.download_button(
-            "Download PDF", data=reports.render_run_report_pdf(data),
-            file_name=f"production_run_{data['run_id']}_report.pdf", mime="application/pdf",
+            "Download PDF", data=reports.render_batch_release_record_pdf(data),
+            file_name=f"run_{data['run_id']}_batch_release_record.pdf", mime="application/pdf",
             key="run_report_pdf",
-            on_click=log_export_click, args=("production_run_report_pdf",),
+            on_click=log_export_click, args=("batch_release_record_pdf",),
             kwargs={"description": f"Run #{data['run_id']}"},
         )
         dl2.download_button(
-            "Download Excel", data=reports.render_run_report_excel(data),
-            file_name=f"production_run_{data['run_id']}_report.xlsx",
+            "Download Excel", data=reports.render_batch_release_record_excel(data),
+            file_name=f"run_{data['run_id']}_batch_release_record.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="run_report_excel",
-            on_click=log_export_click, args=("production_run_report_excel",),
+            on_click=log_export_click, args=("batch_release_record_excel",),
             kwargs={"description": f"Run #{data['run_id']}"},
         )
 
