@@ -615,18 +615,10 @@ with tab_report:
         if report_data["zone_breakdown"]:
             st.bar_chart(pd.DataFrame(report_data["zone_breakdown"]).set_index("Zone"))
 
-        dl1, dl2 = st.columns(2)
-        dl1.download_button(
+        st.download_button(
             "Download Word", data=reports.render_sample_report_docx(report_data),
             file_name="optimization_trial_samples_report.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             key="ot_sample_report_docx", disabled=report_data["total_samples"] == 0,
             on_click=log_export_click, args=("ot_sample_report_docx",), kwargs={"description": selection_label},
-        )
-        dl2.download_button(
-            "Download Excel", data=reports.render_sample_report_excel(report_data),
-            file_name="optimization_trial_samples_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="ot_sample_report_excel", disabled=report_data["total_samples"] == 0,
-            on_click=log_export_click, args=("ot_sample_report_excel",), kwargs={"description": selection_label},
         )

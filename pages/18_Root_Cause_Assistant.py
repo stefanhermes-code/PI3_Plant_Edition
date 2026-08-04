@@ -46,7 +46,7 @@ render_function_action_intro(
         "and check whether any of the flagged differences line up with a plausible cause. Use "
         "'Ask PI3' if you want that diff interpreted alongside historical expert notes and "
         "similar past cases before you commit to a root cause. Download the Root-Cause "
-        "Comparison Report further down for a shareable PDF/Excel summary of the diff above."
+        "Comparison Report further down for a shareable Word summary of the diff above."
     ),
 )
 session = get_session()
@@ -167,21 +167,12 @@ rca_rc2.metric(
     "Largest setting shift",
     f"{max(setting_shifts, key=lambda s: abs(s['pct_change']))['label']}" if setting_shifts else "—",
 )
-rca_dl1, rca_dl2 = st.columns(2)
-rca_dl1.download_button(
+st.download_button(
     "Download Word", data=reports.render_root_cause_report_docx(root_cause_report_data),
     file_name="root_cause_comparison_report.docx",
     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     key=f"root_cause_report_docx_{obs.id}",
     on_click=log_export_click, args=("root_cause_report_docx",),
-    kwargs={"description": f"{obs.observation_type} · run #{run.id}"},
-)
-rca_dl2.download_button(
-    "Download Excel", data=reports.render_root_cause_report_excel(root_cause_report_data),
-    file_name="root_cause_comparison_report.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    key=f"root_cause_report_excel_{obs.id}",
-    on_click=log_export_click, args=("root_cause_report_excel",),
     kwargs={"description": f"{obs.observation_type} · run #{run.id}"},
 )
 

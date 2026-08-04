@@ -57,7 +57,7 @@ render_function_action_intro(
         "separates good from bad outcomes most clearly and is the one most worth reviewing on the "
         "floor. Use the PI3 synthesis further down for a plain-language interpretation before "
         "proposing any setpoint change to your team. Download the Machine Settings Optimization "
-        "Report further down for a shareable PDF/Excel summary of the ranked table above."
+        "Report further down for a shareable Word summary of the ranked table above."
     ),
 )
 session = get_session()
@@ -162,21 +162,12 @@ mso_rc1.metric("Most actionable setting", top["label"])
 mso_rc2.metric(
     "Settings with enough data", f"{len(ranked_with_data)} of {len(ranked)}",
 )
-mso_dl1, mso_dl2 = st.columns(2)
-mso_dl1.download_button(
+st.download_button(
     "Download Word", data=reports.render_machine_settings_report_docx(mso_report_data),
     file_name="machine_settings_optimization_report.docx",
     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     key=f"mso_report_docx_{unit['state_key']}_{property_name}",
     on_click=log_export_click, args=("machine_settings_report_docx",),
-    kwargs={"description": f"{property_name} · {unit['label']}"},
-)
-mso_dl2.download_button(
-    "Download Excel", data=reports.render_machine_settings_report_excel(mso_report_data),
-    file_name="machine_settings_optimization_report.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    key=f"mso_report_excel_{unit['state_key']}_{property_name}",
-    on_click=log_export_click, args=("machine_settings_report_excel",),
     kwargs={"description": f"{property_name} · {unit['label']}"},
 )
 

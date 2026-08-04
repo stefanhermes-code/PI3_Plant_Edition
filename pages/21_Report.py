@@ -6,8 +6,8 @@ Approval - see pages/10_PI3_AI_Connectivity.py). This screen was the gap:
 it did not exist as a dedicated page before. Not gated behind PI3
 connectivity - every logged-in user can generate these.
 
-Four report types, each with an in-app preview plus PDF and Excel
-download buttons: Batch Release / Conformance Record, Plant / Period
+Four report types, each with an in-app preview plus a Word
+download button: Batch Release / Conformance Record, Plant / Period
 Summary Report, Trial Closeout Report, and Sample Certificate of Analysis
 (added 2026-08-04). All data assembly and file rendering lives in
 reports.py; this page is just selectors + st.download_button wiring.
@@ -63,7 +63,7 @@ render_function_action_intro(
     function_text=(
         "Generates four standard report types - one production run's conformance record, a "
         "plant/period summary, a closed trial's formal writeup, or one sample's certificate of "
-        "analysis - each with an in-app preview plus PDF and Excel download. Every logged-in user "
+        "analysis - each with an in-app preview plus Word download. Every logged-in user "
         "can generate these; it's not gated behind PI3 connectivity."
     ),
     action_text=(
@@ -157,21 +157,12 @@ with tab_run:
             st.write("**Production events during this run**")
             render_data_table(pd.DataFrame(data["production_events"] or [{"—": "No data recorded"}]))
 
-        dl1, dl2 = st.columns(2)
-        dl1.download_button(
+        st.download_button(
             "Download Word", data=reports.render_batch_release_record_docx(data),
             file_name=f"run_{data['run_id']}_batch_release_record.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             key="run_report_docx",
             on_click=log_export_click, args=("batch_release_record_docx",),
-            kwargs={"description": f"Run #{data['run_id']}"},
-        )
-        dl2.download_button(
-            "Download Excel", data=reports.render_batch_release_record_excel(data),
-            file_name=f"run_{data['run_id']}_batch_release_record.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="run_report_excel",
-            on_click=log_export_click, args=("batch_release_record_excel",),
             kwargs={"description": f"Run #{data['run_id']}"},
         )
 
@@ -225,22 +216,13 @@ with tab_period:
     st.write("**Breakdown by foam grade**")
     render_data_table(pd.DataFrame(data["grade_breakdown"] or [{"—": "No data recorded"}]))
 
-    dl1, dl2 = st.columns(2)
     period_label = f"{date_from}_to_{date_to}"
-    dl1.download_button(
+    st.download_button(
         "Download Word", data=reports.render_period_summary_docx(data),
         file_name=f"period_summary_{period_label}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         key="period_report_docx",
         on_click=log_export_click, args=("period_summary_report_docx",),
-        kwargs={"description": f"{data['plant']} · {data['product_family']} · {period_label}"},
-    )
-    dl2.download_button(
-        "Download Excel", data=reports.render_period_summary_excel(data),
-        file_name=f"period_summary_{period_label}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="period_report_excel",
-        on_click=log_export_click, args=("period_summary_report_excel",),
         kwargs={"description": f"{data['plant']} · {data['product_family']} · {period_label}"},
     )
 
@@ -300,21 +282,12 @@ with tab_trial:
         st.write("**Quality issues observed**")
         render_data_table(pd.DataFrame(data["quality_issues"] or [{"—": "No data recorded"}]))
 
-        dl1, dl2 = st.columns(2)
-        dl1.download_button(
+        st.download_button(
             "Download Word", data=reports.render_trial_report_docx(data),
             file_name=f"trial_{data['trial_id']}_closeout_report.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             key="trial_report_docx",
             on_click=log_export_click, args=("trial_closeout_report_docx",),
-            kwargs={"description": f"Trial #{data['trial_id']}"},
-        )
-        dl2.download_button(
-            "Download Excel", data=reports.render_trial_report_excel(data),
-            file_name=f"trial_{data['trial_id']}_closeout_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="trial_report_excel",
-            on_click=log_export_click, args=("trial_closeout_report_excel",),
             kwargs={"description": f"Trial #{data['trial_id']}"},
         )
 
@@ -386,20 +359,11 @@ with tab_sample:
         st.write(f"**Quality test results** — Pass: {data['pass_count']} · Fail: {data['fail_count']}")
         render_data_table(pd.DataFrame(data["quality_results"] or [{"—": "No data recorded"}]))
 
-        dl1, dl2 = st.columns(2)
-        dl1.download_button(
+        st.download_button(
             "Download Word", data=reports.render_sample_certificate_docx(data),
             file_name=f"sample_{data['sample_id']}_certificate.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             key="sample_cert_docx",
             on_click=log_export_click, args=("sample_certificate_docx",),
-            kwargs={"description": f"Sample #{data['sample_id']}"},
-        )
-        dl2.download_button(
-            "Download Excel", data=reports.render_sample_certificate_excel(data),
-            file_name=f"sample_{data['sample_id']}_certificate.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="sample_cert_excel",
-            on_click=log_export_click, args=("sample_certificate_excel",),
             kwargs={"description": f"Sample #{data['sample_id']}"},
         )

@@ -1,4 +1,4 @@
-"""Report generation: data assembly + PDF/Excel rendering.
+"""Report generation: data assembly + Word (.docx) rendering.
 
 "Report" is one of PI3 Plant Edition's own standard, always-included
 capabilities (see pages/10_PI3_AI_Connectivity.py's docstring: "Standard
@@ -8,12 +8,13 @@ gated behind PI3 connectivity; every logged-in user can generate reports.
 
 Two report types that predate the 2026-08-04 Reports redesign, each with a
 data-assembly function (plain dict, no Streamlit import, easy to unit
-test) and a PDF + Excel renderer pair:
+test) and a Word (.docx) renderer (PDF/Excel renderers were removed
+2026-08-04; every report now exports to Word only):
 
-- build_period_summary_data() / render_period_summary_pdf() / render_period_summary_excel()
+- build_period_summary_data() / render_period_summary_docx()
   One plant/product family/date range: KPIs, pass rate, recurring issues,
   the run list, and a breakdown by foam grade.
-- build_trial_report_data() / render_trial_report_pdf() / render_trial_report_excel()
+- build_trial_report_data() / render_trial_report_docx()
   One closed Customer Trial or Optimization Trial (see db.CustomerTrial /
   db.OptimizationTrial - the two independent lab-trial flows, added
   2026-08-03): objective/hypothesis, what changed, outcome/conclusion,
@@ -140,9 +141,8 @@ A ninth, narrower report type lives here too:
   A single "Ask PI3" question-and-answer exchange (see
   helpers.render_ask_pi3_section) - the question, PI3's answer, and an
   appendix of the exact data PI3 checked to produce it (SQL + rows
-  returned, or the verified-analysis arguments and result). Unlike the
-  reports above, this is DOCX only (no PDF/Excel - there's no
-  tabular data here that benefits from a spreadsheet), and it is always
+  returned, or the verified-analysis arguments and result). Like every
+  other report in this module, this is Word (.docx) only, and it is always
   built from this same code path, so every export has identical
   formatting regardless of who generates it or what was asked - a
   hand-maintained Word template would drift over time; this can't.
@@ -195,8 +195,6 @@ import re
 import pandas as pd
 from docx import Document
 from docx.shared import Cm, Pt, RGBColor
-from openpyxl.chart import BarChart, LineChart, Reference
-from openpyxl.utils import get_column_letter
 from reportlab.graphics import renderPM
 from reportlab.graphics.charts.barcharts import VerticalBarChart
 from reportlab.graphics.charts.linecharts import HorizontalLineChart
@@ -261,98 +259,6 @@ def _pdf_bytes(build_story):
     build_story(story)
     doc.build(story)
     return buf.getvalue()
-
-
-_INVALID_SHEET_CHARS_RE = re.compile(r'[\\/*?:\[\]]')
-
-
-def _excel_bytes(sheets, charts=None):
-    """sheets: dict of sheet_name -> list-of-dicts or DataFrame. Empty
-    sections still get a sheet (with a placeholder row) so the workbook
-    structure is predictable regardless of what data exists.
-
-    charts: optional list of (sheet_name, chart_builder) pairs. Each
-    chart_builder(ws, df) is called after every sheet has been written -
-    ExcelWriter needs the full workbook before a chart can reference
-    another sheet's cells - with the openpyxl worksheet and the exact
-    DataFrame written to it, so it can compute correct cell ranges. See
-    _add_bar_chart for the standard builder."""
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        written = {}
-        for name, rows in sheets.items():
-            df = rows if isinstance(rows, pd.DataFrame) else pd.DataFrame(rows)
-            if df.empty:
-                df = pd.DataFrame({"—": ["No data recorded"]})
-            # Excel sheet names are capped at 31 characters and can't contain
-            # \ / * ? : [ ] - openpyxl raises ValueError otherwise. Sanitize
-            # before truncating so a sheet name built from free-text/property
-            # data (e.g. a property literally named "40% IFD / hardness")
-            # can't crash report generation - confirmed in production
-            # 2026-08-04 via Recipe Optimization's per-property correlation
-            # sheet name.
-            sheet_name = _INVALID_SHEET_CHARS_RE.sub("-", name)[:31]
-            df.to_excel(writer, sheet_name=sheet_name, index=False)
-            written[name] = (writer.sheets[sheet_name], df)
-        for name, chart_builder in (charts or []):
-            ws_df = written.get(name)
-            if ws_df:
-                chart_builder(*ws_df)
-    return buf.getvalue()
-
-
-def _add_bar_chart(ws, df, title, category_col, value_cols):
-    """Adds a native Excel bar chart to worksheet ws, built from the data
-    just written to it - category_col plus one or more value_cols (each
-    becomes its own series, e.g. Pass count / Fail count side by side).
-    Anchored a couple of columns to the right of the data table so it
-    doesn't overlap it. No-ops on the placeholder "No data recorded" sheet
-    (category_col won't be a real column in that case)."""
-    if df.empty or category_col not in df.columns:
-        return
-    n_rows = len(df)
-    col_idx = {c: i + 1 for i, c in enumerate(df.columns)}
-    chart = BarChart()
-    chart.type = "col"
-    chart.title = title
-    chart.y_axis.title = "Count"
-    chart.height, chart.width = 8, 16
-    cats = Reference(ws, min_col=col_idx[category_col], min_row=2, max_row=n_rows + 1)
-    for vcol in value_cols:
-        if vcol not in col_idx:
-            continue
-        data = Reference(ws, min_col=col_idx[vcol], min_row=1, max_row=n_rows + 1)
-        chart.add_data(data, titles_from_data=True)
-    if not chart.series:
-        return
-    chart.set_categories(cats)
-    anchor_col = get_column_letter(len(df.columns) + 2)
-    ws.add_chart(chart, f"{anchor_col}2")
-
-
-def _add_line_chart(ws, df, title, category_col, value_cols):
-    """Native Excel line chart, same anchoring convention as _add_bar_chart -
-    used for genuine time series (control chart / CUSUM) where a bar chart
-    would flatten the thing that actually matters, the shape of the line
-    over time. No-ops on the placeholder "No data recorded" sheet."""
-    if df.empty or category_col not in df.columns:
-        return
-    n_rows = len(df)
-    col_idx = {c: i + 1 for i, c in enumerate(df.columns)}
-    chart = LineChart()
-    chart.title = title
-    chart.height, chart.width = 8, 16
-    cats = Reference(ws, min_col=col_idx[category_col], min_row=2, max_row=n_rows + 1)
-    for vcol in value_cols:
-        if vcol not in col_idx:
-            continue
-        data = Reference(ws, min_col=col_idx[vcol], min_row=1, max_row=n_rows + 1)
-        chart.add_data(data, titles_from_data=True)
-    if not chart.series:
-        return
-    chart.set_categories(cats)
-    anchor_col = get_column_letter(len(df.columns) + 2)
-    ws.add_chart(chart, f"{anchor_col}2")
 
 
 def _build_bar_chart_drawing(categories, values, width=460, height=170,
@@ -524,10 +430,10 @@ def _wrapped_section(story, title, rows, columns, col_widths):
     which is fine for short values but breaks down once a table mixes a
     long descriptive column with several rows. columns is the explicit,
     ordered list of dict keys to display - lets the caller show a
-    narrower slice of a wider dict (e.g. dropping a couple of columns
-    from what's exported to Excel) to keep the PDF table print-width, all
-    without touching the underlying data itself. col_widths must be
-    supplied (no auto-sizing) and should sum to the usable page width."""
+    narrower slice of a wider dict (dropping a couple of less-essential
+    columns) to keep the table print-width, all without touching the
+    underlying data itself. col_widths must be supplied (no auto-sizing)
+    and should sum to the usable page width."""
     story.append(Spacer(1, 8))
     story.append(Paragraph(title, STYLES["Heading3"]))
     if not rows:
@@ -679,22 +585,6 @@ def render_period_summary_pdf(data):
     return _pdf_bytes(build)
 
 
-def render_period_summary_excel(data):
-    header = [{
-        "Plant": data["plant"], "Product family": data["product_family"],
-        "Date from": data["date_from"], "Date to": data["date_to"],
-        "Production runs": data["total_runs"],
-        "Pass rate (%)": data["pass_rate"], "Quality issues": data["total_quality_issues"],
-        "Recurring issues": data["recurring_issues"],
-    }]
-    return _excel_bytes({
-        "Summary": header,
-        "Production Runs": data["runs"],
-        "Quality Issues": data["quality_issues"],
-        "Grade Breakdown": data["grade_breakdown"],
-    })
-
-
 def render_period_summary_docx(data):
     doc = Document()
     _docx_report_header(
@@ -724,8 +614,8 @@ def render_period_summary_docx(data):
 # Trial has customer_name/outcome/customer_feedback; an internally-driven
 # Optimization Trial has hypothesis/conclusion/reuse_recommendation), so
 # build_trial_report_data() normalizes both into one common "narrative
-# fields" list of (label, value) pairs the PDF/Excel renderers can walk
-# without needing to know which trial type produced them.
+# fields" list of (label, value) pairs the renderer can walk without
+# needing to know which trial type produced them.
 # ---------------------------------------------------------------------------
 
 def build_trial_report_data(session, source_type, trial_id):
@@ -820,22 +710,6 @@ def render_trial_report_pdf(data):
             story.append(Spacer(1, 6))
         _section(story, "Quality issues observed", data["quality_issues"])
     return _pdf_bytes(build)
-
-
-def render_trial_report_excel(data):
-    header = [{
-        "Trial type": data["source_type"], "Trial ID": data["trial_id"],
-        "Foam grade": data["foam_grade"], "Plant": data["plant"],
-        "Status": data["status"], "Responsible": data["responsible_person"],
-        "Trial date": data["trial_date"], "Batch reference": data["batch_reference"],
-        **{label: value for label, value in data["narrative_fields"]},
-        "Reviewed by": data["reviewed_by"], "Approved by": data["approved_by"],
-        "Date closed": data["date_closed"], "Notes": data["notes"],
-    }]
-    return _excel_bytes({
-        "Trial": header,
-        "Quality Issues": data["quality_issues"],
-    })
 
 
 def render_trial_report_docx(data):
@@ -1066,24 +940,6 @@ def render_recipe_formulation_record_pdf(data):
     return _pdf_bytes(build)
 
 
-def render_recipe_formulation_record_excel(data):
-    header = [{
-        "Recipe version": data["version_label"], "Foam grade": data["foam_grade"],
-        "Product family": data["product_family"], "Approval status": data["approval_status"],
-        "Active": "Yes" if data["is_active"] else "No", "Effective date": data["effective_date"],
-        "Created by": data["created_by"], "Ratio / index": data["ratio_index"],
-        "Change note": data["change_note"], "Date from": data["date_from"], "Date to": data["date_to"],
-        "Cost per kg": data["cost_per_kg"],
-        "Cost coverage (php priced / total)": f"{data['cost_priced_php']} / {data['cost_total_php']}",
-        "Unpriced materials": ", ".join(data["cost_missing_materials"]) or "—",
-    }]
-    return _excel_bytes({
-        "Header": header,
-        "Formulation": data["components"],
-        "Quality vs Spec": data["quality_rows"],
-    })
-
-
 def render_recipe_formulation_record_docx(data):
     doc = Document()
     _docx_report_header(
@@ -1237,22 +1093,6 @@ def render_where_used_report_pdf(data):
         _section(story, "Target properties of affected foam grades", data["target_rows"])
         _section(story, "Trial precedent (Customer / Optimization Trials on these recipes)", data["trial_rows"])
     return _pdf_bytes(build)
-
-
-def render_where_used_report_excel(data):
-    header = [{
-        "Raw material": data["raw_material_name"], "Category": data["category"],
-        "Default supplier": data["default_supplier"], "Active": "Yes" if data["active"] else "No",
-        "Recipe versions using it": data["recipe_version_count"],
-        "Foam grades affected": data["foam_grade_count"],
-        "Product families affected": data["product_family_count"],
-    }]
-    return _excel_bytes({
-        "Header": header,
-        "Recipe Usage": data["usage_rows"],
-        "Target Properties": data["target_rows"],
-        "Trial Precedent": data["trial_rows"],
-    })
 
 
 def render_where_used_report_docx(data):
@@ -1536,31 +1376,6 @@ def render_batch_release_record_pdf(data):
     return _pdf_bytes(build)
 
 
-def render_batch_release_record_excel(data):
-    header = [{
-        "Run ID": data["run_id"], "Plant": data["plant"], "Product family": data["product_family"],
-        "Foam grade": data["foam_grade"], "Machine": data["machine"], "Run date": data["run_date"],
-        "Batch reference": data["batch_reference"], "Block reference": data["block_reference"],
-        "Operator/team": data["operator"], "Quality verdict": data["quality_verdict"],
-        "Recipe version": data["recipe_version_label"], "Recipe approval status": data["recipe_approval_status"],
-        "Notes": data["notes"],
-        "Flagged": "Yes" if data["has_flags"] else "No",
-        "Flag reasons": "; ".join(data["flag_reasons"]) if data["flag_reasons"] else "—",
-    }]
-    sheets = {
-        "Header": header,
-        "Formulation": data["recipe_components"],
-        "Quality Results": data["quality_results"],
-        "Quality Issues": data["quality_issues"],
-    }
-    if data["has_flags"]:
-        sheets["Process Setting Changes"] = data["setup_deviations"]
-        sheets["Fallplate Changes"] = data["fallplate_deviations"]
-        sheets["Stream Readings"] = data["stream_readings"]
-        sheets["Production Events"] = data["production_events"]
-    return _excel_bytes(sheets)
-
-
 def render_batch_release_record_docx(data):
     doc = Document()
     _docx_report_header(
@@ -1767,23 +1582,6 @@ def render_sample_certificate_pdf(data):
     return _pdf_bytes(build)
 
 
-def render_sample_certificate_excel(data):
-    header = [{
-        "Sample ID": data["sample_id"], "Source type": data["source_type"], "Source ID": data["source_id"],
-        **{label: value for label, value in data["header_fields"]},
-        "Foam grade": data["foam_grade"], "Plant": data["plant"], "Zone": data["zone_label"],
-        "Sampled": data["sample_ts"], "Notes": data["sample_notes"],
-        "Recipe version": data["recipe_version_label"], "Recipe approval status": data["recipe_approval_status"],
-        "Overall verdict": data["overall_verdict"], "Pass count": data["pass_count"], "Fail count": data["fail_count"],
-    }]
-    sheets = {
-        "Header": header,
-        "Formulation": data["recipe_components"],
-        "Quality Results": data["quality_results"],
-    }
-    return _excel_bytes(sheets)
-
-
 def render_sample_certificate_docx(data):
     doc = Document()
     _docx_report_header(
@@ -1988,39 +1786,6 @@ def render_quality_test_report_pdf(data):
     return _pdf_bytes(build)
 
 
-def render_quality_test_report_excel(data):
-    scope = data["scope"]
-    header = [{
-        "Pass/Fail filter": scope["pass_fail_label"], "Property filter": scope["property_label"],
-        "Foam scope": scope["foam_scope_label"], "Results in selection": data["total_results"],
-        "Pass rate": f"{data['pass_rate']}%" if data["pass_rate"] is not None else "—",
-        "Pass count": data["pass_count"], "Fail count": data["fail_count"],
-        "Not computed count": data["not_computed_count"],
-    }]
-    pass_fail_summary = [
-        {"Verdict": "Pass", "Count": data["pass_count"]},
-        {"Verdict": "Fail", "Count": data["fail_count"]},
-        {"Verdict": "Not computed", "Count": data["not_computed_count"]},
-    ]
-    sheets = {
-        "Header": header,
-        "Pass-Fail Summary": pass_fail_summary,
-        "Failures by Property": data["property_breakdown"],
-        "Failing Results": data["failing_results"],
-    }
-    charts = [
-        ("Pass-Fail Summary", lambda ws, df: _add_bar_chart(ws, df, "Pass / Fail breakdown", "Verdict", ["Count"])),
-        ("Failures by Property", lambda ws, df: _add_bar_chart(ws, df, "Failures by property", "Property", ["Fail count"])),
-    ]
-    if data["show_grade_breakdown"]:
-        sheets["Failures by Foam Grade"] = data["grade_breakdown"]
-        charts.append((
-            "Failures by Foam Grade",
-            lambda ws, df: _add_bar_chart(ws, df, "Failures by foam grade", "Foam grade", ["Fail count"]),
-        ))
-    return _excel_bytes(sheets, charts=charts)
-
-
 def render_quality_test_report_docx(data):
     scope = data["scope"]
     doc = Document()
@@ -2210,39 +1975,15 @@ def render_quality_issue_report_pdf(data):
         # _wrapped_section, not _section: this table mixes a long free-
         # text column (Suspected cause) with several rows, which
         # overflowed the page under _section's no-wrap plain-string
-        # cells. Confidence/Foam grade/Observed (present in the Excel
-        # export) are dropped here to keep the remaining columns legible
-        # at print width - Source already carries the foam grade and date.
+        # cells. Confidence/Foam grade/Observed are dropped here to keep
+        # the remaining columns legible at print width - Source already
+        # carries the foam grade and date.
         _wrapped_section(
             story, "Priority issues (High severity and/or Recurring)",
             data["priority_issues"], ["Source", "Issue", "Severity", "Frequency", "Suspected cause"],
             [45 * mm, 35 * mm, 18 * mm, 22 * mm, 58 * mm],
         )
     return _pdf_bytes(build)
-
-
-def render_quality_issue_report_excel(data):
-    scope = data["scope"]
-    group_col = data["group_by_col"]
-    header = [{
-        "Severity filter": scope["severity_label"], "Foam scope": scope["foam_scope_label"],
-        "Grouped by": scope["group_by_label"], "Issues in selection": data["total_issues"],
-        "Recurring": data["recurring_count"], "One-off": data["one_off_count"],
-    }]
-    issue_sheet_name = f"Issues by {group_col}"
-    sheets = {
-        "Header": header,
-        "Severity Breakdown": data["severity_breakdown"],
-        issue_sheet_name: data["issue_breakdown"],
-        "Confidence Breakdown": data["confidence_breakdown"],
-        "Priority Issues": data["priority_issues"],
-    }
-    charts = [
-        ("Severity Breakdown", lambda ws, df: _add_bar_chart(ws, df, "Severity breakdown", "Severity", ["Count"])),
-        (issue_sheet_name, lambda ws, df: _add_bar_chart(ws, df, f"Issues by {group_col.lower()}", group_col, ["Count"])),
-        ("Confidence Breakdown", lambda ws, df: _add_bar_chart(ws, df, "Confidence level breakdown", "Confidence level", ["Count"])),
-    ]
-    return _excel_bytes(sheets, charts=charts)
 
 
 def render_quality_issue_report_docx(data):
@@ -2390,37 +2131,6 @@ def render_sample_report_pdf(data):
                  "sample has one yet, see Coverage above.",
         )
     return _pdf_bytes(build)
-
-
-def render_sample_report_excel(data):
-    scope = data["scope"]
-    header = [{
-        "Source": data["source_type"], "Selection": scope.get("selection_label", ""),
-        "Samples in selection": data["total_samples"],
-        "Samples with a quality result": data["samples_with_results"],
-        "Coverage": f"{data['coverage_pct']}%" if data["coverage_pct"] is not None else "—",
-        "Pass rate (linked results)": f"{data['pass_rate']}%" if data["pass_rate"] is not None else "—",
-        "Pass count": data["pass_count"], "Fail count": data["fail_count"],
-        "Not computed count": data["not_computed_count"],
-    }]
-    outcome_summary = [
-        {"Verdict": "Pass", "Count": data["pass_count"]},
-        {"Verdict": "Fail", "Count": data["fail_count"]},
-        {"Verdict": "Not computed", "Count": data["not_computed_count"]},
-    ]
-    sheets = {
-        "Header": header,
-        "By Zone": data["zone_breakdown"],
-        "Linked Result Outcomes": outcome_summary,
-    }
-    charts = [
-        ("By Zone", lambda ws, df: _add_bar_chart(ws, df, "Samples by zone", "Zone", ["Sample count"])),
-        (
-            "Linked Result Outcomes",
-            lambda ws, df: _add_bar_chart(ws, df, "Linked quality result outcomes", "Verdict", ["Count"]),
-        ),
-    ]
-    return _excel_bytes(sheets, charts=charts)
 
 
 def render_sample_report_docx(data):
@@ -3127,47 +2837,6 @@ def render_recipe_optimization_report_pdf(data):
     return _pdf_bytes(build)
 
 
-def render_recipe_optimization_report_excel(data):
-    header = [{
-        "Foam grade": data["grade_name"], "Plant": data["plant_name"],
-        "Recipe version": data["version_label"], "Status": data["version_status"],
-        "Ingredients": data["component_count"],
-        "Cost per kg (USD)": data["cost_per_kg"],
-        "Cost coverage %": data["cost_coverage_pct"],
-        "Lab trial data included": "Yes" if data["include_trials"] else "No",
-    }]
-    deviation_rows = [
-        {"Property": c, "Deviation from target (%)": v}
-        for c, v in zip(data["deviation_categories"], data["deviation_values"])
-    ]
-    conclusions_rows = [{"Conclusion": line} for line in data["conclusions"]]
-    correlation_sheet_name = f"Correlation - {data['corr_property']}"[:31]
-    sheets = {
-        "Header": header,
-        "Meets Target": data["expectation_rows"],
-        "Deviation by Property": deviation_rows,
-        correlation_sheet_name: data["correlation_rows"],
-        "Conclusions": conclusions_rows,
-    }
-    charts = [
-        (
-            "Deviation by Property",
-            lambda ws, df: _add_bar_chart(
-                ws, df, "Deviation from target, by property (%)", "Property",
-                ["Deviation from target (%)"],
-            ),
-        ),
-        (
-            correlation_sheet_name,
-            lambda ws, df: _add_bar_chart(
-                ws, df, f"Correlation with {data['corr_property']}", "Raw material",
-                ["Correlation with outcome"],
-            ),
-        ),
-    ]
-    return _excel_bytes(sheets, charts=charts)
-
-
 def render_recipe_optimization_report_docx(data):
     doc = Document()
     _docx_report_header(
@@ -3404,50 +3073,6 @@ def render_trend_analysis_report_pdf(data):
     return _pdf_bytes(build)
 
 
-def render_trend_analysis_report_excel(data):
-    header = [{
-        "Property": data["property_name"], "Subject": data["subject_desc"],
-        "Results analyzed": data["n_results"], "Date range": data["date_range"],
-        "Lab trial data included": "Yes" if data["include_trials"] else "No",
-        "Pooled by % of target": "Yes" if data["pooling_grades"] else "No",
-    }]
-    control_rows = [
-        {"Date": c, **{label: vals[i] for label, vals in data["control_series"]}}
-        for i, c in enumerate(data["control_categories"])
-    ]
-    cusum_rows = [
-        {"Date": c, **{label: vals[i] for label, vals in data["cusum_series"]}}
-        for i, c in enumerate(data["cusum_categories"])
-    ]
-    capability_rows = [{"Metric": k, "Value": v} for k, v in data["capability_kv"]]
-    conclusions_rows = [{"Conclusion": line} for line in data["conclusions"]]
-    sheets = {
-        "Header": header,
-        "Control Chart": control_rows,
-        "Unusual Patterns": data["control_flag_rows"],
-        "Margin to Spec": capability_rows,
-        "CUSUM": cusum_rows,
-        "Timeline Changes": data["change_rows"],
-        "Conclusions": conclusions_rows,
-    }
-    charts = []
-    if control_rows:
-        charts.append((
-            "Control Chart",
-            lambda ws, df: _add_line_chart(
-                ws, df, "Control chart", "Date", [label for label, _ in data["control_series"]],
-            ),
-        ))
-    if cusum_rows:
-        charts.append((
-            "CUSUM",
-            lambda ws, df: _add_line_chart(
-                ws, df, "CUSUM", "Date", [label for label, _ in data["cusum_series"]],
-            ),
-        ))
-    return _excel_bytes(sheets, charts=charts)
-
-
 def render_trend_analysis_report_docx(data):
     doc = Document()
     _docx_report_header(doc, "Trend Analysis Report", f"{data['property_name']} · {data['subject_desc']}")
@@ -3581,29 +3206,6 @@ def render_correlation_report_pdf(data):
     return _pdf_bytes(build)
 
 
-def render_correlation_report_excel(data):
-    header = [{
-        "Property": data["property_name"], "Subject": data["subject_desc"],
-        "Pooled by % of target": "Yes" if data["pooling_grades"] else "No",
-        "Process settings ranked": len(data["ranking_rows"]),
-    }]
-    conclusions_rows = [{"Conclusion": line} for line in data["conclusions"]]
-    sheets = {
-        "Header": header,
-        "Ranked Settings": data["ranking_rows"],
-        "Conclusions": conclusions_rows,
-    }
-    charts = [
-        (
-            "Ranked Settings",
-            lambda ws, df: _add_bar_chart(
-                ws, df, f"Correlation with {data['property_name']}", "Process setting", ["Correlation"],
-            ),
-        ),
-    ]
-    return _excel_bytes(sheets, charts=charts)
-
-
 def render_correlation_report_docx(data):
     doc = Document()
     _docx_report_header(
@@ -3722,34 +3324,6 @@ def render_root_cause_report_pdf(data):
         for line in data["conclusions"]:
             story.append(_p(f"• {line}"))
     return _pdf_bytes(build)
-
-
-def render_root_cause_report_excel(data):
-    header = [{
-        "Quality issue": data["observation_type"], "Severity": data["severity"],
-        "Frequency": data["frequency"], "Run": f"#{data['run_id']} ({data['run_date']})",
-        "Foam grade": data["grade_name"],
-        "Compared against": f"run #{data['prior_run_id']} ({data['prior_run_date']})",
-        "Logged suspected cause": data["suspected_cause"] or "—",
-    }]
-    shift_rows = [
-        {"Process setting": c, "Shift (%)": v}
-        for c, v in zip(data["shift_categories"], data["shift_values"])
-    ]
-    conclusions_rows = [{"Conclusion": line} for line in data["conclusions"]]
-    sheets = {
-        "Header": header,
-        "What Was Different": data["change_rows"],
-        "Setting Shifts": shift_rows,
-        "Conclusions": conclusions_rows,
-    }
-    charts = [
-        (
-            "Setting Shifts",
-            lambda ws, df: _add_bar_chart(ws, df, "Process-setting shifts (%)", "Process setting", ["Shift (%)"]),
-        ),
-    ]
-    return _excel_bytes(sheets, charts=charts)
 
 
 def render_root_cause_report_docx(data):
@@ -3881,30 +3455,6 @@ def render_machine_settings_report_pdf(data):
         for line in data["conclusions"]:
             story.append(_p(f"• {line}"))
     return _pdf_bytes(build)
-
-
-def render_machine_settings_report_excel(data):
-    header = [{
-        "Property": data["property_name"], "Subject": data["subject_desc"],
-        "Pooled by % of target": "Yes" if data["pooling_grades"] else "No",
-        "Process settings ranked": len(data["ranking_rows"]),
-    }]
-    conclusions_rows = [{"Conclusion": line} for line in data["conclusions"]]
-    sheets = {
-        "Header": header,
-        "Ranked Settings": data["ranking_rows"],
-        "Conclusions": conclusions_rows,
-    }
-    charts = [
-        (
-            "Ranked Settings",
-            lambda ws, df: _add_bar_chart(
-                ws, df, "Gap vs. worst-performing range (points)", "Process setting",
-                ["Gap vs worst range (pts)"],
-            ),
-        ),
-    ]
-    return _excel_bytes(sheets, charts=charts)
 
 
 def render_machine_settings_report_docx(data):
@@ -4039,36 +3589,6 @@ def render_expert_notes_report_pdf(data):
         for line in data["conclusions"]:
             story.append(_p(f"• {line}"))
     return _pdf_bytes(build)
-
-
-def render_expert_notes_report_excel(data):
-    header = [{
-        "Scope": data["scope_label"], "Total notes": data["total"],
-        "Fed into PI3": f"{data['in_pi3_count']} of {data['total']}",
-    }]
-    conclusions_rows = [{"Conclusion": line} for line in data["conclusions"]]
-    sheets = {
-        "Header": header,
-        "By Confidence Level": data["confidence_rows"],
-        "By Source": data["source_rows"],
-        "By Linked Entity Type": data["link_type_rows"],
-        "Conclusions": conclusions_rows,
-    }
-    charts = [
-        (
-            "By Confidence Level",
-            lambda ws, df: _add_bar_chart(ws, df, "Notes by confidence level", "Confidence level", ["Count"]),
-        ),
-        (
-            "By Source",
-            lambda ws, df: _add_bar_chart(ws, df, "Notes by source", "Source", ["Count"]),
-        ),
-        (
-            "By Linked Entity Type",
-            lambda ws, df: _add_bar_chart(ws, df, "Notes by linked entity type", "Linked to", ["Count"]),
-        ),
-    ]
-    return _excel_bytes(sheets, charts=charts)
 
 
 def render_expert_notes_report_docx(data):

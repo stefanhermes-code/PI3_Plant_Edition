@@ -558,21 +558,12 @@ else:
         "High severity",
         next((r["Count"] for r in issue_report_data["severity_breakdown"] if r["Severity"] == "High"), 0),
     )
-    rdl1, rdl2 = st.columns(2)
-    rdl1.download_button(
+    st.download_button(
         "Download Word", data=reports.render_quality_issue_report_docx(issue_report_data),
         file_name="quality_issue_report.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         key="quality_issue_report_docx",
         on_click=log_export_click, args=("quality_issue_report_docx",),
-        kwargs={"description": f"{severity_label} · {scope_label} · {breakdown_col}"},
-    )
-    rdl2.download_button(
-        "Download Excel", data=reports.render_quality_issue_report_excel(issue_report_data),
-        file_name="quality_issue_report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="quality_issue_report_excel",
-        on_click=log_export_click, args=("quality_issue_report_excel",),
         kwargs={"description": f"{severity_label} · {scope_label} · {breakdown_col}"},
     )
 

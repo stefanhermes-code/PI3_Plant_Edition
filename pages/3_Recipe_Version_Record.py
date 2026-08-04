@@ -546,21 +546,12 @@ else:
             else:
                 st.caption("No priced components yet - cost per kg cannot be calculated.")
 
-            frdl1, frdl2 = st.columns(2)
-            frdl1.download_button(
+            st.download_button(
                 "Download Word", data=reports.render_recipe_formulation_record_docx(report_data),
                 file_name=f"recipe_{v.id}_formulation_record.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 key=f"formrec_docx_{v.id}",
                 on_click=log_export_click, args=("recipe_formulation_record_docx",),
-                kwargs={"description": f"Recipe version #{v.id} ({v.version_label})"},
-            )
-            frdl2.download_button(
-                "Download Excel", data=reports.render_recipe_formulation_record_excel(report_data),
-                file_name=f"recipe_{v.id}_formulation_record.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"formrec_excel_{v.id}",
-                on_click=log_export_click, args=("recipe_formulation_record_excel",),
                 kwargs={"description": f"Recipe version #{v.id} ({v.version_label})"},
             )
 
@@ -809,20 +800,11 @@ else:
     st.write("**Trial precedent**")
     render_data_table(pd.DataFrame(wu_data["trial_rows"] or [{"—": "No data recorded"}]))
 
-    wudl1, wudl2 = st.columns(2)
-    wudl1.download_button(
+    st.download_button(
         "Download Word", data=reports.render_where_used_report_docx(wu_data),
         file_name=f"where_used_{wu_data['raw_material_id']}_report.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         key="where_used_docx",
         on_click=log_export_click, args=("where_used_report_docx",),
-        kwargs={"description": wu_data["raw_material_name"]},
-    )
-    wudl2.download_button(
-        "Download Excel", data=reports.render_where_used_report_excel(wu_data),
-        file_name=f"where_used_{wu_data['raw_material_id']}_report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="where_used_excel",
-        on_click=log_export_click, args=("where_used_report_excel",),
         kwargs={"description": wu_data["raw_material_name"]},
     )

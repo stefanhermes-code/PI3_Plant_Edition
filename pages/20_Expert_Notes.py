@@ -213,21 +213,12 @@ en_rc2.metric(
     f"{expert_notes_report_data['in_pi3_count']} of {expert_notes_report_data['total']}"
     if expert_notes_report_data["total"] else "—",
 )
-en_dl1, en_dl2 = st.columns(2)
-en_dl1.download_button(
+st.download_button(
     "Download Word", data=reports.render_expert_notes_report_docx(expert_notes_report_data),
     file_name="expert_notes_report.docx",
     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     key="expert_notes_report_docx",
     on_click=log_export_click, args=("expert_notes_report_docx",),
-    kwargs={"description": en_scope_label},
-)
-en_dl2.download_button(
-    "Download Excel", data=reports.render_expert_notes_report_excel(expert_notes_report_data),
-    file_name="expert_notes_report.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    key="expert_notes_report_excel",
-    on_click=log_export_click, args=("expert_notes_report_excel",),
     kwargs={"description": en_scope_label},
 )
 

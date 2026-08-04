@@ -74,7 +74,7 @@ render_function_action_intro(
         "the current formulation isn't meeting target, confirm the target properties further down "
         "and request a PI3 recommendation, then take that proposal to your technical team to trial "
         "and confirm before releasing it as a new recipe version. Download the Recipe Optimization "
-        "Report further down for a shareable PDF/Excel summary of the cost, target, and "
+        "Report further down for a shareable Word summary of the cost, target, and "
         "correlation analysis above."
     ),
 )
@@ -449,21 +449,12 @@ else:
         "Cost per kg (USD)",
         f"{ro_report_data['cost_per_kg']:.2f}" if ro_report_data["cost_per_kg"] is not None else "—",
     )
-    ro_dl1, ro_dl2 = st.columns(2)
-    ro_dl1.download_button(
+    st.download_button(
         "Download Word", data=reports.render_recipe_optimization_report_docx(ro_report_data),
         file_name="recipe_optimization_report.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         key=f"recipe_opt_report_docx_{grade.id}",
         on_click=log_export_click, args=("recipe_optimization_report_docx",),
-        kwargs={"description": f"{grade.grade_name} · {current_version.version_label}"},
-    )
-    ro_dl2.download_button(
-        "Download Excel", data=reports.render_recipe_optimization_report_excel(ro_report_data),
-        file_name="recipe_optimization_report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=f"recipe_opt_report_excel_{grade.id}",
-        on_click=log_export_click, args=("recipe_optimization_report_excel",),
         kwargs={"description": f"{grade.grade_name} · {current_version.version_label}"},
     )
 

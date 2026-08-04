@@ -59,7 +59,7 @@ render_function_action_intro(
         "the recorded runs. Treat it as a lead to investigate, not a cause on its own: review it "
         "against current raw materials and process conditions before treating it as causal. Use "
         "'Ask PI3' if you want the ranked pattern turned into a plain-language interpretation. "
-        "Download the Process-Property Correlation Report further down for a shareable PDF/Excel "
+        "Download the Process-Property Correlation Report further down for a shareable Word "
         "summary of the ranked table above."
     ),
 )
@@ -162,21 +162,12 @@ pc_rc1.metric("Strongest association", top["label"] if not ranked_with_data.empt
 pc_rc2.metric(
     "Settings with enough data", f"{len(ranked_with_data)} of {len(ranked)}",
 )
-pc_dl1, pc_dl2 = st.columns(2)
-pc_dl1.download_button(
+st.download_button(
     "Download Word", data=reports.render_correlation_report_docx(correlation_report_data),
     file_name="process_property_correlation_report.docx",
     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     key=f"correlation_report_docx_{unit['state_key']}_{property_name}",
     on_click=log_export_click, args=("correlation_report_docx",),
-    kwargs={"description": f"{property_name} · {unit['label']}"},
-)
-pc_dl2.download_button(
-    "Download Excel", data=reports.render_correlation_report_excel(correlation_report_data),
-    file_name="process_property_correlation_report.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    key=f"correlation_report_excel_{unit['state_key']}_{property_name}",
-    on_click=log_export_click, args=("correlation_report_excel",),
     kwargs={"description": f"{property_name} · {unit['label']}"},
 )
 

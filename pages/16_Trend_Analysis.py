@@ -76,7 +76,7 @@ render_function_action_intro(
         "trend test to confirm whether an apparent trend is statistically real. If something "
         "flags, use 'Ask PI3' to get it interpreted against recipe changes, machine changes, and "
         "quality-issue history before acting on it. Download the Trend Analysis Report further "
-        "down for a shareable PDF/Excel summary of the control chart, capability, CUSUM, and "
+        "down for a shareable Word summary of the control chart, capability, CUSUM, and "
         "trend-test results above."
     ),
 )
@@ -454,21 +454,12 @@ tr_rc1.metric(
     ),
 )
 tr_rc2.metric("Real trend?", "Yes" if (trend and trend["significant"]) else ("No" if trend else "—"))
-tr_dl1, tr_dl2 = st.columns(2)
-tr_dl1.download_button(
+st.download_button(
     "Download Word", data=reports.render_trend_analysis_report_docx(trend_report_data),
     file_name="trend_analysis_report.docx",
     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     key=f"trend_report_docx_{unit['state_key']}_{property_name}",
     on_click=log_export_click, args=("trend_analysis_report_docx",),
-    kwargs={"description": f"{property_name} · {unit['label']}"},
-)
-tr_dl2.download_button(
-    "Download Excel", data=reports.render_trend_analysis_report_excel(trend_report_data),
-    file_name="trend_analysis_report.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    key=f"trend_report_excel_{unit['state_key']}_{property_name}",
-    on_click=log_export_click, args=("trend_analysis_report_excel",),
     kwargs={"description": f"{property_name} · {unit['label']}"},
 )
 
