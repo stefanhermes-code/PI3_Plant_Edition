@@ -164,10 +164,11 @@ pc_rc2.metric(
 )
 pc_dl1, pc_dl2 = st.columns(2)
 pc_dl1.download_button(
-    "Download PDF", data=reports.render_correlation_report_pdf(correlation_report_data),
-    file_name="process_property_correlation_report.pdf", mime="application/pdf",
-    key=f"correlation_report_pdf_{unit['state_key']}_{property_name}",
-    on_click=log_export_click, args=("correlation_report_pdf",),
+    "Download Word", data=reports.render_correlation_report_docx(correlation_report_data),
+    file_name="process_property_correlation_report.docx",
+    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    key=f"correlation_report_docx_{unit['state_key']}_{property_name}",
+    on_click=log_export_click, args=("correlation_report_docx",),
     kwargs={"description": f"{property_name} · {unit['label']}"},
 )
 pc_dl2.download_button(

@@ -169,10 +169,11 @@ rca_rc2.metric(
 )
 rca_dl1, rca_dl2 = st.columns(2)
 rca_dl1.download_button(
-    "Download PDF", data=reports.render_root_cause_report_pdf(root_cause_report_data),
-    file_name="root_cause_comparison_report.pdf", mime="application/pdf",
-    key=f"root_cause_report_pdf_{obs.id}",
-    on_click=log_export_click, args=("root_cause_report_pdf",),
+    "Download Word", data=reports.render_root_cause_report_docx(root_cause_report_data),
+    file_name="root_cause_comparison_report.docx",
+    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    key=f"root_cause_report_docx_{obs.id}",
+    on_click=log_export_click, args=("root_cause_report_docx",),
     kwargs={"description": f"{obs.observation_type} · run #{run.id}"},
 )
 rca_dl2.download_button(

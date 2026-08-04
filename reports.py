@@ -197,6 +197,7 @@ from docx import Document
 from docx.shared import Cm, Pt, RGBColor
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.utils import get_column_letter
+from reportlab.graphics import renderPM
 from reportlab.graphics.charts.barcharts import VerticalBarChart
 from reportlab.graphics.charts.linecharts import HorizontalLineChart
 from reportlab.graphics.shapes import Drawing
@@ -354,6 +355,31 @@ def _add_line_chart(ws, df, title, category_col, value_cols):
     ws.add_chart(chart, f"{anchor_col}2")
 
 
+def _build_bar_chart_drawing(categories, values, width=460, height=170,
+                              bar_color=colors.HexColor("#4A7A9D"), zero_floor=True):
+    """Pure Drawing-builder for a vertical bar chart, shared by the PDF
+    flowable (_bar_chart) and the Word rasterized-PNG embed (_docx_bar_chart)
+    below - kept as one function so both formats always draw the identical
+    chart, never two hand-maintained near-duplicates."""
+    drawing = Drawing(width, height)
+    chart = VerticalBarChart()
+    chart.x = 45
+    chart.y = 30
+    chart.height = height - 60
+    chart.width = width - 65
+    chart.data = [values]
+    chart.categoryAxis.categoryNames = [str(c)[:16] for c in categories]
+    chart.categoryAxis.labels.angle = 30
+    chart.categoryAxis.labels.dy = -12
+    chart.categoryAxis.labels.dx = -6
+    chart.categoryAxis.labels.fontSize = 7
+    if zero_floor:
+        chart.valueAxis.valueMin = 0
+    chart.bars[0].fillColor = bar_color
+    drawing.add(chart)
+    return drawing
+
+
 def _bar_chart(story, title, categories, values, note=None, width=460, height=170,
                 bar_color=colors.HexColor("#4A7A9D"), zero_floor=True):
     """A simple vertical bar chart flowable for the PDF - categories/values
@@ -374,27 +400,36 @@ def _bar_chart(story, title, categories, values, note=None, width=460, height=17
     if not categories or not any(v not in (None, 0) for v in values):
         story.append(_p("No data recorded."))
         return
-    drawing = Drawing(width, height)
-    chart = VerticalBarChart()
-    chart.x = 45
-    chart.y = 30
-    chart.height = height - 60
-    chart.width = width - 65
-    chart.data = [values]
-    chart.categoryAxis.categoryNames = [str(c)[:16] for c in categories]
-    chart.categoryAxis.labels.angle = 30
-    chart.categoryAxis.labels.dy = -12
-    chart.categoryAxis.labels.dx = -6
-    chart.categoryAxis.labels.fontSize = 7
-    if zero_floor:
-        chart.valueAxis.valueMin = 0
-    chart.bars[0].fillColor = bar_color
-    drawing.add(chart)
-    story.append(drawing)
+    story.append(_build_bar_chart_drawing(categories, values, width, height, bar_color, zero_floor))
 
 
 _LINE_COLOR_HEX = ["#4A7A9D", "#C0392B", "#7F8C8D", "#27AE60"]
 _LINE_COLORS = [colors.HexColor(h) for h in _LINE_COLOR_HEX]
+
+
+def _build_line_chart_drawing(categories, series, width=460, height=180):
+    """Pure Drawing-builder for a multi-line chart, shared by the PDF
+    flowable (_line_chart) and the Word rasterized-PNG embed (_docx_line_chart)
+    below - see _build_bar_chart_drawing's docstring for why this is split
+    out rather than duplicated."""
+    drawing = Drawing(width, height)
+    chart = HorizontalLineChart()
+    chart.x = 45
+    chart.y = 35
+    chart.height = height - 65
+    chart.width = width - 65
+    chart.data = [vals for _, vals in series]
+    chart.categoryAxis.categoryNames = [str(c)[:10] for c in categories]
+    chart.categoryAxis.labels.angle = 30
+    chart.categoryAxis.labels.dy = -12
+    chart.categoryAxis.labels.dx = -6
+    chart.categoryAxis.labels.fontSize = 6
+    for i, (_, vals) in enumerate(series):
+        color = _LINE_COLORS[i % len(_LINE_COLORS)]
+        chart.lines[i].strokeColor = color
+        chart.lines[i].strokeWidth = 1.5
+    drawing.add(chart)
+    return drawing
 
 
 def _line_chart(story, title, categories, series, note=None, width=460, height=180):
@@ -413,23 +448,7 @@ def _line_chart(story, title, categories, series, note=None, width=460, height=1
     if not categories or not series or not any(any(v is not None for v in vals) for _, vals in series):
         story.append(_p("No data recorded."))
         return
-    drawing = Drawing(width, height)
-    chart = HorizontalLineChart()
-    chart.x = 45
-    chart.y = 35
-    chart.height = height - 65
-    chart.width = width - 65
-    chart.data = [vals for _, vals in series]
-    chart.categoryAxis.categoryNames = [str(c)[:10] for c in categories]
-    chart.categoryAxis.labels.angle = 30
-    chart.categoryAxis.labels.dy = -12
-    chart.categoryAxis.labels.dx = -6
-    chart.categoryAxis.labels.fontSize = 6
-    for i, (_, vals) in enumerate(series):
-        color = _LINE_COLORS[i % len(_LINE_COLORS)]
-        chart.lines[i].strokeColor = color
-        chart.lines[i].strokeWidth = 1.5
-    drawing.add(chart)
+    drawing = _build_line_chart_drawing(categories, series, width, height)
     story.append(drawing)
     legend_bits = []
     for i, (label, _) in enumerate(series):
@@ -676,6 +695,24 @@ def render_period_summary_excel(data):
     })
 
 
+def render_period_summary_docx(data):
+    doc = Document()
+    _docx_report_header(
+        doc, "Plant / Period Summary Report",
+        f"{data['plant']} · {data['product_family']} · {data['date_from'] or 'earliest'} to {data['date_to'] or 'latest'}",
+    )
+    _docx_kv_table(doc, [
+        ("Production runs", data["total_runs"]),
+        ("Quality test pass rate", f"{data['pass_rate']}%" if data["pass_rate"] is not None else "—"),
+        ("Quality issues", data["total_quality_issues"]),
+        ("Recurring quality issues", data["recurring_issues"]),
+    ])
+    _docx_section(doc, "Production runs in range", data["runs"])
+    _docx_section(doc, "Quality issues in range", data["quality_issues"])
+    _docx_section(doc, "Breakdown by foam grade", data["grade_breakdown"])
+    return _docx_bytes(doc)
+
+
 # ---------------------------------------------------------------------------
 # 2. Trial Closeout Report
 #
@@ -799,6 +836,28 @@ def render_trial_report_excel(data):
         "Trial": header,
         "Quality Issues": data["quality_issues"],
     })
+
+
+def render_trial_report_docx(data):
+    doc = Document()
+    _docx_report_header(
+        doc, f"Trial Closeout Report — {data['source_type']} #{data['trial_id']}",
+        f"{data['foam_grade']} · {data['plant']} · {data['status']}",
+    )
+    _docx_kv_table(doc, [
+        ("Status", data["status"]), ("Responsible", data["responsible_person"]),
+        ("Foam grade", data["foam_grade"]), ("Plant", data["plant"]),
+        ("Trial date", data["trial_date"]), ("Batch reference", data["batch_reference"]),
+        ("Reviewed by", data["reviewed_by"]), ("Approved by", data["approved_by"]),
+        ("Date closed", data["date_closed"]),
+    ])
+    if data["notes"]:
+        doc.add_paragraph(f"Notes: {data['notes']}")
+    for label, value in data["narrative_fields"]:
+        _docx_heading(doc, label, size=11.5, color=_HTC_GREY, space_before=10)
+        doc.add_paragraph(value or "—")
+    _docx_section(doc, "Quality issues observed", data["quality_issues"])
+    return _docx_bytes(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -1025,6 +1084,38 @@ def render_recipe_formulation_record_excel(data):
     })
 
 
+def render_recipe_formulation_record_docx(data):
+    doc = Document()
+    _docx_report_header(
+        doc, f"Recipe / Formulation Record — {data['version_label']}",
+        f"{data['foam_grade']} · {data['product_family']} · "
+        f"{'Active recipe' if data['is_active'] else 'Retired version'}",
+    )
+    _docx_kv_table(doc, [
+        ("Approval status", data["approval_status"]), ("Active", "Yes" if data["is_active"] else "No"),
+        ("Effective date", data["effective_date"]), ("Created by", data["created_by"]),
+        ("Ratio / index", f"{data['ratio_index']:.3f}" if data["ratio_index"] is not None else "—"),
+    ])
+    if data["change_note"]:
+        doc.add_paragraph(f"Change note: {data['change_note']}")
+    _docx_section(doc, "Formulation (recipe components)", data["components"])
+
+    date_range = f"{data['date_from'] or 'earliest'} to {data['date_to'] or 'latest'}"
+    _docx_section(doc, f"Quality specs vs. results ({date_range})", data["quality_rows"])
+
+    _docx_heading(doc, "Cost", size=12, color=_HTC_GREY, space_before=10)
+    if data["cost_per_kg"] is None:
+        doc.add_paragraph("No priced components - cost per kg cannot be calculated.")
+    else:
+        coverage = f"{data['cost_priced_php']:.2f} / {data['cost_total_php']:.2f} php priced"
+        _docx_kv_table(doc, [("Cost per kg", data["cost_per_kg"]), ("Cost coverage", coverage)])
+        if data["cost_missing_materials"]:
+            doc.add_paragraph(
+                "Unpriced materials (excluded from total): " + ", ".join(data["cost_missing_materials"])
+            )
+    return _docx_bytes(doc)
+
+
 # ---------------------------------------------------------------------------
 # 4. Where Used Report
 #
@@ -1162,6 +1253,24 @@ def render_where_used_report_excel(data):
         "Target Properties": data["target_rows"],
         "Trial Precedent": data["trial_rows"],
     })
+
+
+def render_where_used_report_docx(data):
+    doc = Document()
+    _docx_report_header(
+        doc, f"Where Used Report — {data['raw_material_name']}",
+        f"{data['category']} · Default supplier: {data['default_supplier']} · "
+        f"{'Active' if data['active'] else 'Inactive'} material",
+    )
+    _docx_kv_table(doc, [
+        ("Recipe versions using this material", data["recipe_version_count"]),
+        ("Foam grades affected", data["foam_grade_count"]),
+        ("Product families affected", data["product_family_count"]),
+    ])
+    _docx_section(doc, "Recipes using this material", data["usage_rows"])
+    _docx_section(doc, "Target properties of affected foam grades", data["target_rows"])
+    _docx_section(doc, "Trial precedent (Customer / Optimization Trials on these recipes)", data["trial_rows"])
+    return _docx_bytes(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -1452,6 +1561,47 @@ def render_batch_release_record_excel(data):
     return _excel_bytes(sheets)
 
 
+def render_batch_release_record_docx(data):
+    doc = Document()
+    _docx_report_header(
+        doc, f"Batch Release Record — Run #{data['run_id']}",
+        f"{data['plant']} · {data['foam_grade']} · {data['run_date'] or '—'} · "
+        f"Verdict: {data['quality_verdict']}",
+    )
+    _docx_kv_table(doc, [
+        ("Plant", data["plant"]), ("Product family", data["product_family"]),
+        ("Foam grade", data["foam_grade"]), ("Machine", data["machine"]),
+        ("Run date", data["run_date"]), ("Batch reference", data["batch_reference"]),
+        ("Block reference", data["block_reference"]), ("Operator/team", data["operator"]),
+        ("Quality verdict", data["quality_verdict"]),
+    ])
+    if data["notes"]:
+        doc.add_paragraph(f"Notes: {data['notes']}")
+
+    _docx_heading(doc, "Recipe used", size=12, color=_HTC_GREY, space_before=10)
+    _docx_kv_table(doc, [
+        ("Recipe version", data["recipe_version_label"]), ("Approval status", data["recipe_approval_status"]),
+        ("Effective date", data["recipe_effective_date"]),
+        ("Ratio / index", f"{data['recipe_ratio_index']:.3f}" if data["recipe_ratio_index"] is not None else "—"),
+    ])
+    _docx_section(doc, "Formulation", data["recipe_components"])
+    _docx_section(doc, "Quality test results", data["quality_results"])
+    _docx_section(doc, "Quality issues", data["quality_issues"])
+
+    if data["has_flags"]:
+        _docx_heading(doc, "Flagged — supporting context from other tabs", size=15, space_before=14)
+        doc.add_paragraph("Flagged because: " + "; ".join(data["flag_reasons"]))
+        _docx_section(doc, "Process setting changes (Setup → Finalized)", data["setup_deviations"])
+        _docx_section(doc, "Fall-plate position changes (Setup → Finalized)", data["fallplate_deviations"])
+        _docx_section(doc, "Component stream readings (Finalized phase)", data["stream_readings"])
+        if data["stream_calibration_flags"]:
+            doc.add_paragraph(
+                "⚠ Non-valid calibration status recorded for: " + ", ".join(data["stream_calibration_flags"])
+            )
+        _docx_section(doc, "Production events during this run", data["production_events"])
+    return _docx_bytes(doc)
+
+
 # ---------------------------------------------------------------------------
 # Sample Certificate of Analysis
 #
@@ -1632,6 +1782,40 @@ def render_sample_certificate_excel(data):
         "Quality Results": data["quality_results"],
     }
     return _excel_bytes(sheets)
+
+
+def render_sample_certificate_docx(data):
+    doc = Document()
+    _docx_report_header(
+        doc, f"Sample Certificate of Analysis — Sample #{data['sample_id']}",
+        f"{data['plant']} · {data['foam_grade']} · Zone: {data['zone_label']} · "
+        f"Verdict: {data['overall_verdict']}",
+    )
+    _docx_heading(doc, "Sample source", size=12, color=_HTC_GREY, space_before=6)
+    _docx_kv_table(doc, data["header_fields"] + [("Foam grade", data["foam_grade"]), ("Plant", data["plant"])])
+
+    _docx_heading(doc, "Sample", size=12, color=_HTC_GREY, space_before=10)
+    _docx_kv_table(doc, [
+        ("Sample ID", data["sample_id"]), ("Zone", data["zone_label"]), ("Sampled", data["sample_ts"]),
+    ])
+    if data["sample_notes"]:
+        doc.add_paragraph(f"Notes: {data['sample_notes']}")
+
+    _docx_heading(doc, "Recipe used", size=12, color=_HTC_GREY, space_before=10)
+    _docx_kv_table(doc, [
+        ("Recipe version", data["recipe_version_label"]), ("Approval status", data["recipe_approval_status"]),
+        ("Effective date", data["recipe_effective_date"]),
+        ("Ratio / index", f"{data['recipe_ratio_index']:.3f}" if data["recipe_ratio_index"] is not None else "—"),
+    ])
+    _docx_section(doc, "Formulation", data["recipe_components"])
+
+    _docx_heading(doc, "Quality test results", size=12, color=_HTC_GREY, space_before=10)
+    _docx_kv_table(doc, [
+        ("Overall verdict", data["overall_verdict"]),
+        ("Pass", data["pass_count"]), ("Fail", data["fail_count"]),
+    ])
+    _docx_section(doc, "Results (target vs. actual)", data["quality_results"])
+    return _docx_bytes(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -1837,6 +2021,46 @@ def render_quality_test_report_excel(data):
     return _excel_bytes(sheets, charts=charts)
 
 
+def render_quality_test_report_docx(data):
+    scope = data["scope"]
+    doc = Document()
+    _docx_report_header(
+        doc, "Quality Test Result Report",
+        f"Pass/Fail: {scope['pass_fail_label']} · Property: {scope['property_label']} · "
+        f"Foam scope: {scope['foam_scope_label']}",
+    )
+    _docx_kv_table(doc, [
+        ("Results", data["total_results"]),
+        ("Pass rate", f"{data['pass_rate']}%" if data["pass_rate"] is not None else "—"),
+        ("Pass", data["pass_count"]), ("Fail", data["fail_count"]),
+        ("Not computed", data["not_computed_count"]),
+    ])
+
+    _docx_bar_chart(
+        doc, "Pass / Fail breakdown",
+        ["Pass", "Fail", "Not computed"],
+        [data["pass_count"], data["fail_count"], data["not_computed_count"]],
+    )
+
+    prop_rows = data["property_breakdown"]
+    _docx_bar_chart(
+        doc, "Failures by property",
+        [row["Property"] for row in prop_rows], [row["Fail count"] for row in prop_rows],
+        note="Which tested properties are behind the failures in this selection." if prop_rows else None,
+    )
+
+    if data["show_grade_breakdown"]:
+        grade_rows = data["grade_breakdown"]
+        _docx_bar_chart(
+            doc, "Failures by foam grade",
+            [row["Foam grade"] for row in grade_rows], [row["Fail count"] for row in grade_rows],
+            note="Shown because this selection spans more than one foam grade.",
+        )
+
+    _docx_section(doc, "Failing results (target vs. actual)", data["failing_results"])
+    return _docx_bytes(doc)
+
+
 # ---------------------------------------------------------------------------
 # 6. Quality Issue Report (Quality Observation page)
 #
@@ -2021,6 +2245,44 @@ def render_quality_issue_report_excel(data):
     return _excel_bytes(sheets, charts=charts)
 
 
+def render_quality_issue_report_docx(data):
+    scope = data["scope"]
+    group_col = data["group_by_col"]
+    doc = Document()
+    _docx_report_header(
+        doc, "Quality Issue Report",
+        f"Severity: {scope['severity_label']} · Foam scope: {scope['foam_scope_label']} · "
+        f"Grouped by: {scope['group_by_label']}",
+    )
+    high_count = next((r["Count"] for r in data["severity_breakdown"] if r["Severity"] == "High"), 0)
+    _docx_kv_table(doc, [
+        ("Issues", data["total_issues"]), ("High severity", high_count),
+        ("Recurring", data["recurring_count"]), ("One-off", data["one_off_count"]),
+    ])
+
+    sev_rows = data["severity_breakdown"]
+    _docx_bar_chart(doc, "Severity breakdown", [r["Severity"] for r in sev_rows], [r["Count"] for r in sev_rows])
+
+    issue_rows = data["issue_breakdown"]
+    _docx_bar_chart(
+        doc, f"Issues by {group_col.lower()}",
+        [r[group_col] for r in issue_rows], [r["Count"] for r in issue_rows],
+        note=f"Which {group_col.lower()}(s) occur most often in this selection." if issue_rows else None,
+    )
+
+    conf_rows = data["confidence_breakdown"]
+    _docx_bar_chart(
+        doc, "Confidence level breakdown",
+        [r["Confidence level"] for r in conf_rows], [r["Count"] for r in conf_rows],
+    )
+
+    _docx_section(
+        doc, "Priority issues (High severity and/or Recurring)", data["priority_issues"],
+        columns=["Source", "Issue", "Severity", "Frequency", "Suspected cause"],
+    )
+    return _docx_bytes(doc)
+
+
 # ---------------------------------------------------------------------------
 # Sample Report (Production Samples / Customer Trials & Samples /
 # Optimization Trials & Samples pages)
@@ -2159,6 +2421,31 @@ def render_sample_report_excel(data):
         ),
     ]
     return _excel_bytes(sheets, charts=charts)
+
+
+def render_sample_report_docx(data):
+    scope = data["scope"]
+    doc = Document()
+    _docx_report_header(doc, f"Sample Report — {data['source_type']}", scope.get("selection_label", ""))
+    _docx_kv_table(doc, [
+        ("Samples in selection", data["total_samples"]),
+        ("With a quality result", data["samples_with_results"]),
+        ("Coverage", f"{data['coverage_pct']}%" if data["coverage_pct"] is not None else "—"),
+        ("Pass rate (linked results)", f"{data['pass_rate']}%" if data["pass_rate"] is not None else "—"),
+        ("Pass", data["pass_count"]), ("Fail", data["fail_count"]),
+    ])
+
+    zone_rows = data["zone_breakdown"]
+    _docx_bar_chart(doc, "Samples by zone", [row["Zone"] for row in zone_rows], [row["Sample count"] for row in zone_rows])
+
+    _docx_bar_chart(
+        doc, "Linked quality result outcomes",
+        ["Pass", "Fail", "Not computed"],
+        [data["pass_count"], data["fail_count"], data["not_computed_count"]],
+        note="Pass/Fail of the quality test results recorded against these samples - not every "
+             "sample has one yet, see Coverage above.",
+    )
+    return _docx_bytes(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -2544,6 +2831,120 @@ def render_pi3_qa_report_docx(data):
 
 
 # ---------------------------------------------------------------------------
+# Shared Word (.docx) report infrastructure
+#
+# Added 2026-08-04 per user direction: every "Download PDF" button app-wide
+# is being replaced with a "Download Word" button (the user's original,
+# earlier instruction was Word format throughout - PDF was a mistake on
+# this app's part). Rather than hand-roll python-docx calls in each of the
+# 15 render_*_docx functions below, these helpers mirror the PDF-side
+# building blocks (_title_block/_key_value_table/_section/_bar_chart/
+# _line_chart) one-for-one, so every render_*_docx function reads almost
+# identically to its render_*_pdf twin. Charts reuse the exact same
+# reportlab Drawing objects the PDF uses (_build_bar_chart_drawing/
+# _build_line_chart_drawing above) rasterized to PNG via renderPM, so the
+# chart itself is pixel-identical between the two formats, not a
+# separately-drawn approximation.
+# ---------------------------------------------------------------------------
+
+def _drawing_to_png_bytes(drawing, dpi=144):
+    """Rasterizes a reportlab Drawing (a VerticalBarChart/HorizontalLineChart
+    flowable) to PNG bytes for embedding in a Word document - python-docx
+    has no native vector-chart support, so charts have to become images.
+    dpi=144 (2x the default 72) so the embed looks crisp at the width it's
+    placed at in the document, not blurry."""
+    buf = io.BytesIO()
+    renderPM.drawToFile(drawing, buf, fmt="PNG", dpi=dpi)
+    return buf.getvalue()
+
+
+def _docx_report_header(doc, title, subtitle=None):
+    """HTC-branded header (logo + title + optional subtitle) shared by every
+    generated report - same layout as render_pi3_qa_report_docx's header,
+    generalized so every report type looks consistent regardless of which
+    page generated it."""
+    normal = doc.styles["Normal"]
+    normal.font.name = "Calibri"
+    normal.font.size = Pt(10.5)
+
+    header = doc.add_table(rows=1, cols=2)
+    header.autofit = False
+    header.columns[0].width = Cm(3.6)
+    logo_cell, title_cell = header.rows[0].cells
+    if os.path.exists(_HTC_LOGO_PATH):
+        run = logo_cell.paragraphs[0].add_run()
+        run.add_picture(_HTC_LOGO_PATH, width=Cm(3.0))
+    title_p = title_cell.paragraphs[0]
+    title_run = title_p.add_run(title)
+    title_run.bold = True
+    title_run.font.size = Pt(18)
+    title_run.font.color.rgb = _HTC_BLUE
+    if subtitle:
+        subtitle_p = title_cell.add_paragraph()
+        subtitle_run = subtitle_p.add_run(subtitle)
+        subtitle_run.italic = True
+        subtitle_run.font.size = Pt(10)
+        subtitle_run.font.color.rgb = _HTC_GREY
+    doc.add_paragraph()
+
+
+def _docx_section(doc, title, rows, columns=None, max_rows=200):
+    """Word twin of _section (and, since Word tables wrap free text on
+    their own, also of _wrapped_section) - a heading followed by a bordered
+    table built from a list of dicts, or a plain "No data recorded." line
+    if rows is empty. columns, if given, narrows which dict keys are shown
+    and in what order - the same purpose _wrapped_section's explicit
+    `columns` argument serves on the PDF side."""
+    _docx_heading(doc, title, size=12, color=_HTC_GREY, space_before=10)
+    if not rows:
+        doc.add_paragraph("No data recorded.")
+        return
+    if columns:
+        rows = [{c: r.get(c) for c in columns} for r in rows]
+    _docx_data_table(doc, rows, max_rows=max_rows)
+
+
+def _docx_bar_chart(doc, title, categories, values, note=None, zero_floor=True,
+                     bar_color=colors.HexColor("#4A7A9D")):
+    """Word twin of _bar_chart - same Drawing, rasterized to a PNG embed
+    since Word has no native vector-chart support via python-docx."""
+    _docx_heading(doc, title, size=12, color=_HTC_GREY, space_before=10)
+    if note:
+        note_p = doc.add_paragraph(note)
+        note_p.runs[0].font.size = Pt(9)
+    if not categories or not any(v not in (None, 0) for v in values):
+        doc.add_paragraph("No data recorded.")
+        return
+    drawing = _build_bar_chart_drawing(categories, values, bar_color=bar_color, zero_floor=zero_floor)
+    doc.add_picture(io.BytesIO(_drawing_to_png_bytes(drawing)), width=Cm(16))
+
+
+def _docx_line_chart(doc, title, categories, series, note=None):
+    """Word twin of _line_chart - same Drawing, rasterized to a PNG embed,
+    with the same color-coded legend line underneath."""
+    _docx_heading(doc, title, size=12, color=_HTC_GREY, space_before=10)
+    if note:
+        note_p = doc.add_paragraph(note)
+        note_p.runs[0].font.size = Pt(9)
+    if not categories or not series or not any(any(v is not None for v in vals) for _, vals in series):
+        doc.add_paragraph("No data recorded.")
+        return
+    drawing = _build_line_chart_drawing(categories, series)
+    doc.add_picture(io.BytesIO(_drawing_to_png_bytes(drawing)), width=Cm(16))
+    legend = doc.add_paragraph()
+    for i, (label, _) in enumerate(series):
+        run = legend.add_run(("   " if i else "") + "■ " + label)
+        run.font.size = Pt(9)
+        run.font.color.rgb = RGBColor.from_string(_LINE_COLOR_HEX[i % len(_LINE_COLOR_HEX)].lstrip("#"))
+
+
+def _docx_bytes(doc):
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
 # 10. Recipe Optimization Report (Context / Analysis / Conclusions)
 #
 # Added 2026-08-04 as part of the Industrial Intelligence reports batch (per
@@ -2765,6 +3166,54 @@ def render_recipe_optimization_report_excel(data):
         ),
     ]
     return _excel_bytes(sheets, charts=charts)
+
+
+def render_recipe_optimization_report_docx(data):
+    doc = Document()
+    _docx_report_header(
+        doc, "Recipe Optimization Report",
+        f"{data['grade_name']} · Plant: {data['plant_name']} · Recipe "
+        f"{data['version_label']} ({data['version_status']})",
+    )
+    _docx_heading(doc, "Context", size=15)
+    _docx_kv_table(doc, [
+        ("Foam grade", data["grade_name"]), ("Plant", data["plant_name"]),
+        ("Recipe version", data["version_label"]), ("Status", data["version_status"]),
+        ("Ingredients", data["component_count"]),
+        ("Cost per kg (USD)", f"{data['cost_per_kg']:.2f}" if data["cost_per_kg"] is not None else "—"),
+        (
+            "Cost coverage",
+            f"{data['cost_coverage_pct']:.0f}%" if data["cost_coverage_pct"] is not None else "—",
+        ),
+        (
+            "Lab trial data included",
+            "Yes" if data["include_trials"] else "No (production runs only)",
+        ),
+    ])
+
+    _docx_heading(doc, "Analysis", size=15)
+    _docx_section(doc, "Does the current recipe meet target?", data["expectation_rows"])
+    _docx_bar_chart(
+        doc, "Deviation from target, by property (%)",
+        data["deviation_categories"], data["deviation_values"],
+        note="Positive = above target, negative = below target, as a % of target.",
+        zero_floor=False,
+    )
+    _docx_section(
+        doc, f"Ingredient-dosage correlation with {data['corr_property']}",
+        data["correlation_rows"],
+    )
+    _docx_bar_chart(
+        doc, f"Correlation with {data['corr_property']}, by raw material",
+        data["correlation_categories"], data["correlation_values"],
+        zero_floor=False,
+    )
+
+    _docx_heading(doc, "Conclusions", size=15)
+    for line in data["conclusions"]:
+        p = doc.add_paragraph(style="List Bullet")
+        p.add_run(line)
+    return _docx_bytes(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -2999,6 +3448,46 @@ def render_trend_analysis_report_excel(data):
     return _excel_bytes(sheets, charts=charts)
 
 
+def render_trend_analysis_report_docx(data):
+    doc = Document()
+    _docx_report_header(doc, "Trend Analysis Report", f"{data['property_name']} · {data['subject_desc']}")
+
+    _docx_heading(doc, "Context", size=15)
+    _docx_kv_table(doc, [
+        ("Property", data["property_name"]), ("Subject", data["subject_desc"]),
+        ("Results analyzed", data["n_results"]), ("Date range", data["date_range"]),
+        ("Lab trial data included", "Yes" if data["include_trials"] else "No"),
+        ("Pooled by % of target", "Yes" if data["pooling_grades"] else "No"),
+    ])
+
+    _docx_heading(doc, "Analysis", size=15)
+    _docx_line_chart(
+        doc, "Control chart (sudden changes)",
+        data["control_categories"], data["control_series"],
+        note="Actual result vs. center line and control limits." if data["control_categories"] else None,
+    )
+    if data["control_flag_rows"]:
+        _docx_section(doc, "Unusual patterns flagged", data["control_flag_rows"])
+    if data["capability_kv"]:
+        _docx_heading(doc, "Margin to spec", size=12, color=_HTC_GREY, space_before=10)
+        _docx_kv_table(doc, data["capability_kv"])
+    _docx_line_chart(
+        doc, "CUSUM (slow drift)",
+        data["cusum_categories"], data["cusum_series"],
+        note=(
+            "Cumulative sum of small deviations from target over time."
+            if data["cusum_categories"] else None
+        ),
+    )
+    _docx_section(doc, "What else changed on this timeline", data["change_rows"])
+
+    _docx_heading(doc, "Conclusions", size=15)
+    for line in data["conclusions"]:
+        p = doc.add_paragraph(style="List Bullet")
+        p.add_run(line)
+    return _docx_bytes(doc)
+
+
 # ---------------------------------------------------------------------------
 # 12. Process-Property Correlation Report (Context / Analysis / Conclusions)
 #
@@ -3113,6 +3602,34 @@ def render_correlation_report_excel(data):
         ),
     ]
     return _excel_bytes(sheets, charts=charts)
+
+
+def render_correlation_report_docx(data):
+    doc = Document()
+    _docx_report_header(
+        doc, "Process-Property Correlation Report", f"{data['property_name']} · {data['subject_desc']}",
+    )
+    _docx_heading(doc, "Context", size=15)
+    _docx_kv_table(doc, [
+        ("Property", data["property_name"]), ("Subject", data["subject_desc"]),
+        ("Pooled by % of target", "Yes" if data["pooling_grades"] else "No"),
+        ("Process settings ranked", len(data["ranking_rows"])),
+    ])
+
+    _docx_heading(doc, "Analysis", size=15)
+    _docx_section(doc, "All settings, ranked by correlation strength", data["ranking_rows"])
+    _docx_bar_chart(
+        doc, f"Correlation with {data['property_name']}, by process setting",
+        data["correlation_categories"], data["correlation_values"],
+        note="Positive/negative shows direction; size shows strength of association.",
+        zero_floor=False,
+    )
+
+    _docx_heading(doc, "Conclusions", size=15)
+    for line in data["conclusions"]:
+        p = doc.add_paragraph(style="List Bullet")
+        p.add_run(line)
+    return _docx_bytes(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -3233,6 +3750,37 @@ def render_root_cause_report_excel(data):
         ),
     ]
     return _excel_bytes(sheets, charts=charts)
+
+
+def render_root_cause_report_docx(data):
+    doc = Document()
+    _docx_report_header(
+        doc, "Root-Cause Comparison Report",
+        f"{data['observation_type']} on run #{data['run_id']} ({data['grade_name']})",
+    )
+    _docx_heading(doc, "Context", size=15)
+    _docx_kv_table(doc, [
+        ("Quality issue", data["observation_type"]), ("Severity", data["severity"]),
+        ("Frequency", data["frequency"]), ("Run", f"#{data['run_id']} ({data['run_date']})"),
+        ("Foam grade", data["grade_name"]),
+        ("Compared against", f"run #{data['prior_run_id']} ({data['prior_run_date']})"),
+        ("Logged suspected cause", data["suspected_cause"] or "—"),
+    ])
+
+    _docx_heading(doc, "Analysis", size=15)
+    _docx_section(doc, "What was different vs. the prior run", data["change_rows"])
+    _docx_bar_chart(
+        doc, "Process-setting shifts (%)",
+        data["shift_categories"], data["shift_values"],
+        note="Only settings that shifted at least 2% between the two runs.",
+        zero_floor=False,
+    )
+
+    _docx_heading(doc, "Conclusions", size=15)
+    for line in data["conclusions"]:
+        p = doc.add_paragraph(style="List Bullet")
+        p.add_run(line)
+    return _docx_bytes(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -3357,6 +3905,33 @@ def render_machine_settings_report_excel(data):
         ),
     ]
     return _excel_bytes(sheets, charts=charts)
+
+
+def render_machine_settings_report_docx(data):
+    doc = Document()
+    _docx_report_header(
+        doc, "Machine Settings Optimization Report", f"{data['property_name']} · {data['subject_desc']}",
+    )
+    _docx_heading(doc, "Context", size=15)
+    _docx_kv_table(doc, [
+        ("Property", data["property_name"]), ("Subject", data["subject_desc"]),
+        ("Pooled by % of target", "Yes" if data["pooling_grades"] else "No"),
+        ("Process settings ranked", len(data["ranking_rows"])),
+    ])
+
+    _docx_heading(doc, "Analysis", size=15)
+    _docx_section(doc, "All settings, ranked by how clearly they separate outcomes", data["ranking_rows"])
+    _docx_bar_chart(
+        doc, "Gap vs. worst-performing range, by process setting (points)",
+        data["gap_categories"], data["gap_values"],
+        note="A bigger gap means a more actionable setting.",
+    )
+
+    _docx_heading(doc, "Conclusions", size=15)
+    for line in data["conclusions"]:
+        p = doc.add_paragraph(style="List Bullet")
+        p.add_run(line)
+    return _docx_bytes(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -3494,3 +4069,33 @@ def render_expert_notes_report_excel(data):
         ),
     ]
     return _excel_bytes(sheets, charts=charts)
+
+
+def render_expert_notes_report_docx(data):
+    doc = Document()
+    _docx_report_header(doc, "Expert Notes Report", data["scope_label"])
+
+    _docx_heading(doc, "Context", size=15)
+    _docx_kv_table(doc, [
+        ("Scope", data["scope_label"]), ("Total notes", data["total"]),
+        ("Fed into PI3", f"{data['in_pi3_count']} of {data['total']}"),
+    ])
+
+    _docx_heading(doc, "Analysis", size=15)
+    _docx_bar_chart(
+        doc, "Notes by confidence level",
+        [r["Confidence level"] for r in data["confidence_rows"]],
+        [r["Count"] for r in data["confidence_rows"]],
+    )
+    _docx_bar_chart(
+        doc, "Notes by source",
+        [r["Source"] for r in data["source_rows"]],
+        [r["Count"] for r in data["source_rows"]],
+    )
+    _docx_section(doc, "Notes by linked entity type", data["link_type_rows"])
+
+    _docx_heading(doc, "Conclusions", size=15)
+    for line in data["conclusions"]:
+        p = doc.add_paragraph(style="List Bullet")
+        p.add_run(line)
+    return _docx_bytes(doc)

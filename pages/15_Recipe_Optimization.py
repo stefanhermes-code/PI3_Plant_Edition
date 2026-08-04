@@ -451,10 +451,11 @@ else:
     )
     ro_dl1, ro_dl2 = st.columns(2)
     ro_dl1.download_button(
-        "Download PDF", data=reports.render_recipe_optimization_report_pdf(ro_report_data),
-        file_name="recipe_optimization_report.pdf", mime="application/pdf",
-        key=f"recipe_opt_report_pdf_{grade.id}",
-        on_click=log_export_click, args=("recipe_optimization_report_pdf",),
+        "Download Word", data=reports.render_recipe_optimization_report_docx(ro_report_data),
+        file_name="recipe_optimization_report.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        key=f"recipe_opt_report_docx_{grade.id}",
+        on_click=log_export_click, args=("recipe_optimization_report_docx",),
         kwargs={"description": f"{grade.grade_name} · {current_version.version_label}"},
     )
     ro_dl2.download_button(

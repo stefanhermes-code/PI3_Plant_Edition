@@ -621,10 +621,11 @@ with tab_report:
 
         dl1, dl2 = st.columns(2)
         dl1.download_button(
-            "Download PDF", data=reports.render_sample_report_pdf(report_data),
-            file_name="customer_trial_samples_report.pdf", mime="application/pdf",
-            key="ct_sample_report_pdf", disabled=report_data["total_samples"] == 0,
-            on_click=log_export_click, args=("ct_sample_report_pdf",), kwargs={"description": selection_label},
+            "Download Word", data=reports.render_sample_report_docx(report_data),
+            file_name="customer_trial_samples_report.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="ct_sample_report_docx", disabled=report_data["total_samples"] == 0,
+            on_click=log_export_click, args=("ct_sample_report_docx",), kwargs={"description": selection_label},
         )
         dl2.download_button(
             "Download Excel", data=reports.render_sample_report_excel(report_data),

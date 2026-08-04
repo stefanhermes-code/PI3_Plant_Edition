@@ -456,10 +456,11 @@ tr_rc1.metric(
 tr_rc2.metric("Real trend?", "Yes" if (trend and trend["significant"]) else ("No" if trend else "—"))
 tr_dl1, tr_dl2 = st.columns(2)
 tr_dl1.download_button(
-    "Download PDF", data=reports.render_trend_analysis_report_pdf(trend_report_data),
-    file_name="trend_analysis_report.pdf", mime="application/pdf",
-    key=f"trend_report_pdf_{unit['state_key']}_{property_name}",
-    on_click=log_export_click, args=("trend_analysis_report_pdf",),
+    "Download Word", data=reports.render_trend_analysis_report_docx(trend_report_data),
+    file_name="trend_analysis_report.docx",
+    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    key=f"trend_report_docx_{unit['state_key']}_{property_name}",
+    on_click=log_export_click, args=("trend_analysis_report_docx",),
     kwargs={"description": f"{property_name} · {unit['label']}"},
 )
 tr_dl2.download_button(

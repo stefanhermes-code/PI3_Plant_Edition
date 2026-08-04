@@ -659,10 +659,11 @@ else:
     rc3.metric("Failing results", report_data["fail_count"])
     dl1, dl2 = st.columns(2)
     dl1.download_button(
-        "Download PDF", data=reports.render_quality_test_report_pdf(report_data),
-        file_name="quality_test_result_report.pdf", mime="application/pdf",
-        key="quality_test_report_pdf",
-        on_click=log_export_click, args=("quality_test_report_pdf",),
+        "Download Word", data=reports.render_quality_test_report_docx(report_data),
+        file_name="quality_test_result_report.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        key="quality_test_report_docx",
+        on_click=log_export_click, args=("quality_test_report_docx",),
         kwargs={"description": f"{pass_fail_label} · {property_label} · {scope_label}"},
     )
     dl2.download_button(

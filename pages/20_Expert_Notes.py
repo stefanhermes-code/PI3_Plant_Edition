@@ -215,10 +215,11 @@ en_rc2.metric(
 )
 en_dl1, en_dl2 = st.columns(2)
 en_dl1.download_button(
-    "Download PDF", data=reports.render_expert_notes_report_pdf(expert_notes_report_data),
-    file_name="expert_notes_report.pdf", mime="application/pdf",
-    key="expert_notes_report_pdf",
-    on_click=log_export_click, args=("expert_notes_report_pdf",),
+    "Download Word", data=reports.render_expert_notes_report_docx(expert_notes_report_data),
+    file_name="expert_notes_report.docx",
+    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    key="expert_notes_report_docx",
+    on_click=log_export_click, args=("expert_notes_report_docx",),
     kwargs={"description": en_scope_label},
 )
 en_dl2.download_button(

@@ -159,10 +159,11 @@ with tab_run:
 
         dl1, dl2 = st.columns(2)
         dl1.download_button(
-            "Download PDF", data=reports.render_batch_release_record_pdf(data),
-            file_name=f"run_{data['run_id']}_batch_release_record.pdf", mime="application/pdf",
-            key="run_report_pdf",
-            on_click=log_export_click, args=("batch_release_record_pdf",),
+            "Download Word", data=reports.render_batch_release_record_docx(data),
+            file_name=f"run_{data['run_id']}_batch_release_record.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="run_report_docx",
+            on_click=log_export_click, args=("batch_release_record_docx",),
             kwargs={"description": f"Run #{data['run_id']}"},
         )
         dl2.download_button(
@@ -227,10 +228,11 @@ with tab_period:
     dl1, dl2 = st.columns(2)
     period_label = f"{date_from}_to_{date_to}"
     dl1.download_button(
-        "Download PDF", data=reports.render_period_summary_pdf(data),
-        file_name=f"period_summary_{period_label}.pdf", mime="application/pdf",
-        key="period_report_pdf",
-        on_click=log_export_click, args=("period_summary_report_pdf",),
+        "Download Word", data=reports.render_period_summary_docx(data),
+        file_name=f"period_summary_{period_label}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        key="period_report_docx",
+        on_click=log_export_click, args=("period_summary_report_docx",),
         kwargs={"description": f"{data['plant']} · {data['product_family']} · {period_label}"},
     )
     dl2.download_button(
@@ -300,10 +302,11 @@ with tab_trial:
 
         dl1, dl2 = st.columns(2)
         dl1.download_button(
-            "Download PDF", data=reports.render_trial_report_pdf(data),
-            file_name=f"trial_{data['trial_id']}_closeout_report.pdf", mime="application/pdf",
-            key="trial_report_pdf",
-            on_click=log_export_click, args=("trial_closeout_report_pdf",),
+            "Download Word", data=reports.render_trial_report_docx(data),
+            file_name=f"trial_{data['trial_id']}_closeout_report.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="trial_report_docx",
+            on_click=log_export_click, args=("trial_closeout_report_docx",),
             kwargs={"description": f"Trial #{data['trial_id']}"},
         )
         dl2.download_button(
@@ -385,10 +388,11 @@ with tab_sample:
 
         dl1, dl2 = st.columns(2)
         dl1.download_button(
-            "Download PDF", data=reports.render_sample_certificate_pdf(data),
-            file_name=f"sample_{data['sample_id']}_certificate.pdf", mime="application/pdf",
-            key="sample_cert_pdf",
-            on_click=log_export_click, args=("sample_certificate_pdf",),
+            "Download Word", data=reports.render_sample_certificate_docx(data),
+            file_name=f"sample_{data['sample_id']}_certificate.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="sample_cert_docx",
+            on_click=log_export_click, args=("sample_certificate_docx",),
             kwargs={"description": f"Sample #{data['sample_id']}"},
         )
         dl2.download_button(

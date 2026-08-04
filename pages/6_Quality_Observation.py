@@ -560,10 +560,11 @@ else:
     )
     rdl1, rdl2 = st.columns(2)
     rdl1.download_button(
-        "Download PDF", data=reports.render_quality_issue_report_pdf(issue_report_data),
-        file_name="quality_issue_report.pdf", mime="application/pdf",
-        key="quality_issue_report_pdf",
-        on_click=log_export_click, args=("quality_issue_report_pdf",),
+        "Download Word", data=reports.render_quality_issue_report_docx(issue_report_data),
+        file_name="quality_issue_report.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        key="quality_issue_report_docx",
+        on_click=log_export_click, args=("quality_issue_report_docx",),
         kwargs={"description": f"{severity_label} · {scope_label} · {breakdown_col}"},
     )
     rdl2.download_button(
