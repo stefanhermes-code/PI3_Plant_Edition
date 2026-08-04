@@ -52,6 +52,28 @@ and PI3's own Word download on relevant pages already covers narrative):
   recipe version containing it - "if I replace this material, what's
   affected and what trials already exist to lean on."
 
+A third purpose-built report, added 2026-08-04 for the Production Run page
+(pages/4_Production_Run_Trial_Record.py):
+
+- build_batch_release_record_data() / render_batch_release_record_pdf()
+  / render_batch_release_record_excel()
+  One production run: the recipe used (in full - not just a reference),
+  and a rolled-up quality conformance verdict (Pass/Fail per tested
+  property plus one overall Conforming/Non-conforming/Incomplete verdict)
+  and any quality issues recorded. If - and only if - a flag is raised
+  (a failed result or a recorded quality issue), the report widens to
+  pull supporting context from every other tab on the page: Setup-vs-
+  Finalized process-setting deviations (including fall-plate position
+  changes), the Finalized phase's actual component stream readings (with
+  any non-"Valid" calibration status called out), and any Production
+  Events logged during the run - "does this batch look wrong, and if so
+  what else was going on at the time" in one document, not five separate
+  tab exports. A clean run stays a short document; a flagged one pulls in
+  exactly what's relevant, not everything that exists. Not yet wired to
+  replace the older build_run_report_data() below (still used by
+  pages/21_Report.py) - that page is its own item in the Reports redesign
+  and hasn't been reached yet.
+
 A fourth, narrower report type lives here too:
 
 - build_pi3_qa_report_data() / render_pi3_qa_report_docx()
@@ -88,13 +110,17 @@ from reportlab.platypus import (
 
 from analytics import PHASE_SETTING_FIELDS, PHASE_SETTING_LABELS, recipe_version_cost
 from db import (
+    ComponentStreamReading,
     CustomerTrial,
+    FallplateSectionPosition,
     FoamGrade,
     FoamGradeTargetProperty,
+    Machine,
     OptimizationTrial,
     Plant,
     PhysicalPropertyResult,
     ProductFamily,
+    ProductionEvent,
     ProductionPhase,
     ProductionRun,
     QualityObservation,
@@ -960,7 +986,295 @@ def render_where_used_report_excel(data):
 
 
 # ---------------------------------------------------------------------------
-# 6. PI3 Q&A Report (DOCX only)
+# 6. Batch Release / Conformance Record (Production Run)
+#
+# Purpose (per user direction 2026-08-04): "did this batch meet spec, and
+# is there anything on record I should know" - not a transcription of
+# every stored field on the run. A clean run gets a short document,
+# header + recipe + verdict. A FLAGGED run (a failed quality result, or
+# any recorded quality issue) widens to pull relevant context from every
+# other tab on the Production Run page - Setup-vs-Finalized process
+# settings, actual component stream readings, and Production Events -
+# because a flag's explanation often isn't on the same tab as the flag
+# itself.
+# ---------------------------------------------------------------------------
+
+# Tolerance for treating two ProductionPhase float settings as "the same"
+# rather than flagging a deviation - avoids surfacing meaningless float
+# noise (25.000001 vs 25.0) as if it were a real setpoint change.
+_SETTING_DEVIATION_EPSILON = 0.01
+_FALLPLATE_POSITION_DEVIATION_MM = 2.0  # per db.py: fall-plate position materially affects density profile
+
+
+def _phase_by_name(phases, name):
+    return next((p for p in phases if p.phase_name == name), None)
+
+
+def _setup_vs_finalized_deviations(session, setup_phase, finalized_phase):
+    """Every process setting that actually changed between the Setup
+    (planned) and Finalized (actual) phase snapshots of one run - not the
+    full settings table (see PHASE_SETTING_FIELDS in analytics.py), just
+    the rows that differ, since those are what could explain a flagged
+    result. Includes foaming_mode (a controlled-vocabulary field, not part
+    of PHASE_SETTING_FIELDS) alongside the numeric settings."""
+    if setup_phase is None or finalized_phase is None:
+        return []
+    deviations = []
+    for field in PHASE_SETTING_FIELDS:
+        setup_val = getattr(setup_phase, field)
+        final_val = getattr(finalized_phase, field)
+        if setup_val is None and final_val is None:
+            continue
+        if (
+            setup_val is not None and final_val is not None
+            and abs(float(setup_val) - float(final_val)) <= _SETTING_DEVIATION_EPSILON
+        ):
+            continue
+        if setup_val == final_val:
+            continue
+        deviations.append({
+            "Setting": PHASE_SETTING_LABELS.get(field, field),
+            "Setup (planned)": setup_val, "Finalized (actual)": final_val,
+        })
+    if setup_phase.foaming_mode != finalized_phase.foaming_mode:
+        deviations.append({
+            "Setting": "Foaming mode",
+            "Setup (planned)": setup_phase.foaming_mode or "—",
+            "Finalized (actual)": finalized_phase.foaming_mode or "—",
+        })
+    return deviations
+
+
+def _fallplate_deviations(session, setup_phase, finalized_phase):
+    """Fall-plate section position changes between Setup and Finalized,
+    keyed by section_number - only rows whose position moved more than
+    _FALLPLATE_POSITION_DEVIATION_MM, the same "only what changed"
+    principle as _setup_vs_finalized_deviations."""
+    if setup_phase is None or finalized_phase is None:
+        return []
+    setup_by_section = {
+        p.section_number: p
+        for p in session.query(FallplateSectionPosition)
+        .filter(FallplateSectionPosition.production_phase_id == setup_phase.id).all()
+    }
+    final_by_section = {
+        p.section_number: p
+        for p in session.query(FallplateSectionPosition)
+        .filter(FallplateSectionPosition.production_phase_id == finalized_phase.id).all()
+    }
+    deviations = []
+    for section in sorted(set(setup_by_section) | set(final_by_section)):
+        s, f = setup_by_section.get(section), final_by_section.get(section)
+        s_pos = s.position_mm if s else None
+        f_pos = f.position_mm if f else None
+        if s_pos is None or f_pos is None or abs(s_pos - f_pos) <= _FALLPLATE_POSITION_DEVIATION_MM:
+            continue
+        deviations.append({
+            "Section": section, "Setup position (mm)": s_pos, "Finalized position (mm)": f_pos,
+            "Change (mm)": round(f_pos - s_pos, 1),
+        })
+    return deviations
+
+
+def build_batch_release_record_data(session, run_id):
+    run = session.get(ProductionRun, run_id)
+    if run is None:
+        return None
+    grade = run.foam_grade
+    family = grade.product_family if grade else None
+    recipe = run.recipe_version
+
+    ordered_components = (
+        sorted(recipe.components, key=lambda c: (c.role_in_formulation or "", c.raw_material_name or ""))
+        if recipe else []
+    )
+    recipe_components = [
+        {
+            "Material": c.raw_material_name, "Supplier": c.supplier or "—",
+            "PHP": c.php, "Role": c.role_in_formulation or "—", "Notes": c.notes or "—",
+        }
+        for c in ordered_components
+    ]
+
+    results = (
+        session.query(PhysicalPropertyResult)
+        .filter(PhysicalPropertyResult.production_run_id == run_id).all()
+    )
+    quality_results = [
+        {
+            "Property": r.property_name, "Target": r.target_value, "Actual": r.actual_value,
+            "Unit": r.unit or "",
+            "Pass/Fail": compute_pass_fail(r.property_name, r.target_value, r.actual_value) or "—",
+            "Tested": r.tested_at,
+        }
+        for r in results
+    ]
+    verdicts = [compute_pass_fail(r.property_name, r.target_value, r.actual_value) for r in results]
+    if not results:
+        quality_verdict = "No testing recorded"
+    elif "Fail" in verdicts:
+        quality_verdict = "Non-conforming"
+    elif verdicts and all(v == "Pass" for v in verdicts):
+        quality_verdict = "Conforming"
+    else:
+        quality_verdict = "Incomplete testing"
+
+    quality_issues = [
+        {
+            "Issue type": o.observation_type, "Severity": o.severity or "—",
+            "Frequency": o.frequency or "—", "Confidence": o.confidence_level or "—",
+            "Suspected cause": o.suspected_cause or "—",
+        }
+        for o in session.query(QualityObservation).filter(QualityObservation.production_run_id == run_id).all()
+    ]
+
+    has_flags = ("Fail" in verdicts) or bool(quality_issues)
+    flag_reasons = []
+    fail_count = verdicts.count("Fail")
+    if fail_count:
+        flag_reasons.append(f"{fail_count} failed quality result(s)")
+    if quality_issues:
+        flag_reasons.append(f"{len(quality_issues)} quality issue(s) recorded")
+
+    setup_deviations, stream_readings, stream_calibration_flags, production_events, fallplate_deviations = (
+        [], [], [], [], [],
+    )
+    if has_flags:
+        phases = session.query(ProductionPhase).filter(ProductionPhase.production_run_id == run_id).all()
+        setup_phase = _phase_by_name(phases, "Setup")
+        finalized_phase = _phase_by_name(phases, "Finalized")
+        setup_deviations = _setup_vs_finalized_deviations(session, setup_phase, finalized_phase)
+        fallplate_deviations = _fallplate_deviations(session, setup_phase, finalized_phase)
+
+        if finalized_phase is not None:
+            readings = (
+                session.query(ComponentStreamReading)
+                .filter(ComponentStreamReading.production_phase_id == finalized_phase.id).all()
+            )
+            stream_readings = [
+                {
+                    "Stream": rd.stream_name, "Flow": rd.flow, "Unit": rd.flow_unit or "",
+                    "Pump speed": rd.pump_speed, "Total delivered": rd.flow_total_qty,
+                    "Temperature (°C)": rd.temperature_c, "Pressure (bar)": rd.pressure_bar,
+                    "Calibration": rd.calibration_status or "—",
+                }
+                for rd in readings
+            ]
+            stream_calibration_flags = [
+                rd.stream_name for rd in readings if rd.calibration_status and rd.calibration_status != "Valid"
+            ]
+
+        production_events = [
+            {
+                "Time": e.event_ts, "Type": e.event_type, "Severity": e.severity or "—",
+                "Description": e.description or "—",
+            }
+            for e in session.query(ProductionEvent)
+            .filter(ProductionEvent.production_run_id == run_id)
+            .order_by(ProductionEvent.event_ts).all()
+        ]
+
+    return {
+        "run_id": run.id,
+        "plant": run.plant.name if run.plant else "—",
+        "product_family": family.name if family else "—",
+        "foam_grade": grade.grade_name if grade else "—",
+        "machine": run.machine.name if run.machine else "—",
+        "run_date": run.run_date,
+        "batch_reference": run.batch_reference or "—",
+        "block_reference": run.block_reference or "—",
+        "operator": run.operator_or_team_reference or "—",
+        "notes": run.notes or "",
+        "recipe_version_label": recipe.version_label if recipe else "—",
+        "recipe_approval_status": recipe.approval_status if recipe else "—",
+        "recipe_effective_date": recipe.effective_date if recipe else None,
+        "recipe_ratio_index": recipe.ratio_index if recipe else None,
+        "recipe_components": recipe_components,
+        "quality_results": quality_results,
+        "quality_verdict": quality_verdict,
+        "quality_issues": quality_issues,
+        "has_flags": has_flags,
+        "flag_reasons": flag_reasons,
+        "setup_deviations": setup_deviations,
+        "fallplate_deviations": fallplate_deviations,
+        "stream_readings": stream_readings,
+        "stream_calibration_flags": stream_calibration_flags,
+        "production_events": production_events,
+    }
+
+
+def render_batch_release_record_pdf(data):
+    def build(story):
+        _title_block(
+            story, f"Batch Release Record — Run #{data['run_id']}",
+            f"{data['plant']} · {data['foam_grade']} · {data['run_date'] or '—'} · "
+            f"Verdict: {data['quality_verdict']}",
+        )
+        story.append(_key_value_table([
+            ("Plant", data["plant"]), ("Product family", data["product_family"]),
+            ("Foam grade", data["foam_grade"]), ("Machine", data["machine"]),
+            ("Run date", data["run_date"]), ("Batch reference", data["batch_reference"]),
+            ("Block reference", data["block_reference"]), ("Operator/team", data["operator"]),
+            ("Quality verdict", data["quality_verdict"]), ("", ""),
+        ]))
+        if data["notes"]:
+            story.append(Spacer(1, 6))
+            story.append(_p(f"Notes: {data['notes']}"))
+
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Recipe used", STYLES["Heading3"]))
+        story.append(_key_value_table([
+            ("Recipe version", data["recipe_version_label"]), ("Approval status", data["recipe_approval_status"]),
+            ("Effective date", data["recipe_effective_date"]),
+            ("Ratio / index", f"{data['recipe_ratio_index']:.3f}" if data["recipe_ratio_index"] is not None else "—"),
+        ]))
+        _section(story, "Formulation", data["recipe_components"])
+
+        _section(story, "Quality test results", data["quality_results"])
+        _section(story, "Quality issues", data["quality_issues"])
+
+        if data["has_flags"]:
+            story.append(Spacer(1, 10))
+            story.append(Paragraph("Flagged — supporting context from other tabs", STYLES["Heading2"]))
+            story.append(_p("Flagged because: " + "; ".join(data["flag_reasons"])))
+            _section(story, "Process setting changes (Setup → Finalized)", data["setup_deviations"])
+            _section(story, "Fall-plate position changes (Setup → Finalized)", data["fallplate_deviations"])
+            _section(story, "Component stream readings (Finalized phase)", data["stream_readings"])
+            if data["stream_calibration_flags"]:
+                story.append(_p(
+                    "⚠ Non-valid calibration status recorded for: " + ", ".join(data["stream_calibration_flags"])
+                ))
+            _section(story, "Production events during this run", data["production_events"])
+    return _pdf_bytes(build)
+
+
+def render_batch_release_record_excel(data):
+    header = [{
+        "Run ID": data["run_id"], "Plant": data["plant"], "Product family": data["product_family"],
+        "Foam grade": data["foam_grade"], "Machine": data["machine"], "Run date": data["run_date"],
+        "Batch reference": data["batch_reference"], "Block reference": data["block_reference"],
+        "Operator/team": data["operator"], "Quality verdict": data["quality_verdict"],
+        "Recipe version": data["recipe_version_label"], "Recipe approval status": data["recipe_approval_status"],
+        "Notes": data["notes"],
+        "Flagged": "Yes" if data["has_flags"] else "No",
+        "Flag reasons": "; ".join(data["flag_reasons"]) if data["flag_reasons"] else "—",
+    }]
+    sheets = {
+        "Header": header,
+        "Formulation": data["recipe_components"],
+        "Quality Results": data["quality_results"],
+        "Quality Issues": data["quality_issues"],
+    }
+    if data["has_flags"]:
+        sheets["Process Setting Changes"] = data["setup_deviations"]
+        sheets["Fallplate Changes"] = data["fallplate_deviations"]
+        sheets["Stream Readings"] = data["stream_readings"]
+        sheets["Production Events"] = data["production_events"]
+    return _excel_bytes(sheets)
+
+
+# ---------------------------------------------------------------------------
+# 7. PI3 Q&A Report (DOCX only)
 # ---------------------------------------------------------------------------
 
 _HTC_LOGO_PATH = "assets/htc_global_logo_blue_steel.png"
