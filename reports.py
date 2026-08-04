@@ -262,6 +262,9 @@ def _pdf_bytes(build_story):
     return buf.getvalue()
 
 
+_INVALID_SHEET_CHARS_RE = re.compile(r'[\\/*?:\[\]]')
+
+
 def _excel_bytes(sheets, charts=None):
     """sheets: dict of sheet_name -> list-of-dicts or DataFrame. Empty
     sections still get a sheet (with a placeholder row) so the workbook
@@ -280,8 +283,14 @@ def _excel_bytes(sheets, charts=None):
             df = rows if isinstance(rows, pd.DataFrame) else pd.DataFrame(rows)
             if df.empty:
                 df = pd.DataFrame({"—": ["No data recorded"]})
-            # Excel sheet names are capped at 31 characters.
-            sheet_name = name[:31]
+            # Excel sheet names are capped at 31 characters and can't contain
+            # \ / * ? : [ ] - openpyxl raises ValueError otherwise. Sanitize
+            # before truncating so a sheet name built from free-text/property
+            # data (e.g. a property literally named "40% IFD / hardness")
+            # can't crash report generation - confirmed in production
+            # 2026-08-04 via Recipe Optimization's per-property correlation
+            # sheet name.
+            sheet_name = _INVALID_SHEET_CHARS_RE.sub("-", name)[:31]
             df.to_excel(writer, sheet_name=sheet_name, index=False)
             written[name] = (writer.sheets[sheet_name], df)
         for name, chart_builder in (charts or []):
