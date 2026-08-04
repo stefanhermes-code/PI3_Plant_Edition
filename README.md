@@ -2,9 +2,10 @@
 
 Flexible slabstock foam expert system for HTC Global Co. Ltd. Captures and
 connects recipe versions, production runs, runtime data, quality test
-results, quality issues, adjustment/conclusion history, and
-approvals — with a controlled advisory boundary and optional PI3/AI
-connectivity add-on. Built per `CharlieC_Build_Prompt_Pack_PI3_Plant_Edition`.
+results, and quality issues, across the three parents a run/trial can
+belong to (Production Run, Customer Trial, Optimization Trial) — with a
+controlled advisory boundary and optional PI3/AI connectivity add-on. Built
+per `CharlieC_Build_Prompt_Pack_PI3_Plant_Edition`.
 
 This is a controlled prototype: flexible slabstock foam only, manual-entry
 first with CSV/Excel import, no ERP or live machine integration, no
@@ -34,31 +35,44 @@ autonomous formulation optimization.
 2. Plant & Foam Equipment Overview
 3. Product Family & Foam Grade Profile
 4. Recipes
-5. Production Run / Trial Record (also handles runtime data entry + CSV import)
+5. Production Run (also handles runtime data entry + CSV import)
 6. Quality Test Result
 7. Quality Issue
-8. Adjustment & Conclusion
-9. Approval & Review — the only screen that can close a trial
-10. PI3 Connectivity (platform-owner only: per-plant PI3/AI on-off switch)
-11. User Accounts (a company's own admin manages their own users; platform owner manages every company's)
-12. User Roles (a company's own admin narrows their own built-in-role clones + custom roles; platform owner manages every company's)
-13. Default User Roles (platform-owner only: the template new companies' built-in roles are seeded from)
-14. Companies (platform-owner only: the tenant boundary)
-15. Subscription Types (platform-owner only: commercial tiers, limits/features, list prices)
+8. PI3 Connectivity (platform-owner only: per-plant PI3/AI on-off switch)
+9. User Accounts (a company's own admin manages their own users; platform owner manages every company's)
+10. User Roles (a company's own admin narrows their own built-in-role clones + custom roles; platform owner manages every company's)
+11. Default User Roles (platform-owner only: the template new companies' built-in roles are seeded from)
+12. Companies (platform-owner only: the tenant boundary)
+13. Subscription Types (platform-owner only: commercial tiers, limits/features, list prices)
 
-This list predates several pages added since (Raw Materials, the five
-Industrial Intelligence screens, Report, Expert Notes) and postdates one
-removed since (Similar Case Retrieval, dropped 2026-08-01 - see
-`access_control.py`'s docstring and `PI3_Gaps_and_Ambiguities.docx`) -
-treat `app.py`'s own nav-section lists as the actual source of truth for
-what screens exist, not this list's exact count.
+This list predates several pages added since (Raw Materials, Samples &
+Conditioning, Customer Trials, Optimization Trials, the five Industrial
+Intelligence screens, Report, Expert Notes) and postdates two removals:
+Similar Case Retrieval (dropped 2026-08-01) and the Trial / Experiment +
+Adjustment & Conclusion + Approval & Review trio (dropped 2026-08-04, once
+Customer Trial/Optimization Trial made that separate trial-closeout
+workflow redundant — see `access_control.py`'s docstring and
+`PI3_Gaps_and_Ambiguities.docx`). Treat `app.py`'s own nav-section lists as
+the actual source of truth for what screens exist, not this list's exact
+count.
+
+## Trial data model
+
+A quality test result or quality issue always belongs to exactly one of
+three parents: a Production Run, a Customer Trial, or an Optimization
+Trial (`db.SAMPLE_SOURCE_TYPES`). Customer Trials and Optimization Trials
+are their own independent lab-trial flows (`pages/11_Customer_Trials.py`,
+`pages/12_Optimization_Trials.py`) — they don't hang off a Production Run.
 
 ## The one rule that can't be bypassed
 
-A trial cannot be closed unless `conclusion`, `reuse_recommendation`,
-`reviewed_by`, `approved_by`, and `date_closed` are all present. This is
-enforced in `db.py` (`TrialRecord.can_close()`) and checked again in
-`pages/8_Approval_Review.py` before the "Close trial" button is enabled.
+A Customer Trial cannot be closed unless `outcome`, `reviewed_by`, and
+`date_closed` are all present; an Optimization Trial additionally requires
+`conclusion`, `reuse_recommendation`, and `approved_by`. This is enforced
+in `db.py` (`CustomerTrial.can_close()` / `OptimizationTrial.can_close()`)
+and checked again in `pages/11_Customer_Trials.py` /
+`pages/12_Optimization_Trials.py` before the "Close trial" button is
+enabled.
 
 ## Deploying to Streamlit Community Cloud
 

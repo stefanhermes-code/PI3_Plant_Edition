@@ -25,7 +25,6 @@ from db import (
     OptimizationTrial,
     ProductionRun,
     QualityObservation,
-    TrialRecord,
     get_session,
     init_db,
     sample_source_fk_field,
@@ -59,7 +58,7 @@ from tenant_scope import (
 # carry all three FK columns as optional and must set exactly one.
 OBSERVATION_REQUIRED_COLUMNS = ["observation_type"]
 OBSERVATION_OPTIONAL_COLUMNS = [
-    "production_run_id", "customer_trial_id", "optimization_trial_id", "trial_record_id",
+    "production_run_id", "customer_trial_id", "optimization_trial_id",
     "severity", "frequency", "location_in_block", "suspected_cause",
     "confidence_level", "product_impact", "customer_impact", "notes", "observed_at",
 ]
@@ -256,19 +255,6 @@ with tab_obs_manual:
                     ),
                     key="obs_ot_select",
                 )
-            if source_type == "Production Run":
-                trials_for_run = (
-                    session.query(TrialRecord).filter(TrialRecord.production_run_id == parent.id).all() if parent else []
-                )
-                trial = st.selectbox(
-                    "Link to trial (optional)",
-                    [None] + trials_for_run,
-                    format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
-                    key="obs_trial_select",
-                )
-            else:
-                trial = None
-
             with st.form("add_observation"):
                 st.caption(f"Issue type: **{observation_type or '(describe the issue above)'}**")
                 c1, c2 = st.columns(2)
@@ -287,7 +273,6 @@ with tab_obs_manual:
                         st.error("Issue type is required.")
                     else:
                         new_obs = QualityObservation(
-                            trial_record_id=trial.id if trial else None,
                             observation_type=observation_type,
                             severity=severity,
                             frequency=frequency,
@@ -322,12 +307,6 @@ with tab_obs_import:
         import_run_ids = {r.id for r in runs}
         import_ct_ids = {t.id for t in customer_trials}
         import_ot_ids = {t.id for t in optimization_trials}
-        # Scoped to this company's runs - otherwise a CSV row could link a
-        # new quality issue to a different company's trial record.
-        trials_all = {
-            t.id: t
-            for t in apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, scoped_run_ids).all()
-        }
 
         def _row_fk(row):
             """(fk_field, fk_value) if exactly one of the three FK columns
@@ -354,8 +333,6 @@ with tab_obs_import:
         for _, row in obs_df.iterrows():
             try:
                 fk_field, _fk_val = _row_fk(row)
-                trial_val = row.get("trial_record_id")
-                trial_ok = pd.isna(trial_val) or int(trial_val) in trials_all
                 # Issue type must match the controlled taxonomy (see
                 # quality_issue_taxonomy.py) the same as the manual entry
                 # form now requires - a CSV can't be used to sneak free
@@ -365,7 +342,7 @@ with tab_obs_import:
                 issue_match = quality_issue_taxonomy.lookup_case_insensitive(
                     str(row.get("observation_type", "") or "")
                 )
-                ok = bool(fk_field and trial_ok and issue_match)
+                ok = bool(fk_field and issue_match)
             except (TypeError, ValueError):
                 ok = False
             if ok:
@@ -377,9 +354,9 @@ with tab_obs_import:
         if bad_rows:
             st.warning(
                 "Flagged rows don't have exactly one in-scope production_run_id / customer_trial_id "
-                "/ optimization_trial_id set, reference an unknown trial_record_id, or their "
-                "observation_type doesn't match one of the controlled issue-type names (see the "
-                "'Add quality issue' dropdown above for the exact list of accepted values)."
+                "/ optimization_trial_id set, or their observation_type doesn't match one of the "
+                "controlled issue-type names (see the 'Add quality issue' dropdown above for the "
+                "exact list of accepted values)."
             )
             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
@@ -404,7 +381,6 @@ with tab_obs_import:
             new_rows, dup_rows = dedupe_import_rows(good_rows, existing_keys, key_func=_obs_key)
 
             for row in new_rows:
-                trial_val = row.get("trial_record_id")
                 severity_val = str(row.get("severity", "") or "").strip()
                 frequency_val = str(row.get("frequency", "") or "").strip()
                 confidence_val = str(row.get("confidence_level", "") or "").strip()
@@ -417,7 +393,6 @@ with tab_obs_import:
                 )["name"]
                 fk_field, fk_val = _row_fk(row)
                 new_obs = QualityObservation(
-                    trial_record_id=int(trial_val) if not pd.isna(trial_val) and fk_field == "production_run_id" else None,
                     observation_type=canonical_issue_type,
                     severity=severity_val if severity_val in SEVERITIES else "Low",
                     frequency=frequency_val if frequency_val in ["One-off", "Recurring"] else "One-off",
@@ -509,7 +484,6 @@ else:
                 "Issue": o.observation_type,
                 "Source": source_label,
                 "Parent": source_desc,
-                "Trial": f"#{o.trial_record_id}" if o.trial_record_id else "—",
                 "Severity": o.severity,
                 "Frequency": o.frequency,
                 "Confidence": o.confidence_level,
@@ -611,24 +585,6 @@ else:
                 key=f"edit_obs_ot_{selected.id}",
             )
 
-        if e_source_type == "Production Run":
-            trials_for_edit = (
-                session.query(TrialRecord).filter(TrialRecord.production_run_id == e_parent.id).all() if e_parent else []
-            )
-            trial_options = [None] + trials_for_edit
-            trial_default = next(
-                (i for i, t in enumerate(trial_options) if t and t.id == selected.trial_record_id), 0
-            )
-            e_trial = st.selectbox(
-                "Link to trial (optional)",
-                trial_options,
-                index=trial_default,
-                format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
-                key=f"edit_obs_trial_{selected.id}",
-            )
-        else:
-            e_trial = None
-
         e_type, e_typical_causes = _issue_type_picker(f"edit_obs_{selected.id}", current_value=selected.observation_type)
         if e_typical_causes:
             st.caption(f"Typical causes/checks: {e_typical_causes}")
@@ -667,7 +623,6 @@ else:
                     selected.customer_trial_id = None
                     selected.optimization_trial_id = None
                     setattr(selected, sample_source_fk_field(e_source_type), e_parent.id)
-                    selected.trial_record_id = e_trial.id if e_trial else None
                     selected.observation_type = e_type
                     selected.severity = e_severity
                     selected.frequency = e_frequency

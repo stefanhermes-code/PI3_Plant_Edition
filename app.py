@@ -19,13 +19,14 @@ from access_control import denied_page_keys, page_visible
 from auth import current_user, logout_button, require_login
 from db import (
     Company,
+    CustomerTrial,
     FoamGrade,
+    OptimizationTrial,
     PhysicalPropertyResult,
     Plant,
     ProductFamily,
     ProductionRun,
     QualityObservation,
-    TrialRecord,
     close_out_session,
     get_session,
     init_db,
@@ -93,7 +94,7 @@ def render_overview():
     render_function_action_intro(
         function_text=(
             "This is the landing dashboard: a snapshot of production run count, recurring "
-            "quality issues, quality test pass rate, and active trials/experiments across "
+            "quality issues, quality test pass rate, and open customer/optimization trials across "
             "whichever plant, product family, and foam grade you filter to, plus a table of the "
             "most recently logged quality issues. The quick-action links below jump straight "
             "into logging a new run, quality test result, or quality issue."
@@ -158,13 +159,22 @@ def render_overview():
     known_verdicts = [v for v in computed_verdicts if v is not None]
     pass_count = known_verdicts.count("Pass")
     pass_rate = f"{round(100 * pass_count / len(known_verdicts))}%" if known_verdicts else "—"
-    active_trials = session.query(TrialRecord).filter(TrialRecord.status != "Closed").count()
+    # Open trials across both independent lab-trial flows (see
+    # db.py's CustomerTrial / OptimizationTrial) - the old TrialRecord
+    # concept (a formal-experiment flag on a production run) was removed
+    # 2026-08-04: zero real rows across 244 production runs, fully
+    # superseded by these two.
+    open_customer_trials = session.query(CustomerTrial).filter(CustomerTrial.status != "Closed").count()
+    open_optimization_trials = (
+        session.query(OptimizationTrial).filter(OptimizationTrial.status != "Closed").count()
+    )
+    active_trials = open_customer_trials + open_optimization_trials
 
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     kpi1.metric("Production runs", len(all_runs))
     kpi2.metric("Recurring quality issues", len(recurring_observations))
     kpi3.metric("Quality test pass rate", pass_rate)
-    kpi4.metric("Active trials / experiments", active_trials)
+    kpi4.metric("Open customer/optimization trials", active_trials)
 
     st.divider()
 
@@ -173,20 +183,36 @@ def render_overview():
 
     obs_rows = []
     for obs in session.query(QualityObservation).order_by(QualityObservation.observed_at.desc()).limit(25):
-        run = obs.production_run
-        grade = run.foam_grade if run else None
+        # Resolve whichever of the three mutually-exclusive sources this
+        # issue belongs to (see db.SAMPLE_SOURCE_TYPES) - a quality issue
+        # from a customer/optimization trial has no production_run at all.
+        if obs.production_run_id is not None:
+            run = obs.production_run
+            grade = run.foam_grade if run else None
+            source_desc = f"Run #{run.id}" if run else f"Run #{obs.production_run_id}"
+        elif obs.customer_trial_id is not None:
+            t = obs.customer_trial
+            grade = t.foam_grade if t else None
+            source_desc = f"Customer Trial #{t.id} — {t.customer_name}" if t else f"Customer Trial #{obs.customer_trial_id}"
+        elif obs.optimization_trial_id is not None:
+            t = obs.optimization_trial
+            grade = t.foam_grade if t else None
+            ref = (t.improvement_initiative_reference or "(no reference)") if t else ""
+            source_desc = f"Optimization Trial #{t.id} — {ref}" if t else f"Optimization Trial #{obs.optimization_trial_id}"
+        else:
+            grade = None
+            source_desc = "—"
         family = grade.product_family if grade else None
         obs_rows.append(
             {
                 "Observed": obs.observed_at,
                 "Product family": family.name if family else "—",
                 "Foam grade": grade.grade_name if grade else "—",
-                "Run": f"#{run.id}" if run else "—",
+                "Source": source_desc,
                 "Issue type": obs.observation_type,
                 "Severity": obs.severity,
                 "Frequency": obs.frequency,
                 "Confidence": obs.confidence_level,
-                "Trial": f"#{obs.trial_record_id}" if obs.trial_record_id else "—",
             }
         )
 
@@ -235,9 +261,6 @@ experiment_pages = [
     ("samples_conditioning", st.Page("pages/9_Samples_Conditioning.py", title="Samples & Conditioning", icon="🧊")),
     ("customer_trials", st.Page("pages/11_Customer_Trials.py", title="Customer Trials", icon="🤝")),
     ("optimization_trials", st.Page("pages/12_Optimization_Trials.py", title="Optimization Trials", icon="🚀")),
-    ("trial_experiment", st.Page("pages/13_Trial_Experiment.py", title="Trial / Experiment", icon="🧫")),
-    ("adjustment_conclusion", st.Page("pages/7_Adjustment_Conclusion.py", title="Adjustment & Conclusion", icon="🛠️")),
-    ("approval_review", st.Page("pages/8_Approval_Review.py", title="Approval & Review", icon="✅")),
 ]
 
 # The value of PI3 Plant Edition is the join that already exists in the

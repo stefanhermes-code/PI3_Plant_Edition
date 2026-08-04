@@ -12,9 +12,8 @@ ultimately hangs off:
       |
       +--- Machine
       |
-      +--- ProductionRun --- TrialRecord / QualityObservation /
-                              PhysicalPropertyResult / AdjustmentConclusion /
-                              ApprovalRecord / ExpertNote / ...
+      +--- ProductionRun --- QualityObservation / PhysicalPropertyResult /
+                              ExpertNote / ...
       |
       +--- CustomerTrial --- Sample / QualityObservation / PhysicalPropertyResult
       |     (independent lab-trial flow, no ProductionRun underneath)

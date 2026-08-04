@@ -12,7 +12,7 @@ import ai_assistant
 import audit_log
 import reports
 from auth import current_user
-from db import ExpertNote, FoamGrade, Plant, ProductFamily, ProductionRun, RecipeVersion, TrialRecord, get_session
+from db import ExpertNote, FoamGrade, Plant, ProductFamily, ProductionRun, RecipeVersion, get_session
 
 
 def expert_note_plant_id_for_link(entity_type, entity_id, session):
@@ -23,9 +23,6 @@ def expert_note_plant_id_for_link(entity_type, entity_id, session):
     if entity_type == "production_run":
         r = session.get(ProductionRun, entity_id)
         return r.plant_id if r else None
-    if entity_type == "trial_record":
-        t = session.get(TrialRecord, entity_id)
-        return t.production_run.plant_id if t else None
     if entity_type == "foam_grade":
         g = session.get(FoamGrade, entity_id)
         return g.product_family.plant_id if g else None
@@ -56,9 +53,6 @@ def expert_note_link_label(entity_type, entity_id, session):
     if entity_type == "production_run":
         r = session.get(ProductionRun, entity_id)
         return f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}" if r else f"Run #{entity_id} (deleted)"
-    if entity_type == "trial_record":
-        t = session.get(TrialRecord, entity_id)
-        return f"Trial #{t.id} — {t.production_run.foam_grade.grade_name}" if t else f"Trial #{entity_id} (deleted)"
     if entity_type == "foam_grade":
         g = session.get(FoamGrade, entity_id)
         return f"Foam Grade: {g.grade_name}" if g else f"Foam Grade #{entity_id} (deleted)"
@@ -77,9 +71,6 @@ def expert_note_foam_grade_id_for_link(entity_type, entity_id, session):
     if entity_type == "production_run":
         r = session.get(ProductionRun, entity_id)
         return r.foam_grade_id if r else None
-    if entity_type == "trial_record":
-        t = session.get(TrialRecord, entity_id)
-        return t.production_run.foam_grade_id if t else None
     return None
 
 
@@ -798,7 +789,7 @@ def render_save_to_expert_notes_button(
     knowledge.
 
     `link_type` is one of the Expert Notes "link to" types ("foam_grade",
-    "production_run", "trial_record"), `entity_id` the id of that record.
+    "production_run", "product_family"), `entity_id` the id of that record.
 
     Guards against saving the same answer twice: once saved, the button is
     replaced with a confirmation until a new answer replaces this one -

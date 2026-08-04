@@ -37,7 +37,7 @@ class _NoDeepCopyMixin:
 
     Streamlit's widget-state tracking (session_state.py: register_widget)
     deepcopies a selectbox's option values to detect changes across reruns.
-    Several pages pass live ORM objects (Plant, FoamGrade, TrialRecord, ...)
+    Several pages pass live ORM objects (Plant, FoamGrade, CustomerTrial, ...)
     directly as selectbox options. Once any bidirectional relationship
     collection reachable from one of those objects becomes non-empty (e.g.
     a trial gets its first physical property result), copy.deepcopy hits a
@@ -615,7 +615,6 @@ class ProductionRun(Base):
     machine = relationship("Machine")
     recipe_version = relationship("RecipeVersion", back_populates="production_runs")
     runtime_records = relationship("RuntimeDataRecord", back_populates="production_run")
-    trial_records = relationship("TrialRecord", back_populates="production_run")
     # Note: phases/events/lot_uses/samples are deliberately NOT exposed as
     # back-populated collections here. All page code queries those tables
     # directly by production_run_id instead of via a run.phases-style
@@ -908,7 +907,7 @@ class ConditioningSegment(Base):
 # ambient_temperature_c/ambient_humidity_pct (see above). The model/table
 # stays here, unread and unwritten by the app, purely so the historical rows
 # already in production are never destroyed - same precedent as
-# MaintenanceAndLicenseRecord and SimilarCaseLink elsewhere in this file.
+# MaintenanceAndLicenseRecord elsewhere in this file.
 # ---------------------------------------------------------------------------
 class RuntimeDataRecord(Base):
     __tablename__ = "runtime_data_records"
@@ -925,75 +924,6 @@ class RuntimeDataRecord(Base):
     imported_at = Column(DateTime, default=dt.datetime.utcnow)
 
     production_run = relationship("ProductionRun", back_populates="runtime_records")
-
-
-# ---------------------------------------------------------------------------
-# 8. trial_records
-#
-# Deliberately NOT the mandatory container for routine production/quality
-# data. A production run is a complete, self-sufficient record on its own
-# (recipe + machine parameters + quality results). TrialRecord is an
-# optional, secondary module you attach to a run only when it is genuinely
-# a deliberate experiment/change investigation with a hypothesis and a
-# formal closeout/approval requirement - most runs never touch this table.
-# See PhysicalPropertyResult / QualityObservation / AdjustmentConclusion /
-# ApprovalRecord below: they all key primarily off production_run_id, with
-# trial_record_id as an optional cross-reference.
-# ---------------------------------------------------------------------------
-class TrialRecord(Base):
-    __tablename__ = "trial_records"
-
-    id = Column(Integer, primary_key=True)
-    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
-
-    # objective / setup
-    trial_or_change_objective = Column(Text, nullable=False)
-    hypothesis = Column(Text)
-    what_changed = Column(Text)
-    responsible_person = Column(String(200))
-    status = Column(String(50), default="Open")  # Open / Pending Closure / Closed
-
-    # closeout fields - ALL required before status can become "Closed"
-    result_against_target = Column(Text)
-    physical_property_outcome = Column(Text)
-    conclusion = Column(Text)
-    reuse_recommendation = Column(Text)
-    reviewed_by = Column(String(200))
-    approved_by = Column(String(200))
-    date_closed = Column(Date)
-
-    created_at = Column(DateTime, default=dt.datetime.utcnow)
-
-    production_run = relationship("ProductionRun", back_populates="trial_records")
-    quality_observations = relationship("QualityObservation", back_populates="trial_record")
-    physical_property_results = relationship("PhysicalPropertyResult", back_populates="trial_record")
-    adjustment_conclusions = relationship("AdjustmentConclusion", back_populates="trial_record")
-    approval_records = relationship("ApprovalRecord", back_populates="trial_record")
-
-    # Enforced here in Python (missing_closeout_fields(), used by
-    # pages/8_Approval_Review.py to disable "Close trial" until every field
-    # below is complete) AND, since 2026-08-01 (PI3_Gaps_and_Ambiguities.docx
-    # finding 1.6), by a matching Postgres CHECK constraint
-    # (ck_trial_record_closeout_complete): any row with status='Closed' must
-    # have all 5 fields non-null/non-blank, so a bulk import or direct SQL
-    # write can no longer set status='Closed' without them either.
-    REQUIRED_CLOSEOUT_FIELDS = [
-        "conclusion",
-        "reuse_recommendation",
-        "reviewed_by",
-        "approved_by",
-        "date_closed",
-    ]
-
-    def missing_closeout_fields(self):
-        missing = []
-        for field in self.REQUIRED_CLOSEOUT_FIELDS:
-            if not getattr(self, field):
-                missing.append(field)
-        return missing
-
-    def can_close(self):
-        return len(self.missing_closeout_fields()) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1044,8 +974,8 @@ class CustomerTrial(Base):
     foam_grade = relationship("FoamGrade")
     recipe_version = relationship("RecipeVersion")
 
-    # Same pattern as TrialRecord above, minus a DB-level CHECK constraint
-    # (kept app-level only here to limit migration scope for this batch).
+    # Closeout enforced app-level only (no DB-level CHECK constraint, to
+    # limit migration scope for this batch).
     REQUIRED_CLOSEOUT_FIELDS = ["outcome", "reviewed_by", "date_closed"]
 
     def missing_closeout_fields(self):
@@ -1151,9 +1081,8 @@ class PhysicalPropertyUOM(Base):
 # ---------------------------------------------------------------------------
 # 9. physical_property_results
 #
-# Keyed primarily to the production run (every batch produces quality
-# results, trial or not). trial_record_id is optional - set only when this
-# result is part of a formal experiment's evidence trail.
+# Keyed to exactly one of a production run, a customer trial, or an
+# optimization trial - see SAMPLE_SOURCE_TYPES above.
 # ---------------------------------------------------------------------------
 class PhysicalPropertyResult(Base):
     __tablename__ = "physical_property_results"
@@ -1163,7 +1092,6 @@ class PhysicalPropertyResult(Base):
     production_run_id = Column(Integer, ForeignKey("production_runs.id"))
     customer_trial_id = Column(Integer, ForeignKey("customer_trials.id"))
     optimization_trial_id = Column(Integer, ForeignKey("optimization_trials.id"))
-    trial_record_id = Column(Integer, ForeignKey("trial_records.id"))  # optional: only for formal experiments ON a production run
     sample_id = Column(Integer, ForeignKey("samples.id"))  # nullable: older rows predate sample tracking
     property_definition_id = Column(Integer, ForeignKey("physical_property_definitions.id"))  # nullable for legacy/"Other"
     property_method_id = Column(Integer, ForeignKey("physical_property_methods.id"))  # nullable
@@ -1178,7 +1106,6 @@ class PhysicalPropertyResult(Base):
     tested_at = Column(Date)
     notes = Column(Text)
 
-    trial_record = relationship("TrialRecord", back_populates="physical_property_results")
     sample = relationship("Sample")
     production_run = relationship("ProductionRun")
     customer_trial = relationship("CustomerTrial")
@@ -1188,7 +1115,8 @@ class PhysicalPropertyResult(Base):
 # ---------------------------------------------------------------------------
 # 10. quality_observations  (NOT "defects" - approved terminology)
 #
-# Keyed primarily to the production run; trial_record_id is optional.
+# Keyed to exactly one of a production run, a customer trial, or an
+# optimization trial - see SAMPLE_SOURCE_TYPES above.
 # ---------------------------------------------------------------------------
 class QualityObservation(Base):
     __tablename__ = "quality_observations"
@@ -1198,7 +1126,6 @@ class QualityObservation(Base):
     production_run_id = Column(Integer, ForeignKey("production_runs.id"))
     customer_trial_id = Column(Integer, ForeignKey("customer_trials.id"))
     optimization_trial_id = Column(Integer, ForeignKey("optimization_trials.id"))
-    trial_record_id = Column(Integer, ForeignKey("trial_records.id"))  # optional: only for formal experiments ON a production run
     observation_type = Column(String(200), nullable=False)  # e.g. shrinkage, hardness drift, collapse, splitting
     severity = Column(String(50))  # Low / Medium / High
     frequency = Column(String(50))  # One-off / Recurring
@@ -1210,60 +1137,9 @@ class QualityObservation(Base):
     notes = Column(Text)
     observed_at = Column(Date)
 
-    trial_record = relationship("TrialRecord", back_populates="quality_observations")
     production_run = relationship("ProductionRun")
     customer_trial = relationship("CustomerTrial")
     optimization_trial = relationship("OptimizationTrial")
-
-
-# ---------------------------------------------------------------------------
-# 11. adjustment_conclusions  (NOT "corrective actions" - approved terminology)
-#
-# This stays a trial-scoped closeout artifact in practice (it captures the
-# deliberate change + result + reuse recommendation for a formal
-# investigation), but also carries production_run_id directly for
-# consistent querying alongside the rest of a run's quality data.
-# ---------------------------------------------------------------------------
-class AdjustmentConclusion(Base):
-    __tablename__ = "adjustment_conclusions"
-
-    id = Column(Integer, primary_key=True)
-    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
-    trial_record_id = Column(Integer, ForeignKey("trial_records.id"))  # optional
-    parameter_changed = Column(String(200))
-    formulation_changed = Column(Boolean, default=False)
-    material_changed = Column(String(200))
-    result = Column(Text)
-    reuse_recommendation = Column(Text)
-    confidence_level = Column(String(50), default="Unconfirmed")
-    follow_up_required = Column(Boolean, default=False)
-    created_by = Column(String(200))
-    created_at = Column(DateTime, default=dt.datetime.utcnow)
-
-    trial_record = relationship("TrialRecord", back_populates="adjustment_conclusions")
-    production_run = relationship("ProductionRun")
-
-
-# ---------------------------------------------------------------------------
-# 12. approval_records
-#
-# Also trial-scoped in practice (sign-off on a formal experiment's
-# closeout), with production_run_id carried directly for consistency.
-# ---------------------------------------------------------------------------
-class ApprovalRecord(Base):
-    __tablename__ = "approval_records"
-
-    id = Column(Integer, primary_key=True)
-    production_run_id = Column(Integer, ForeignKey("production_runs.id"), nullable=False)
-    trial_record_id = Column(Integer, ForeignKey("trial_records.id"))  # optional
-    reviewed_by = Column(String(200))
-    approved_by = Column(String(200))
-    approval_status = Column(String(50), default="Pending Review")
-    review_notes = Column(Text)
-    date_reviewed = Column(Date)
-    date_approved = Column(Date)
-
-    trial_record = relationship("TrialRecord", back_populates="approval_records")
 
 
 # ---------------------------------------------------------------------------
@@ -1273,7 +1149,7 @@ class ExpertNote(Base):
     __tablename__ = "expert_notes"
 
     id = Column(Integer, primary_key=True)
-    linked_entity_type = Column(String(100), nullable=False)  # e.g. "trial_record", "foam_grade"
+    linked_entity_type = Column(String(100), nullable=False)  # e.g. "production_run", "foam_grade"
     linked_entity_id = Column(Integer, nullable=False)
     note_text = Column(Text, nullable=False)
     confidence_level = Column(String(50), default="Unconfirmed")
@@ -1295,29 +1171,6 @@ class ExpertNote(Base):
     source = Column(String(20), default="Manual")  # "Manual" or "PI3"
     pi3_question = Column(Text)  # the question/label PI3 was answering, null for manual notes
     pi3_tool_log_json = Column(Text)  # JSON-serialized tool_log (free-form Ask PI3 only), null otherwise
-
-
-# ---------------------------------------------------------------------------
-# 14. similar_case_links
-# ---------------------------------------------------------------------------
-# NOTE (2026-08-01): the Similar Case Retrieval page that created and read
-# these rows was dropped app-wide (it never demonstrated real value beyond
-# what Expert Notes + Root-Cause Assistant already cover, and its "Also use
-# PI3" cross-plant search was a data-isolation leak - see
-# PI3_Gaps_and_Ambiguities.docx and access_control.py's docstring). This
-# model/table is kept as-is (no migration to drop it) so any historical rows
-# already in Supabase aren't destroyed by a decision that was only ever
-# about the page, not the data - nothing in the app writes or reads it
-# anymore.
-class SimilarCaseLink(Base):
-    __tablename__ = "similar_case_links"
-
-    id = Column(Integer, primary_key=True)
-    source_trial_id = Column(Integer, ForeignKey("trial_records.id"), nullable=False)
-    linked_trial_id = Column(Integer, ForeignKey("trial_records.id"), nullable=False)
-    similarity_basis = Column(String(200))  # product_family / foam_grade / observation_type / recipe_version
-    notes = Column(Text)
-    created_at = Column(DateTime, default=dt.datetime.utcnow)
 
 
 # ---------------------------------------------------------------------------
@@ -1578,7 +1431,6 @@ ALL_MODELS = [
     Sample,
     ConditioningSegment,
     RuntimeDataRecord,
-    TrialRecord,
     CustomerTrial,
     OptimizationTrial,
     PhysicalPropertyDefinition,
@@ -1586,10 +1438,7 @@ ALL_MODELS = [
     PhysicalPropertyUOM,
     PhysicalPropertyResult,
     QualityObservation,
-    AdjustmentConclusion,
-    ApprovalRecord,
     ExpertNote,
-    SimilarCaseLink,
     PI3AIConnectionSetting,
     PerformanceLog,
     LoginEvent,

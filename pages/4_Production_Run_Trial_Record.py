@@ -63,8 +63,6 @@ from db import (
     EVENT_TYPES,
     FOAMING_MODES,
     SEVERITIES,
-    AdjustmentConclusion,
-    ApprovalRecord,
     ComponentStreamReading,
     ConditioningSegment,
     FallplateSectionPosition,

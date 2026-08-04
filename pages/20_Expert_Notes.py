@@ -2,10 +2,10 @@
 
 Captures qualitative expert knowledge - the kind of thing that lives in a
 technical person's head or a stray email, not a structured measurement -
-linked to a production run (the common case), a trial/experiment, a foam
-grade, or a foam family (added 2026-08-02, alongside "analyze by foam
-family" on Trend Analysis/Process-Property Correlation/Machine Settings
-Optimization - see helpers.analysis_unit_picker). This is the raw material
+linked to a production run (the common case), a foam grade, or a foam
+family (added 2026-08-02, alongside "analyze by foam family" on Trend
+Analysis/Process-Property Correlation/Machine Settings Optimization - see
+helpers.analysis_unit_picker). This is the raw material
 PI3 needs: when PI3 connectivity is enabled for the relevant plant, saving
 a note here also feeds it into PI3 so future Root-Cause Assistant reasoning
 can retrieve it.
@@ -27,7 +27,7 @@ import ai_assistant
 import reports
 from access_control import can_use_page
 from auth import current_user, logout_button, require_login
-from db import CONFIDENCE_LEVELS, ExpertNote, FoamGrade, ProductionRun, TrialRecord, get_session, init_db
+from db import CONFIDENCE_LEVELS, ExpertNote, FoamGrade, ProductionRun, get_session, init_db
 from helpers import (
     clickable_table,
     company_id_for_plant,
@@ -52,7 +52,7 @@ render_function_action_intro(
     function_text=(
         "Captures qualitative expert knowledge that doesn't fit a structured field - a hunch "
         "about why a batch behaved oddly, a supplier quirk, a process tip - linked to a "
-        "production run, a trial/experiment, or a foam grade. It also shows the PI3-sourced notes "
+        "production run or a foam grade. It also shows the PI3-sourced notes "
         "a reviewer chose to keep from Recipe Optimization, Trend Analysis, Process-Property "
         "Correlation, or Root-Cause Assistant, each tagged with its originating question and "
         "re-exportable as the same Word report the reviewer originally saw. When PI3 connectivity "
@@ -60,7 +60,7 @@ render_function_action_intro(
         "Case Retrieval searches and Root-Cause Assistant comparisons can retrieve it."
     ),
     action_text=(
-        "Pick what the note is about (a production run, trial, foam grade, or foam family), write it, set a "
+        "Pick what the note is about (a production run, foam grade, or foam family), write it, set a "
         "confidence level, and save - there's no other structured field to fill in, so use this "
         "for anything worth remembering that the rest of the app has no place for. Click a "
         "PI3-sourced note to re-download its original Word report, or edit/delete any note the "
@@ -81,7 +81,6 @@ scoped_grade_ids = grade_ids_for_company(session, active_company_id)
 
 LINK_TYPES = {
     "Production Run": "production_run",
-    "Trial / Experiment": "trial_record",
     "Foam Grade": "foam_grade",
     "Foam Family": "product_family",
 }
@@ -90,11 +89,6 @@ LINK_TYPES = {
 runs = (
     apply_scope(session.query(ProductionRun), ProductionRun.id, scoped_run_ids)
     .order_by(ProductionRun.created_at.desc())
-    .all()
-)
-trials = (
-    apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, scoped_run_ids)
-    .order_by(TrialRecord.created_at.desc())
     .all()
 )
 grades = (
@@ -112,9 +106,9 @@ families = sorted({g.product_family for g in grades if g.product_family}, key=la
 st.subheader("Add an expert note")
 # The "Link to" selector lives outside the form on purpose: widgets inside
 # an st.form don't trigger a rerun until the form is submitted, so with it
-# inside the form, switching from "Production Run" to "Trial / Experiment"
-# would leave the wrong entity dropdown (still "Production run") showing
-# until the reviewer hit Save - by then it's too late to pick a trial.
+# inside the form, switching from "Production Run" to "Foam Family" would
+# leave the wrong entity dropdown (still "Production run") showing until
+# the reviewer hit Save - by then it's too late to pick the right one.
 # Keeping it outside means the entity dropdown below updates immediately.
 link_type_choice = st.selectbox("Link to *", list(LINK_TYPES.keys()), key="new_note_link_type")
 entity_type = LINK_TYPES[link_type_choice]
@@ -126,13 +120,6 @@ with st.form("add_expert_note"):
         entity = st.selectbox(
             "Production run *", runs,
             format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
-        )
-    elif entity_type == "trial_record":
-        if not trials:
-            st.warning("No trials yet - create one on the Trial / Experiment page first.")
-        entity = st.selectbox(
-            "Trial *", trials,
-            format_func=lambda t: f"Trial #{t.id} — {t.production_run.foam_grade.grade_name} ({t.status})",
         )
     elif entity_type == "foam_grade":
         if not grades:
@@ -148,7 +135,7 @@ with st.form("add_expert_note"):
     submitted = st.form_submit_button("Save note", disabled=not page_usable)
     if submitted and page_usable:
         if not entity:
-            st.error("Nothing to link to - add a trial or foam grade first.")
+            st.error("Nothing to link to - add a production run or foam grade first.")
         elif not note_text.strip():
             st.error("Note text is required.")
         else:
@@ -193,7 +180,6 @@ else:
     # PI3 saved from a "foam family" analysis (see analysis_unit_picker,
     # helpers.py) invisible to the very company that created it - not just
     # a cosmetic gap, a real "where did my note go" bug.
-    scoped_trial_ids = {t.id for t in trials}
     scoped_run_id_set = set(scoped_run_ids) if scoped_run_ids else set()
     scoped_grade_id_set = set(scoped_grade_ids) if scoped_grade_ids else set()
     scoped_family_id_set = {f.id for f in families}
@@ -201,7 +187,6 @@ else:
         n
         for n in all_notes
         if (n.linked_entity_type == "production_run" and n.linked_entity_id in scoped_run_id_set)
-        or (n.linked_entity_type == "trial_record" and n.linked_entity_id in scoped_trial_ids)
         or (n.linked_entity_type == "foam_grade" and n.linked_entity_id in scoped_grade_id_set)
         or (n.linked_entity_type == "product_family" and n.linked_entity_id in scoped_family_id_set)
     ]

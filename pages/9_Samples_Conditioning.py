@@ -9,11 +9,10 @@ recorded on the Quality Test Result page, which links back to a sample
 from here by id. (cure_age_hours was removed app-wide 2026-08-03, per
 user feedback that it wasn't a real field in practice.)
 
-Keyed to the production run (every batch can have samples taken, not just
-formal trials) - lives in the "Trials & Samples" nav section alongside
-Trial / Experiment, Adjustment & Conclusion, and Approval & Review per the
-platform owner's own placement call, even though samples themselves aren't
-trial-specific.
+Covers all three sample sources (production run, customer trial,
+optimization trial) - lives in the "Trials & Samples" nav section
+alongside Customer Trials and Optimization Trials per the platform
+owner's own placement call.
 
 Conditioning is a one-to-many HISTORY per sample, not a flat set of fields
 on Sample - a sample can go through more than one distinct conditioning

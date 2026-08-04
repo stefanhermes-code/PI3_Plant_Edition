@@ -18,9 +18,17 @@ import pandas as pd
 import streamlit as st
 
 from auth import current_user, logout_button, require_login
-from db import FoamGrade, Plant, ProductFamily, ProductionRun, TrialRecord, get_session, init_db
+from db import CustomerTrial, FoamGrade, OptimizationTrial, Plant, ProductFamily, ProductionRun, get_session, init_db
 from helpers import log_export_click, page_setup, render_data_table, render_function_action_intro
-from tenant_scope import apply_scope, company_picker, family_ids_for_plants, plant_ids_for_company, run_ids_for_company
+from tenant_scope import (
+    apply_scope,
+    company_picker,
+    customer_trial_ids_for_company,
+    family_ids_for_plants,
+    optimization_trial_ids_for_company,
+    plant_ids_for_company,
+    run_ids_for_company,
+)
 import reports
 
 page_setup("Report")
@@ -40,8 +48,8 @@ render_function_action_intro(
         "Pick the tab for the report you need, select the run, plant/period, or trial it should "
         "cover, and preview it before downloading. Use the Production Run Report to hand a "
         "single batch's full record to someone outside the app, the Plant/Period Summary for a "
-        "broader review across a date range, and the Trial Closeout Report once a trial is "
-        "formally closed."
+        "broader review across a date range, and the Trial Closeout Report once a customer or "
+        "optimization trial is formally closed."
     ),
 )
 session = get_session()
@@ -53,6 +61,8 @@ active_company_id = company.id if company else None
 scoped_plant_ids = plant_ids_for_company(session, active_company_id)
 scoped_family_ids = family_ids_for_plants(session, scoped_plant_ids)
 scoped_run_ids = run_ids_for_company(session, active_company_id)
+scoped_customer_trial_ids = customer_trial_ids_for_company(session, active_company_id)
+scoped_optimization_trial_ids = optimization_trial_ids_for_company(session, active_company_id)
 
 tab_run, tab_period, tab_trial = st.tabs(
     ["Production Run Report", "Plant / Period Summary", "Trial Closeout Report"]
@@ -96,10 +106,6 @@ with tab_run:
         render_data_table(pd.DataFrame(data["quality_results"] or [{"—": "No data recorded"}]))
         st.write("**Quality issues**")
         render_data_table(pd.DataFrame(data["quality_issues"] or [{"—": "No data recorded"}]))
-        st.write("**Adjustments & conclusions**")
-        render_data_table(pd.DataFrame(data["adjustments"] or [{"—": "No data recorded"}]))
-        st.write("**Approvals**")
-        render_data_table(pd.DataFrame(data["approvals"] or [{"—": "No data recorded"}]))
 
         dl1, dl2 = st.columns(2)
         dl1.download_button(
@@ -190,12 +196,25 @@ with tab_period:
 # 3. Trial Closeout Report
 # ---------------------------------------------------------------------------
 with tab_trial:
-    closed_trials = (
-        apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, scoped_run_ids)
-        .filter(TrialRecord.status == "Closed")
-        .order_by(TrialRecord.date_closed.desc())
-        .all()
+    source_type = st.radio(
+        "Trial type", ["Customer Trial", "Optimization Trial"],
+        horizontal=True, key="report_trial_source_type",
     )
+    if source_type == "Customer Trial":
+        closed_trials = (
+            apply_scope(session.query(CustomerTrial), CustomerTrial.id, scoped_customer_trial_ids)
+            .filter(CustomerTrial.status == "Closed")
+            .order_by(CustomerTrial.date_closed.desc())
+            .all()
+        )
+    else:
+        closed_trials = (
+            apply_scope(session.query(OptimizationTrial), OptimizationTrial.id, scoped_optimization_trial_ids)
+            .filter(OptimizationTrial.status == "Closed")
+            .order_by(OptimizationTrial.date_closed.desc())
+            .all()
+        )
+
     if not closed_trials:
         st.info("No closed trials yet - a trial must be closed before its report can be generated.")
     else:
@@ -203,34 +222,31 @@ with tab_trial:
             "Closed trial",
             closed_trials,
             format_func=lambda t: (
-                f"Trial #{t.id} — {t.production_run.foam_grade.grade_name if t.production_run and t.production_run.foam_grade else '—'} "
+                f"#{t.id} — {t.foam_grade.grade_name if t.foam_grade else '—'} "
                 f"(closed {t.date_closed})"
             ),
             key="report_trial_select",
         )
-        data = reports.build_trial_report_data(session, trial.id)
+        data = reports.build_trial_report_data(session, source_type, trial.id)
 
-        st.subheader(f"Trial #{data['trial_id']} — {data['foam_grade']}")
+        st.subheader(f"{data['source_type']} #{data['trial_id']} — {data['foam_grade']}")
         c1, c2, c3 = st.columns(3)
         c1.metric("Status", data["status"])
-        c2.metric("Production run", f"#{data['run_id']}" if data["run_id"] else "—")
+        c2.metric("Plant", data["plant"])
         c3.metric("Date closed", str(data["date_closed"]))
 
-        st.write(f"**Objective:** {data['objective']}")
-        st.write(f"**Hypothesis:** {data['hypothesis']}")
-        st.write(f"**What changed:** {data['what_changed']}")
-        st.write(f"**Result against target:** {data['result_against_target']}")
-        st.write(f"**Physical property outcome:** {data['physical_property_outcome']}")
-        st.write(f"**Conclusion:** {data['conclusion']}")
-        st.write(f"**Reuse recommendation:** {data['reuse_recommendation']}")
+        st.write(f"**Responsible:** {data['responsible_person']} · **Trial date:** {data['trial_date']} · **Batch reference:** {data['batch_reference']}")
+
+        for label, value in data["narrative_fields"]:
+            st.write(f"**{label}:** {value}")
+
+        if data["notes"]:
+            st.write(f"**Notes:** {data['notes']}")
+
         st.write(f"**Reviewed by:** {data['reviewed_by']} · **Approved by:** {data['approved_by']}")
 
         st.write("**Quality issues observed**")
         render_data_table(pd.DataFrame(data["quality_issues"] or [{"—": "No data recorded"}]))
-        st.write("**Adjustments & conclusions**")
-        render_data_table(pd.DataFrame(data["adjustments"] or [{"—": "No data recorded"}]))
-        st.write("**Approvals**")
-        render_data_table(pd.DataFrame(data["approvals"] or [{"—": "No data recorded"}]))
 
         dl1, dl2 = st.columns(2)
         dl1.download_button(

@@ -16,8 +16,6 @@ grade) so a whole master-data delete is one all-or-nothing transaction.
 """
 
 from db import (
-    AdjustmentConclusion,
-    ApprovalRecord,
     ComponentStreamReading,
     ConditioningSegment,
     CustomerTrial,
@@ -39,7 +37,6 @@ from db import (
     RecipeVersion,
     RuntimeDataRecord,
     Sample,
-    TrialRecord,
 )
 
 
@@ -78,12 +75,6 @@ def production_run_dependency_counts(session, run_id):
         .filter(PhysicalPropertyResult.production_run_id == run_id).count(),
         "quality issue(s)": session.query(QualityObservation)
         .filter(QualityObservation.production_run_id == run_id).count(),
-        "adjustment & conclusion record(s)": session.query(AdjustmentConclusion)
-        .filter(AdjustmentConclusion.production_run_id == run_id).count(),
-        "approval record(s)": session.query(ApprovalRecord)
-        .filter(ApprovalRecord.production_run_id == run_id).count(),
-        "trial / experiment record(s)": session.query(TrialRecord)
-        .filter(TrialRecord.production_run_id == run_id).count(),
         "sample(s)": len(sample_ids),
         "conditioning segment(s)": (
             session.query(ConditioningSegment)
@@ -133,20 +124,6 @@ def delete_production_run_cascade(session, run_id):
     ).delete(synchronize_session=False)
     session.query(QualityObservation).filter(
         QualityObservation.production_run_id == run_id
-    ).delete(synchronize_session=False)
-    session.query(AdjustmentConclusion).filter(
-        AdjustmentConclusion.production_run_id == run_id
-    ).delete(synchronize_session=False)
-    session.query(ApprovalRecord).filter(
-        ApprovalRecord.production_run_id == run_id
-    ).delete(synchronize_session=False)
-    # TrialRecord.production_run_id is NOT NULL - must go before the run
-    # itself. Order relative to the four tables above doesn't matter for
-    # THEIR deletion, but it does matter that TrialRecord is deleted only
-    # after (or regardless of) their trial_record_id references, since
-    # those rows are being deleted outright, not repointed.
-    session.query(TrialRecord).filter(
-        TrialRecord.production_run_id == run_id
     ).delete(synchronize_session=False)
     session.query(Sample).filter(
         Sample.production_run_id == run_id

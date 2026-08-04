@@ -9,9 +9,9 @@ in the block the sample came from, its cure age, and its conditioning
 history - that context now lives on the other page; a result here links
 back to a sample by id, same as before.
 
-Keyed primarily to the production run (every batch gets quality results,
-trial or not). Linking to a trial is optional and only relevant when the
-result is part of a formal experiment's evidence trail.
+Keyed to exactly one of a production run, a customer trial, or an
+optimization trial (see db.SAMPLE_SOURCE_TYPES) - the "Record against"
+picker below decides which.
 
 Redesigned 2026-08-02 (results browsing/edit make-over): the Add form now
 sits behind a collapsed expander, same as the Quality Issue page, so
@@ -45,7 +45,6 @@ from db import (
     PhysicalPropertyUOM,
     ProductionRun,
     Sample,
-    TrialRecord,
     get_session,
     init_db,
     sample_source_fk_field,
@@ -79,7 +78,7 @@ from tenant_scope import (
 RESULT_REQUIRED_COLUMNS = ["property_name", "test_method", "unit", "actual_value"]
 RESULT_OPTIONAL_COLUMNS = [
     "production_run_id", "customer_trial_id", "optimization_trial_id",
-    "target_value", "sample_id", "trial_record_id", "method_revision",
+    "target_value", "sample_id", "method_revision",
     "replicate_no", "tested_at", "notes",
 ]
 
@@ -239,23 +238,6 @@ with tab_result_manual:
                     key="result_ot_select",
                 )
 
-            if source_type == "Production Run":
-                # TrialRecord (a formal experiment) only ever sits on top of
-                # a production run - lab trials (Customer/Optimization) are
-                # already their own independent flow with their own
-                # closeout, so this link doesn't apply to them.
-                trials_for_run = (
-                    session.query(TrialRecord).filter(TrialRecord.production_run_id == parent.id).all() if parent else []
-                )
-                trial = st.selectbox(
-                    "Link to trial (optional — only if this result is part of a formal experiment)",
-                    [None] + trials_for_run,
-                    format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
-                    key="result_trial_select",
-                )
-            else:
-                trial = None
-
             samples_for_parent = _samples_for_parent(session, source_type, parent.id if parent else None)
             sample = st.selectbox(
                 "Sample (optional, but recommended for comparability)",
@@ -324,7 +306,6 @@ with tab_result_manual:
                     else:
                         pass_fail = compute_pass_fail(property_def.name, target_value, actual_value)
                         new_result = PhysicalPropertyResult(
-                            trial_record_id=trial.id if trial else None,
                             sample_id=sample.id if sample else None,
                             property_definition_id=property_def.id,
                             property_method_id=method_choice.id if (method_choice and not method_other.strip()) else None,
@@ -362,9 +343,9 @@ with tab_result_import:
         import_ct_ids = {t.id for t in customer_trials}
         import_ot_ids = {t.id for t in optimization_trials}
         # Scoped to this company's parents - otherwise a CSV row could
-        # attach a new result to a different company's sample or trial
-        # (the parent-id check alone doesn't catch that, since sample_id/
-        # trial_record_id are independent columns).
+        # attach a new result to a different company's sample (the
+        # parent-id check alone doesn't catch that, since sample_id is an
+        # independent column).
         samples_all = {
             s.id: s for s in session.query(Sample).filter(
                 or_(
@@ -374,11 +355,6 @@ with tab_result_import:
                 )
             ).all()
         }
-        trials_all = {
-            t.id: t
-            for t in apply_scope(session.query(TrialRecord), TrialRecord.production_run_id, run_ids).all()
-        }
-
         def _row_fk(row):
             """(fk_field, fk_value) if exactly one of the three FK columns
             is set to a value in-scope, else (None, None)."""
@@ -407,14 +383,12 @@ with tab_result_import:
                 fk_field, _fk_val = _row_fk(row)
                 sample_val = row.get("sample_id")
                 sample_ok = pd.isna(sample_val) or int(sample_val) in samples_all
-                trial_val = row.get("trial_record_id")
-                trial_ok = pd.isna(trial_val) or int(trial_val) in trials_all
                 has_method_unit_value = (
                     str(row.get("test_method", "")).strip()
                     and str(row.get("unit", "")).strip()
                     and not pd.isna(row.get("actual_value"))
                 )
-                ok = bool(prop_def and fk_field and sample_ok and trial_ok and has_method_unit_value)
+                ok = bool(prop_def and fk_field and sample_ok and has_method_unit_value)
             except (TypeError, ValueError):
                 ok = False
             if ok:
@@ -427,7 +401,7 @@ with tab_result_import:
             st.warning(
                 "Flagged rows have an unrecognized property_name, don't have exactly one in-scope "
                 "production_run_id / customer_trial_id / optimization_trial_id set, an unrecognized "
-                "sample_id / trial_record_id, or are missing test_method / unit / actual_value."
+                "sample_id, or are missing test_method / unit / actual_value."
             )
             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
@@ -475,12 +449,10 @@ with tab_result_import:
                     else None
                 )
                 sample_val = row.get("sample_id")
-                trial_val = row.get("trial_record_id")
                 replicate_val = row.get("replicate_no")
                 tested_val = pd.to_datetime(row.get("tested_at"), errors="coerce")
                 fk_field, fk_val = _row_fk(row)
                 new_result = PhysicalPropertyResult(
-                    trial_record_id=int(trial_val) if not pd.isna(trial_val) and fk_field == "production_run_id" else None,
                     sample_id=int(sample_val) if not pd.isna(sample_val) else None,
                     property_definition_id=prop_def.id,
                     property_method_id=method_match.id if method_match else None,
@@ -603,7 +575,6 @@ else:
                 "Unit": r.unit,
                 "Pass/Fail": live_pass_fail or "—",
                 "Sample": f"#{r.sample_id} ({r.sample.zone_label})" if r.sample else "—",
-                "Trial": f"#{r.trial_record_id}" if r.trial_record_id else "—",
                 "Method": r.test_method,
                 "Rev.": r.method_revision,
                 "Replicate": r.replicate_no,
@@ -688,21 +659,6 @@ if selected_result:
             format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
             key=f"edit_result_sample_{selected_result.id}",
         )
-        # TrialRecord (a formal experiment) only ever sits on top of a
-        # production run - doesn't apply to lab-trial-sourced results.
-        trials_for_edit_result = (
-            session.query(TrialRecord).filter(TrialRecord.production_run_id == selected_result.production_run_id).all()
-            if selected_result.production_run_id is not None else []
-        )
-        trial_options_result = [None] + trials_for_edit_result
-        trial_default_result = next(
-            (i for i, t in enumerate(trial_options_result) if t and t.id == selected_result.trial_record_id), 0
-        )
-        e_trial = st.selectbox(
-            "Link to trial (optional)", trial_options_result, index=trial_default_result,
-            format_func=lambda t: "— not linked to a trial —" if t is None else f"Trial #{t.id} ({t.status})",
-            key=f"edit_result_trial_{selected_result.id}",
-        )
         ec1, ec2 = st.columns(2)
         e_target = ec1.number_input(
             "Target value", step=0.1, value=float(selected_result.target_value or 0.0), key=f"edit_result_target_{selected_result.id}"
@@ -758,7 +714,6 @@ if selected_result:
             else:
                 pass_fail = compute_pass_fail(selected_result.property_name, e_target, e_actual)
                 selected_result.sample_id = e_sample.id if e_sample else None
-                selected_result.trial_record_id = e_trial.id if e_trial else None
                 selected_result.target_value = e_target or None
                 selected_result.actual_value = e_actual or None
                 selected_result.unit = e_unit

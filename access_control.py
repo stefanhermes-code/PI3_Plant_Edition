@@ -63,8 +63,7 @@ this order by `page_visible()`:
    operational page with a write action: Plant & Foam Equipment Overview,
    Product Family & Foam Grade, Recipes, Production Run, Quality Test
    Result, Quality Issue, Samples & Conditioning, Customer Trials,
-   Optimization Trials, Adjustment & Conclusion,
-   Approval & Review, Trial / Experiment, Raw Materials, Expert
+   Optimization Trials, Raw Materials, Expert
    Notes, Recipe Optimization, Trend Analysis, Machine Settings
    Correlation, and Root-Cause Assistant (their "Ask PI3"/"Save to Expert
    Notes" actions), and Machine Settings Optimization (its single, fixed-
@@ -122,9 +121,6 @@ PAGE_CATALOG = {
     "samples_conditioning": "Samples & Conditioning",
     "customer_trials": "Customer Trials",
     "optimization_trials": "Optimization Trials",
-    "trial_experiment": "Trial / Experiment",
-    "adjustment_conclusion": "Adjustment & Conclusion",
-    "approval_review": "Approval & Review",
     "recipe_optimization": "Recipe Optimization",
     "trend_analysis": "Trend Analysis",
     "machine_settings_correlation": "Machine Settings vs Physical Properties Correlation",

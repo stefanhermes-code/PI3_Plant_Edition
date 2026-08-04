@@ -19,8 +19,6 @@ seed_demo_data(session) directly.
 import datetime as dt
 
 from db import (
-    AdjustmentConclusion,
-    ApprovalRecord,
     CustomerTrial,
     FoamGrade,
     Machine,
@@ -35,7 +33,6 @@ from db import (
     RecipeComponent,
     RecipeVersion,
     Sample,
-    TrialRecord,
     get_session,
     init_db,
 )
@@ -316,33 +313,24 @@ def seed_demo_data(session) -> str:
             )
         )
 
-        trial = TrialRecord(
-            production_run_id=run.id,
-            trial_or_change_objective=d["objective"],
-            hypothesis=d["hypothesis"],
-            what_changed=d["what_changed"],
-            responsible_person=d["responsible_person"],
-            status="Closed",
-            result_against_target=d["result_against_target"],
-            physical_property_outcome=d["physical_property_outcome"],
-            conclusion=d["conclusion"],
-            reuse_recommendation=d["reuse_recommendation"],
-            reviewed_by="Technical Manager",
-            approved_by="Plant Manager",
-            date_closed=run.run_date,
-        )
-        session.add(trial)
-        session.flush()
-
+        # Trial-level narrative (objective/hypothesis/what-changed/etc.) used
+        # to live on a TrialRecord attached to this production run, with
+        # AdjustmentConclusion/ApprovalRecord hanging off it. That workflow
+        # was removed 2026-08-04 as redundant with the Production Run /
+        # Customer Trial / Optimization Trial model - see db.py. The
+        # production run itself, plus its quality test results and quality
+        # issue, are the parts of this demo scenario that map onto the
+        # current schema; the narrative fields in trial_defs are kept only
+        # as source material for run.notes below.
         session.add_all(
             [
                 PhysicalPropertyResult(
-                    production_run_id=run.id, trial_record_id=trial.id, property_name="Density", target_value=28.0,
+                    production_run_id=run.id, property_name="Density", target_value=28.0,
                     actual_value=28.0 + (i * 0.05), unit="kg/m3", pass_fail="Pass",
                     test_method="ISO 845", tested_at=run.run_date,
                 ),
                 PhysicalPropertyResult(
-                    production_run_id=run.id, trial_record_id=trial.id, property_name="Hardness",
+                    production_run_id=run.id, property_name="Hardness",
                     target_value=140.0,
                     actual_value=d["hardness_actual"],
                     unit="N", pass_fail="Pass" if i == 5 else "Fail",
@@ -354,7 +342,6 @@ def seed_demo_data(session) -> str:
         session.add(
             QualityObservation(
                 production_run_id=run.id,
-                trial_record_id=trial.id,
                 observation_type=d["observation"],
                 severity=d["severity"],
                 frequency=d["frequency"],
@@ -367,35 +354,7 @@ def seed_demo_data(session) -> str:
             )
         )
 
-        session.add(
-            AdjustmentConclusion(
-                production_run_id=run.id,
-                trial_record_id=trial.id,
-                parameter_changed=d["what_changed"],
-                formulation_changed="catalyst" in d["what_changed"].lower() or "surfactant" in d["what_changed"].lower(),
-                material_changed="Polyol B" if i == 1 else "",
-                result=d["result_against_target"],
-                reuse_recommendation=d["reuse_recommendation"],
-                confidence_level=d["confidence_adj"],
-                follow_up_required=(i < 5),
-                created_by=d["responsible_person"],
-            )
-        )
-
-        session.add(
-            ApprovalRecord(
-                production_run_id=run.id,
-                trial_record_id=trial.id,
-                reviewed_by="Technical Manager",
-                approved_by="Plant Manager",
-                approval_status="Approved",
-                review_notes=f"Trial T{i} reviewed as part of hardness drift / shrinkage investigation.",
-                date_reviewed=run.run_date,
-                date_approved=run.run_date,
-            )
-        )
-
-        created_trials.append(trial)
+        created_trials.append(run)
 
     # ---- Routine production runs (no trial at all) -----------------------
     # These demonstrate the primary path: a normal batch gets a recipe,
@@ -600,8 +559,8 @@ def seed_demo_data(session) -> str:
     session.commit()
     return (
         "Demo data created: 1 plant, 1 product family, 2 foam grades, 3 recipe versions, "
-        "5 closed trials (with full closeout, quality issues, adjustments, approvals), "
-        "2 routine production runs with quality results and no trial at all, plus 1 closed "
+        "5 production runs with quality test results and a quality issue each, "
+        "2 routine production runs with quality results and no issue at all, plus 1 closed "
         "Customer Trial and 1 closed Optimization Trial (each with its own sample and quality "
         "results, independent of any production run)."
     )

@@ -10,15 +10,20 @@ Three report types, each with a data-assembly function (plain dict, no
 Streamlit import, easy to unit test) and a PDF + Excel renderer pair:
 
 - build_run_report_data() / render_run_report_pdf() / render_run_report_excel()
-  One production run: recipe, process settings, quality results/issues,
-  adjustments, approvals - the "hand this to a customer or auditor for
-  this batch" document.
+  One production run: recipe, process settings, quality results/issues -
+  the "hand this to a customer or auditor for this batch" document.
 - build_period_summary_data() / render_period_summary_pdf() / render_period_summary_excel()
   One plant/product family/date range: KPIs, pass rate, recurring issues,
   the run list, and a breakdown by foam grade.
 - build_trial_report_data() / render_trial_report_pdf() / render_trial_report_excel()
-  One trial/experiment: objective, what changed, results, conclusion,
-  approvals - a formal closeout writeup.
+  One closed Customer Trial or Optimization Trial (see db.CustomerTrial /
+  db.OptimizationTrial - the two independent lab-trial flows, added
+  2026-08-03): objective/hypothesis, what changed, outcome/conclusion,
+  reviewer sign-off - a formal closeout writeup. Rebuilt 2026-08-04 to
+  cover these two (the trials people actually use) after the old
+  TrialRecord concept (a formal-experiment flag on a production run) was
+  removed - zero real rows across 244 production runs, fully superseded
+  by these two independent, self-contained closeout flows.
 
 pages/21_Report.py wires these to selectors, an in-app preview, and
 st.download_button for both file formats.
@@ -59,9 +64,9 @@ from reportlab.platypus import (
 
 from analytics import PHASE_SETTING_FIELDS, PHASE_SETTING_LABELS
 from db import (
-    AdjustmentConclusion,
-    ApprovalRecord,
+    CustomerTrial,
     FoamGrade,
+    OptimizationTrial,
     Plant,
     PhysicalPropertyResult,
     ProductFamily,
@@ -69,7 +74,6 @@ from db import (
     ProductionRun,
     QualityObservation,
     RecipeComponent,
-    TrialRecord,
 )
 from quality_standards import compute_pass_fail
 
@@ -257,29 +261,6 @@ def build_run_report_data(session, run_id):
         .filter(QualityObservation.production_run_id == run_id).all()
     ]
 
-    adjustments = [
-        {
-            "Parameter/material changed": a.parameter_changed or a.material_changed or "—",
-            "Result": a.result or "—",
-            "Reuse recommendation": a.reuse_recommendation or "—",
-            "Confidence": a.confidence_level or "—",
-        }
-        for a in session.query(AdjustmentConclusion)
-        .filter(AdjustmentConclusion.production_run_id == run_id).all()
-    ]
-
-    approvals = [
-        {
-            "Status": a.approval_status or "—",
-            "Reviewed by": a.reviewed_by or "—",
-            "Approved by": a.approved_by or "—",
-            "Date reviewed": a.date_reviewed,
-            "Date approved": a.date_approved,
-        }
-        for a in session.query(ApprovalRecord)
-        .filter(ApprovalRecord.production_run_id == run_id).all()
-    ]
-
     return {
         "run_id": run.id,
         "plant": run.plant.name if run.plant else "—",
@@ -296,8 +277,6 @@ def build_run_report_data(session, run_id):
         "phase_settings": phase_settings,
         "quality_results": quality_results,
         "quality_issues": quality_issues,
-        "adjustments": adjustments,
-        "approvals": approvals,
     }
 
 
@@ -321,8 +300,6 @@ def render_run_report_pdf(data):
         _section(story, "Process settings (by phase)", data["phase_settings"])
         _section(story, "Quality test results", data["quality_results"])
         _section(story, "Quality issues", data["quality_issues"])
-        _section(story, "Adjustments & conclusions", data["adjustments"])
-        _section(story, "Approvals", data["approvals"])
     return _pdf_bytes(build)
 
 
@@ -339,8 +316,6 @@ def render_run_report_excel(data):
         "Process Settings": data["phase_settings"],
         "Quality Results": data["quality_results"],
         "Quality Issues": data["quality_issues"],
-        "Adjustments": data["adjustments"],
-        "Approvals": data["approvals"],
     })
 
 
@@ -471,115 +446,126 @@ def render_period_summary_excel(data):
 
 # ---------------------------------------------------------------------------
 # 3. Trial Closeout Report
+#
+# Covers the two independent lab-trial flows (see db.CustomerTrial /
+# db.OptimizationTrial, added 2026-08-03) - NOT the old TrialRecord concept
+# (a formal-experiment flag on a production run), which was removed
+# 2026-08-04 after confirming zero real rows across 244 production runs.
+# The two models have different closeout fields (a sales-driven Customer
+# Trial has customer_name/outcome/customer_feedback; an internally-driven
+# Optimization Trial has hypothesis/conclusion/reuse_recommendation), so
+# build_trial_report_data() normalizes both into one common "narrative
+# fields" list of (label, value) pairs the PDF/Excel renderers can walk
+# without needing to know which trial type produced them.
 # ---------------------------------------------------------------------------
 
-def build_trial_report_data(session, trial_id):
-    trial = session.get(TrialRecord, trial_id)
+def build_trial_report_data(session, source_type, trial_id):
+    """source_type is "Customer Trial" or "Optimization Trial" (see
+    db.SAMPLE_SOURCE_TYPES) - the same source-type string used throughout
+    the app to disambiguate the three mutually-exclusive parents a sample/
+    quality result can belong to."""
+    if source_type == "Customer Trial":
+        trial = session.get(CustomerTrial, trial_id)
+    elif source_type == "Optimization Trial":
+        trial = session.get(OptimizationTrial, trial_id)
+    else:
+        return None
     if trial is None:
         return None
-    run = trial.production_run
-    grade = run.foam_grade if run else None
+    grade = trial.foam_grade
+    plant = trial.plant
 
     quality_issues = [
         {
             "Issue type": o.observation_type, "Severity": o.severity or "—",
             "Frequency": o.frequency or "—", "Confidence": o.confidence_level or "—",
         }
-        for o in trial.quality_observations
-    ]
-    adjustments = [
-        {
-            "Parameter/material changed": a.parameter_changed or a.material_changed or "—",
-            "Result": a.result or "—", "Reuse recommendation": a.reuse_recommendation or "—",
-            "Confidence": a.confidence_level or "—",
-        }
-        for a in trial.adjustment_conclusions
-    ]
-    approvals = [
-        {
-            "Status": a.approval_status or "—", "Reviewed by": a.reviewed_by or "—",
-            "Approved by": a.approved_by or "—", "Date reviewed": a.date_reviewed,
-            "Date approved": a.date_approved,
-        }
-        for a in trial.approval_records
+        for o in session.query(QualityObservation).filter(
+            (QualityObservation.customer_trial_id == trial_id)
+            if source_type == "Customer Trial"
+            else (QualityObservation.optimization_trial_id == trial_id)
+        ).all()
     ]
 
+    if source_type == "Customer Trial":
+        narrative_fields = [
+            ("Customer", trial.customer_name),
+            ("Sales opportunity reference", trial.sales_opportunity_reference or "—"),
+            ("Requested by", trial.requested_by or "—"),
+            ("Trial objective", trial.trial_objective or "—"),
+            ("Outcome", trial.outcome or "—"),
+            ("Customer feedback", trial.customer_feedback or "—"),
+            ("Follow-up action", trial.follow_up_action or "—"),
+        ]
+    else:
+        narrative_fields = [
+            ("Improvement initiative reference", trial.improvement_initiative_reference or "—"),
+            ("Hypothesis", trial.hypothesis or "—"),
+            ("What changed", trial.what_changed or "—"),
+            ("Result against target", trial.result_against_target or "—"),
+            ("Conclusion", trial.conclusion or "—"),
+            ("Reuse recommendation", trial.reuse_recommendation or "—"),
+        ]
+
     return {
+        "source_type": source_type,
         "trial_id": trial.id,
-        "run_id": run.id if run else None,
         "foam_grade": grade.grade_name if grade else "—",
+        "plant": plant.name if plant else "—",
         "status": trial.status,
-        "objective": trial.trial_or_change_objective,
-        "hypothesis": trial.hypothesis or "—",
-        "what_changed": trial.what_changed or "—",
         "responsible_person": trial.responsible_person or "—",
-        "result_against_target": trial.result_against_target or "—",
-        "physical_property_outcome": trial.physical_property_outcome or "—",
-        "conclusion": trial.conclusion or "—",
-        "reuse_recommendation": trial.reuse_recommendation or "—",
+        "trial_date": trial.trial_date,
+        "batch_reference": trial.batch_reference or "—",
+        "notes": trial.notes or "",
+        "narrative_fields": narrative_fields,
         "reviewed_by": trial.reviewed_by or "—",
-        "approved_by": trial.approved_by or "—",
+        # Only OptimizationTrial has a separate approved_by (CustomerTrial's
+        # closeout is reviewed_by only - see db.py's REQUIRED_CLOSEOUT_FIELDS
+        # on each model).
+        "approved_by": getattr(trial, "approved_by", None) or "—",
         "date_closed": trial.date_closed,
         "quality_issues": quality_issues,
-        "adjustments": adjustments,
-        "approvals": approvals,
     }
 
 
 def render_trial_report_pdf(data):
     def build(story):
         _title_block(
-            story, f"Trial Closeout Report — Trial #{data['trial_id']}",
-            f"{data['foam_grade']} · run #{data['run_id']} · {data['status']}",
+            story, f"Trial Closeout Report — {data['source_type']} #{data['trial_id']}",
+            f"{data['foam_grade']} · {data['plant']} · {data['status']}",
         )
         story.append(_key_value_table([
             ("Status", data["status"]), ("Responsible", data["responsible_person"]),
-            ("Foam grade", data["foam_grade"]), ("Production run", f"#{data['run_id']}"),
+            ("Foam grade", data["foam_grade"]), ("Plant", data["plant"]),
+            ("Trial date", data["trial_date"]), ("Batch reference", data["batch_reference"]),
             ("Reviewed by", data["reviewed_by"]), ("Approved by", data["approved_by"]),
             ("Date closed", data["date_closed"]), ("", ""),
         ]))
+        if data["notes"]:
+            story.append(Spacer(1, 6))
+            story.append(_p(f"Notes: {data['notes']}"))
         story.append(Spacer(1, 8))
-        story.append(Paragraph("Objective", STYLES["Heading3"]))
-        story.append(_p(data["objective"]))
-        story.append(Spacer(1, 6))
-        story.append(Paragraph("Hypothesis", STYLES["Heading3"]))
-        story.append(_p(data["hypothesis"]))
-        story.append(Spacer(1, 6))
-        story.append(Paragraph("What changed", STYLES["Heading3"]))
-        story.append(_p(data["what_changed"]))
-        story.append(Spacer(1, 6))
-        story.append(Paragraph("Result against target", STYLES["Heading3"]))
-        story.append(_p(data["result_against_target"]))
-        story.append(Spacer(1, 6))
-        story.append(Paragraph("Physical property outcome", STYLES["Heading3"]))
-        story.append(_p(data["physical_property_outcome"]))
-        story.append(Spacer(1, 6))
-        story.append(Paragraph("Conclusion", STYLES["Heading3"]))
-        story.append(_p(data["conclusion"]))
-        story.append(Spacer(1, 6))
-        story.append(Paragraph("Reuse recommendation", STYLES["Heading3"]))
-        story.append(_p(data["reuse_recommendation"]))
+        for label, value in data["narrative_fields"]:
+            story.append(Paragraph(label, STYLES["Heading3"]))
+            story.append(_p(value))
+            story.append(Spacer(1, 6))
         _section(story, "Quality issues observed", data["quality_issues"])
-        _section(story, "Adjustments & conclusions", data["adjustments"])
-        _section(story, "Approvals", data["approvals"])
     return _pdf_bytes(build)
 
 
 def render_trial_report_excel(data):
     header = [{
-        "Trial ID": data["trial_id"], "Run ID": data["run_id"], "Foam grade": data["foam_grade"],
+        "Trial type": data["source_type"], "Trial ID": data["trial_id"],
+        "Foam grade": data["foam_grade"], "Plant": data["plant"],
         "Status": data["status"], "Responsible": data["responsible_person"],
-        "Objective": data["objective"], "Hypothesis": data["hypothesis"],
-        "What changed": data["what_changed"], "Result against target": data["result_against_target"],
-        "Physical property outcome": data["physical_property_outcome"], "Conclusion": data["conclusion"],
-        "Reuse recommendation": data["reuse_recommendation"], "Reviewed by": data["reviewed_by"],
-        "Approved by": data["approved_by"], "Date closed": data["date_closed"],
+        "Trial date": data["trial_date"], "Batch reference": data["batch_reference"],
+        **{label: value for label, value in data["narrative_fields"]},
+        "Reviewed by": data["reviewed_by"], "Approved by": data["approved_by"],
+        "Date closed": data["date_closed"], "Notes": data["notes"],
     }]
     return _excel_bytes({
         "Trial": header,
         "Quality Issues": data["quality_issues"],
-        "Adjustments": data["adjustments"],
-        "Approvals": data["approvals"],
     })
 
 
