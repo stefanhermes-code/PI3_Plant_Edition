@@ -6,11 +6,11 @@ Approval - see pages/10_PI3_AI_Connectivity.py). This screen was the gap:
 it did not exist as a dedicated page before. Not gated behind PI3
 connectivity - every logged-in user can generate these.
 
-Three report types, each with an in-app preview plus PDF and Excel
+Four report types, each with an in-app preview plus PDF and Excel
 download buttons: Batch Release / Conformance Record, Plant / Period
-Summary Report, and Trial Closeout Report. All data assembly and file
-rendering lives in reports.py; this page is just selectors +
-st.download_button wiring.
+Summary Report, Trial Closeout Report, and Sample Certificate of Analysis
+(added 2026-08-04). All data assembly and file rendering lives in
+reports.py; this page is just selectors + st.download_button wiring.
 
 Batch Release / Conformance Record lives here (rather than on the
 Production Run page itself) because selecting its subject is a single
@@ -27,9 +27,20 @@ import datetime as dt
 
 import pandas as pd
 import streamlit as st
+from sqlalchemy import or_
 
 from auth import current_user, logout_button, require_login
-from db import CustomerTrial, FoamGrade, OptimizationTrial, Plant, ProductFamily, ProductionRun, get_session, init_db
+from db import (
+    CustomerTrial,
+    FoamGrade,
+    OptimizationTrial,
+    Plant,
+    ProductFamily,
+    ProductionRun,
+    Sample,
+    get_session,
+    init_db,
+)
 from helpers import log_export_click, page_setup, render_data_table, render_function_action_intro
 from tenant_scope import (
     apply_scope,
@@ -75,8 +86,9 @@ scoped_run_ids = run_ids_for_company(session, active_company_id)
 scoped_customer_trial_ids = customer_trial_ids_for_company(session, active_company_id)
 scoped_optimization_trial_ids = optimization_trial_ids_for_company(session, active_company_id)
 
-tab_run, tab_period, tab_trial = st.tabs(
-    ["Batch Release / Conformance Record", "Plant / Period Summary", "Trial Closeout Report"]
+tab_run, tab_period, tab_trial, tab_sample = st.tabs(
+    ["Batch Release / Conformance Record", "Plant / Period Summary", "Trial Closeout Report",
+     "Sample Certificate of Analysis"]
 )
 
 # ---------------------------------------------------------------------------
@@ -300,4 +312,89 @@ with tab_trial:
             key="trial_report_excel",
             on_click=log_export_click, args=("trial_closeout_report_excel",),
             kwargs={"description": f"Trial #{data['trial_id']}"},
+        )
+
+# ---------------------------------------------------------------------------
+# 4. Sample Certificate of Analysis
+#
+# Picking one sample is a single simple choice, same placement logic as
+# the other three reports on this page. Not customer-facing as-is - it
+# includes the full recipe formulation used, same caveat as Batch Release
+# Record and Recipe Formulation Record.
+# ---------------------------------------------------------------------------
+with tab_sample:
+    st.caption(
+        "Full traceability record for one sample: which run/trial it came from, the sample itself, "
+        "the recipe used (full formulation - internal use only, not customer-facing), its quality "
+        "test results, and the pass/fail assessment."
+    )
+    if active_company_id is None:
+        sample_query = session.query(Sample)
+    else:
+        sample_query = session.query(Sample).filter(
+            or_(
+                Sample.production_run_id.in_(scoped_run_ids or []),
+                Sample.customer_trial_id.in_(scoped_customer_trial_ids or []),
+                Sample.optimization_trial_id.in_(scoped_optimization_trial_ids or []),
+            )
+        )
+    all_samples = sample_query.order_by(Sample.id.desc()).all()
+
+    def _sample_option_label(s):
+        if s.production_run_id is not None:
+            src = f"Production Run #{s.production_run_id}"
+        elif s.customer_trial_id is not None:
+            src = f"Customer Trial #{s.customer_trial_id}"
+        elif s.optimization_trial_id is not None:
+            src = f"Optimization Trial #{s.optimization_trial_id}"
+        else:
+            src = "—"
+        return f"Sample #{s.id} — {src} · Zone: {s.zone_label or '—'}" + (f" · {s.sample_ts:%Y-%m-%d}" if s.sample_ts else "")
+
+    if not all_samples:
+        st.info("No samples recorded yet.")
+    else:
+        sample = st.selectbox(
+            "Sample", all_samples, format_func=_sample_option_label, key="report_sample_select",
+        )
+        data = reports.build_sample_certificate_data(session, sample.id)
+
+        st.subheader(f"Sample #{data['sample_id']} — {data['foam_grade']}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Overall verdict", data["overall_verdict"])
+        c2.metric("Zone", data["zone_label"])
+        c3.metric("Plant", data["plant"])
+
+        st.write("**Sample source**")
+        for label, value in data["header_fields"]:
+            st.write(f"**{label}:** {value}")
+        st.write(f"**Sampled:** {data['sample_ts']}")
+        if data["sample_notes"]:
+            st.write(f"**Sample notes:** {data['sample_notes']}")
+
+        st.write(
+            f"**Recipe used:** {data['recipe_version_label']} · **Approval status:** "
+            f"{data['recipe_approval_status']} · **Effective:** {data['recipe_effective_date']}"
+        )
+        st.write("**Formulation** (internal use only)")
+        render_data_table(pd.DataFrame(data["recipe_components"] or [{"—": "No data recorded"}]))
+
+        st.write(f"**Quality test results** — Pass: {data['pass_count']} · Fail: {data['fail_count']}")
+        render_data_table(pd.DataFrame(data["quality_results"] or [{"—": "No data recorded"}]))
+
+        dl1, dl2 = st.columns(2)
+        dl1.download_button(
+            "Download PDF", data=reports.render_sample_certificate_pdf(data),
+            file_name=f"sample_{data['sample_id']}_certificate.pdf", mime="application/pdf",
+            key="sample_cert_pdf",
+            on_click=log_export_click, args=("sample_certificate_pdf",),
+            kwargs={"description": f"Sample #{data['sample_id']}"},
+        )
+        dl2.download_button(
+            "Download Excel", data=reports.render_sample_certificate_excel(data),
+            file_name=f"sample_{data['sample_id']}_certificate.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="sample_cert_excel",
+            on_click=log_export_click, args=("sample_certificate_excel",),
+            kwargs={"description": f"Sample #{data['sample_id']}"},
         )

@@ -117,7 +117,24 @@ itself, right below that page's own filters and breakdown-by-issue chart:
   issues (High severity and/or Recurring) - not every row, which the
   page's own CSV export already covers.
 
-A seventh, narrower report type lives here too:
+An eighth report, added 2026-08-04, follows the same placement logic as
+Batch Release Record and Trial Closeout Report - picking one sample is a
+single simple choice, so it lives on the Report page rather than pages
+9/11/12 (which already have the aggregate, multi-field-selection Sample
+Report added the same day):
+
+- build_sample_certificate_data() / render_sample_certificate_pdf()
+  / render_sample_certificate_excel()
+  One sample, across any of the three sources (Production Run / Customer
+  Trial / Optimization Trial): where it came from (header context), the
+  sample itself (zone, sampled time, notes), the recipe used in full (not
+  customer-facing as-is, same caveat as Recipe Formulation Record and
+  Batch Release Record), that sample's own quality test results, and a
+  rolled-up Conforming/Non-conforming/Incomplete verdict - a per-sample
+  certificate of analysis, distinct from the aggregate Sample Report
+  (which covers many samples at once via charts, no per-sample detail).
+
+A ninth, narrower report type lives here too:
 
 - build_pi3_qa_report_data() / render_pi3_qa_report_docx()
   A single "Ask PI3" question-and-answer exchange (see
@@ -1306,6 +1323,188 @@ def render_batch_release_record_excel(data):
         sheets["Fallplate Changes"] = data["fallplate_deviations"]
         sheets["Stream Readings"] = data["stream_readings"]
         sheets["Production Events"] = data["production_events"]
+    return _excel_bytes(sheets)
+
+
+# ---------------------------------------------------------------------------
+# Sample Certificate of Analysis
+#
+# Placement/mechanism (per user direction 2026-08-04): picking one sample
+# is a single simple choice - same as Batch Release Record and Trial
+# Closeout Report - so this lives on the Report page (pages/21_Report.py)
+# rather than on pages 9/11/12 themselves (which already have the
+# aggregate, multi-field-selection Sample Report).
+#
+# "What is this sample, what recipe made it, what did testing find, and
+# did it pass" in one document - works across all three sample sources
+# (Production Run / Customer Trial / Optimization Trial - see
+# db.SAMPLE_SOURCE_TYPES). Includes the full recipe formulation (materials/
+# php/supplier/role), same as Batch Release Record and Recipe Formulation
+# Record - per that same precedent, this makes the report NOT customer-
+# facing as-is; a customer-facing version would need to omit section C
+# (the formulation table).
+# ---------------------------------------------------------------------------
+
+def _sample_source(session, sample):
+    """(source_type, source object) for a Sample, resolving whichever of
+    the three mutually exclusive parent FKs is set - see
+    db.SAMPLE_SOURCE_TYPES / db.sample_source_fk_field()."""
+    if sample.production_run_id is not None:
+        return "Production Run", session.get(ProductionRun, sample.production_run_id)
+    if sample.customer_trial_id is not None:
+        return "Customer Trial", session.get(CustomerTrial, sample.customer_trial_id)
+    if sample.optimization_trial_id is not None:
+        return "Optimization Trial", session.get(OptimizationTrial, sample.optimization_trial_id)
+    return "—", None
+
+
+def build_sample_certificate_data(session, sample_id):
+    sample = session.get(Sample, sample_id)
+    if sample is None:
+        return None
+    source_type, source = _sample_source(session, sample)
+    grade = source.foam_grade if source else None
+    plant = source.plant if source else None
+    recipe = source.recipe_version if source else None
+
+    if source_type == "Production Run":
+        header_fields = [
+            ("Source", f"Production Run #{source.id}"),
+            ("Run date", source.run_date), ("Batch reference", source.batch_reference or "—"),
+            ("Block reference", source.block_reference or "—"),
+            ("Machine", source.machine.name if source.machine else "—"),
+            ("Operator/team", source.operator_or_team_reference or "—"),
+        ]
+    elif source_type == "Customer Trial":
+        header_fields = [
+            ("Source", f"Customer Trial #{source.id}"),
+            ("Customer", source.customer_name), ("Trial date", source.trial_date),
+            ("Status", source.status), ("Responsible", source.responsible_person or "—"),
+            ("Batch reference", source.batch_reference or "—"),
+        ]
+    elif source_type == "Optimization Trial":
+        header_fields = [
+            ("Source", f"Optimization Trial #{source.id}"),
+            ("Improvement initiative reference", source.improvement_initiative_reference or "—"),
+            ("Trial date", source.trial_date), ("Status", source.status),
+            ("Responsible", source.responsible_person or "—"),
+            ("Batch reference", source.batch_reference or "—"),
+        ]
+    else:
+        header_fields = [("Source", "—")]
+
+    ordered_components = (
+        sorted(recipe.components, key=lambda c: (c.role_in_formulation or "", c.raw_material_name or ""))
+        if recipe else []
+    )
+    recipe_components = [
+        {
+            "Material": c.raw_material_name, "Supplier": c.supplier or "—",
+            "PHP": c.php, "Role": c.role_in_formulation or "—", "Notes": c.notes or "—",
+        }
+        for c in ordered_components
+    ]
+
+    results = (
+        session.query(PhysicalPropertyResult)
+        .filter(PhysicalPropertyResult.sample_id == sample.id).all()
+    )
+    quality_results = [
+        {
+            "Property": r.property_name, "Target": r.target_value, "Actual": r.actual_value,
+            "Unit": r.unit or "",
+            "Pass/Fail": compute_pass_fail(r.property_name, r.target_value, r.actual_value) or "Not computed",
+            "Method": r.test_method or "—", "Rev.": r.method_revision or "—",
+            "Replicate": r.replicate_no, "Tested": r.tested_at,
+        }
+        for r in sorted(results, key=lambda r: r.property_name)
+    ]
+    verdicts = [compute_pass_fail(r.property_name, r.target_value, r.actual_value) for r in results]
+    pass_count = verdicts.count("Pass")
+    fail_count = verdicts.count("Fail")
+    if not results:
+        overall_verdict = "No testing recorded"
+    elif fail_count:
+        overall_verdict = "Non-conforming"
+    elif verdicts and all(v == "Pass" for v in verdicts):
+        overall_verdict = "Conforming"
+    else:
+        overall_verdict = "Incomplete testing"
+
+    return {
+        "sample_id": sample.id,
+        "source_type": source_type,
+        "source_id": source.id if source else None,
+        "header_fields": header_fields,
+        "foam_grade": grade.grade_name if grade else "—",
+        "plant": plant.name if plant else "—",
+        "zone_label": sample.zone_label or "—",
+        "sample_ts": sample.sample_ts,
+        "sample_notes": sample.notes or "",
+        "recipe_version_label": recipe.version_label if recipe else "—",
+        "recipe_approval_status": recipe.approval_status if recipe else "—",
+        "recipe_effective_date": recipe.effective_date if recipe else None,
+        "recipe_ratio_index": recipe.ratio_index if recipe else None,
+        "recipe_components": recipe_components,
+        "quality_results": quality_results,
+        "pass_count": pass_count,
+        "fail_count": fail_count,
+        "overall_verdict": overall_verdict,
+    }
+
+
+def render_sample_certificate_pdf(data):
+    def build(story):
+        _title_block(
+            story, f"Sample Certificate of Analysis — Sample #{data['sample_id']}",
+            f"{data['plant']} · {data['foam_grade']} · Zone: {data['zone_label']} · "
+            f"Verdict: {data['overall_verdict']}",
+        )
+        story.append(Paragraph("Sample source", STYLES["Heading3"]))
+        story.append(_key_value_table(data["header_fields"] + [("Foam grade", data["foam_grade"]), ("Plant", data["plant"])]))
+
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Sample", STYLES["Heading3"]))
+        story.append(_key_value_table([
+            ("Sample ID", data["sample_id"]), ("Zone", data["zone_label"]),
+            ("Sampled", data["sample_ts"]), ("", ""),
+        ]))
+        if data["sample_notes"]:
+            story.append(_p(f"Notes: {data['sample_notes']}"))
+
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Recipe used", STYLES["Heading3"]))
+        story.append(_key_value_table([
+            ("Recipe version", data["recipe_version_label"]), ("Approval status", data["recipe_approval_status"]),
+            ("Effective date", data["recipe_effective_date"]),
+            ("Ratio / index", f"{data['recipe_ratio_index']:.3f}" if data["recipe_ratio_index"] is not None else "—"),
+        ]))
+        _section(story, "Formulation", data["recipe_components"])
+
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Quality test results", STYLES["Heading3"]))
+        story.append(_key_value_table([
+            ("Overall verdict", data["overall_verdict"]),
+            ("Pass", data["pass_count"]), ("Fail", data["fail_count"]), ("", ""),
+        ]))
+        _section(story, "Results (target vs. actual)", data["quality_results"])
+    return _pdf_bytes(build)
+
+
+def render_sample_certificate_excel(data):
+    header = [{
+        "Sample ID": data["sample_id"], "Source type": data["source_type"], "Source ID": data["source_id"],
+        **{label: value for label, value in data["header_fields"]},
+        "Foam grade": data["foam_grade"], "Plant": data["plant"], "Zone": data["zone_label"],
+        "Sampled": data["sample_ts"], "Notes": data["sample_notes"],
+        "Recipe version": data["recipe_version_label"], "Recipe approval status": data["recipe_approval_status"],
+        "Overall verdict": data["overall_verdict"], "Pass count": data["pass_count"], "Fail count": data["fail_count"],
+    }]
+    sheets = {
+        "Header": header,
+        "Formulation": data["recipe_components"],
+        "Quality Results": data["quality_results"],
+    }
     return _excel_bytes(sheets)
 
 
