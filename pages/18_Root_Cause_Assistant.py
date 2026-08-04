@@ -14,8 +14,10 @@ from access_control import can_use_page
 from analytics import PHASE_SETTING_LABELS, run_settings_dataframe
 from auth import current_user, logout_button, require_login
 from db import QualityObservation, get_session, init_db
+import reports
 from tenant_scope import apply_scope, company_picker, run_ids_for_company
 from helpers import (
+    log_export_click,
     page_setup,
     render_ask_pi3_section,
     render_function_action_intro,
@@ -111,6 +113,7 @@ prior = prior_rows.iloc[-1]
 st.markdown(f"**Compared against run #{int(prior['run_id'])}** ({prior['run_date']})")
 
 changes = []
+setting_shifts = []
 if current["recipe_version"] != prior["recipe_version"]:
     changes.append(f"Recipe version changed: {prior['recipe_version']} → {current['recipe_version']}")
 if current["machine"] != prior["machine"]:
@@ -125,6 +128,10 @@ for field, label in PHASE_SETTING_LABELS.items():
     pct_change = (cur_val - prev_val) / abs(prev_val)
     if abs(pct_change) >= 0.02:
         changes.append(f"{label} shifted {pct_change:+.2%}: {prev_val:g} → {cur_val:g}")
+        # Kept alongside the display string (not re-derived) so the
+        # Root-Cause Comparison Report below can chart shift magnitude
+        # without duplicating this loop's math.
+        setting_shifts.append({"label": label, "pct_change": pct_change})
 
 if changes:
     st.write("**What was different:**")
@@ -136,6 +143,45 @@ else:
         "these two runs — the cause may lie outside what this app currently captures (raw material "
         "lot variation, ambient conditions, downstream handling)."
     )
+
+# ---------------------------------------------------------------------------
+# Root-Cause Comparison Report (Context / Analysis / Conclusions) - the
+# page's own deterministic run-vs-prior-run diff, distinct from PI3's
+# hypothesis further down (which has its own separate Word download). Uses
+# the exact `changes`/`setting_shifts` already computed above - never
+# re-derived.
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Root-Cause Comparison Report")
+st.caption(
+    f"Context, analysis, and conclusions for {obs.observation_type} on run #{run.id}, compared "
+    f"against run #{int(prior['run_id'])}."
+)
+root_cause_report_data = reports.build_root_cause_report_data(
+    session, obs, run, grade, prior, changes, setting_shifts,
+)
+rca_rc1, rca_rc2 = st.columns(2)
+rca_rc1.metric("Differences found", len(changes))
+rca_rc2.metric(
+    "Largest setting shift",
+    f"{max(setting_shifts, key=lambda s: abs(s['pct_change']))['label']}" if setting_shifts else "—",
+)
+rca_dl1, rca_dl2 = st.columns(2)
+rca_dl1.download_button(
+    "Download PDF", data=reports.render_root_cause_report_pdf(root_cause_report_data),
+    file_name="root_cause_comparison_report.pdf", mime="application/pdf",
+    key=f"root_cause_report_pdf_{obs.id}",
+    on_click=log_export_click, args=("root_cause_report_pdf",),
+    kwargs={"description": f"{obs.observation_type} · run #{run.id}"},
+)
+rca_dl2.download_button(
+    "Download Excel", data=reports.render_root_cause_report_excel(root_cause_report_data),
+    file_name="root_cause_comparison_report.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    key=f"root_cause_report_excel_{obs.id}",
+    on_click=log_export_click, args=("root_cause_report_excel",),
+    kwargs={"description": f"{obs.observation_type} · run #{run.id}"},
+)
 
 if ai_assistant.is_enabled_for_plant(session, run.plant_id):
     st.divider()

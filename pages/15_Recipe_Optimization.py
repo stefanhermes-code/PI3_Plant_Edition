@@ -32,6 +32,7 @@ from quality_standards import compute_pass_fail, tolerance_label
 from auth import current_user, logout_button, require_login
 from db import FoamGrade, get_session, init_db
 from helpers import (
+    log_export_click,
     page_setup,
     recipe_component_sort_index,
     render_ask_pi3_section,
@@ -42,6 +43,7 @@ from helpers import (
     render_save_to_expert_notes_button,
     view_only_notice,
 )
+import reports
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company
 
 page_setup("Recipe Optimization")
@@ -412,6 +414,55 @@ else:
             "on the floor, not a confirmed cause - review against current raw materials and "
             "process conditions before adjusting dosage."
         )
+
+# ---------------------------------------------------------------------------
+# Recipe Optimization Report (Context / Analysis / Conclusions) - the page's
+# own deterministic analysis, distinct from PI3's recommendation further
+# down (which has its own Word download). Needs a correlation property
+# selected, so it uses the exact grade/version/cost/expectation/correlation
+# data already computed above - never re-derived.
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Recipe Optimization Report")
+if not available_properties:
+    st.caption("No quality test results recorded yet - nothing to report on.")
+else:
+    st.caption(
+        f"Context, analysis, and conclusions for {grade.grade_name}'s current recipe "
+        f"({current_version.version_label}), correlated against {corr_property}."
+    )
+    ro_report_data = reports.build_recipe_optimization_report_data(
+        session, grade, current_version, current_cost, expectation_summary,
+        corr_property, actual_ranked, include_trials,
+    )
+    ro_rc1, ro_rc2 = st.columns(2)
+    ro_rc1.metric(
+        "Properties achieved",
+        (
+            f"{sum(1 for r in ro_report_data['expectation_rows'] if r['Achieved?'] == 'Yes')} of "
+            f"{len(ro_report_data['expectation_rows'])}"
+        ) if ro_report_data["expectation_rows"] else "—",
+    )
+    ro_rc2.metric(
+        "Cost per kg (USD)",
+        f"{ro_report_data['cost_per_kg']:.2f}" if ro_report_data["cost_per_kg"] is not None else "—",
+    )
+    ro_dl1, ro_dl2 = st.columns(2)
+    ro_dl1.download_button(
+        "Download PDF", data=reports.render_recipe_optimization_report_pdf(ro_report_data),
+        file_name="recipe_optimization_report.pdf", mime="application/pdf",
+        key=f"recipe_opt_report_pdf_{grade.id}",
+        on_click=log_export_click, args=("recipe_optimization_report_pdf",),
+        kwargs={"description": f"{grade.grade_name} · {current_version.version_label}"},
+    )
+    ro_dl2.download_button(
+        "Download Excel", data=reports.render_recipe_optimization_report_excel(ro_report_data),
+        file_name="recipe_optimization_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"recipe_opt_report_excel_{grade.id}",
+        on_click=log_export_click, args=("recipe_optimization_report_excel",),
+        kwargs={"description": f"{grade.grade_name} · {current_version.version_label}"},
+    )
 
 # ---------------------------------------------------------------------------
 # PI3 recommendation, grounded in cost / diff / correlation data above

@@ -146,6 +146,45 @@ A ninth, narrower report type lives here too:
   built from this same code path, so every export has identical
   formatting regardless of who generates it or what was asked - a
   hand-maintained Word template would drift over time; this can't.
+
+A tenth through fifteenth report, added 2026-08-04 for the Industrial
+Intelligence section (per user direction: pages with a PI3 recommendation/
+interpretation get a Context/Analysis/Conclusions report ON the page
+itself, built from that page's own deterministic analysis - never the PI3
+answer, which already has its own separate Word download via
+render_pi3_docx_download). Each build_*_report_data() takes the exact
+already-computed analysis object(s) the calling page has on screen at that
+moment - ranked DataFrame, SPC results, diff list, etc. - and never
+re-derives them, so the report always matches what's on screen:
+
+- build_recipe_optimization_report_data() / render_recipe_optimization_report_pdf()
+  / render_recipe_optimization_report_excel() (pages/15_Recipe_Optimization.py)
+  Current formulation cost, whether the current recipe meets target per
+  property, and the top ingredient-dosage correlation for the selected
+  property.
+- build_trend_analysis_report_data() / render_trend_analysis_report_pdf()
+  / render_trend_analysis_report_excel() (pages/16_Trend_Analysis.py)
+  Control chart, process capability, CUSUM, and trend-test results, plus
+  the machine-change/quality-issue timeline - the full SPC toolkit for one
+  property.
+- build_correlation_report_data() / render_correlation_report_pdf()
+  / render_correlation_report_excel() (pages/17_Process_Property_Correlation.py)
+  The ranked machine-setting-vs-property correlation table.
+- build_root_cause_report_data() / render_root_cause_report_pdf()
+  / render_root_cause_report_excel() (pages/18_Root_Cause_Assistant.py)
+  The deterministic run-vs-prior-run diff (recipe/machine/process-setting
+  shifts) behind a flagged quality issue.
+- build_machine_settings_report_data() / render_machine_settings_report_pdf()
+  / render_machine_settings_report_excel() (pages/19_Machine_Settings_Optimization.py)
+  The ranked setting-optimization table (which range of each setting
+  separates good outcomes from bad).
+- build_expert_notes_report_data() / render_expert_notes_report_pdf()
+  / render_expert_notes_report_excel() (pages/20_Expert_Notes.py)
+  Doesn't fit the pattern above (no PI3 recommendation of its own) - an
+  always-visible aggregate breakdown of the notes already shown on the
+  page, by confidence level, source (Manual vs. PI3), and linked-entity
+  type, distinct from the existing conditional per-note Word re-download
+  (kept as-is - see that button's own comment on pages/20_Expert_Notes.py).
 """
 
 import datetime as dt
@@ -156,9 +195,10 @@ import re
 import pandas as pd
 from docx import Document
 from docx.shared import Cm, Pt, RGBColor
-from openpyxl.chart import BarChart, Reference
+from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.utils import get_column_letter
 from reportlab.graphics.charts.barcharts import VerticalBarChart
+from reportlab.graphics.charts.linecharts import HorizontalLineChart
 from reportlab.graphics.shapes import Drawing
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -280,17 +320,49 @@ def _add_bar_chart(ws, df, title, category_col, value_cols):
     ws.add_chart(chart, f"{anchor_col}2")
 
 
+def _add_line_chart(ws, df, title, category_col, value_cols):
+    """Native Excel line chart, same anchoring convention as _add_bar_chart -
+    used for genuine time series (control chart / CUSUM) where a bar chart
+    would flatten the thing that actually matters, the shape of the line
+    over time. No-ops on the placeholder "No data recorded" sheet."""
+    if df.empty or category_col not in df.columns:
+        return
+    n_rows = len(df)
+    col_idx = {c: i + 1 for i, c in enumerate(df.columns)}
+    chart = LineChart()
+    chart.title = title
+    chart.height, chart.width = 8, 16
+    cats = Reference(ws, min_col=col_idx[category_col], min_row=2, max_row=n_rows + 1)
+    for vcol in value_cols:
+        if vcol not in col_idx:
+            continue
+        data = Reference(ws, min_col=col_idx[vcol], min_row=1, max_row=n_rows + 1)
+        chart.add_data(data, titles_from_data=True)
+    if not chart.series:
+        return
+    chart.set_categories(cats)
+    anchor_col = get_column_letter(len(df.columns) + 2)
+    ws.add_chart(chart, f"{anchor_col}2")
+
+
 def _bar_chart(story, title, categories, values, note=None, width=460, height=170,
-                bar_color=colors.HexColor("#4A7A9D")):
+                bar_color=colors.HexColor("#4A7A9D"), zero_floor=True):
     """A simple vertical bar chart flowable for the PDF - categories/values
     are same-length parallel lists. Used wherever a report should show a
     breakdown at a glance rather than force the reader to scan a table for
-    it (e.g. failures by property)."""
+    it (e.g. failures by property).
+
+    zero_floor=True (the default, matching every existing caller) pins the
+    value axis to start at 0 - correct for counts, which are never
+    negative. Callers charting a signed metric (e.g. % deviation from
+    target, a correlation coefficient) must pass zero_floor=False so
+    reportlab auto-scales the axis instead - pinning min to 0 would clip
+    negative bars off the chart entirely."""
     story.append(Spacer(1, 8))
     story.append(Paragraph(title, STYLES["Heading3"]))
     if note:
         story.append(_p(note))
-    if not categories or not any(values):
+    if not categories or not any(v not in (None, 0) for v in values):
         story.append(_p("No data recorded."))
         return
     drawing = Drawing(width, height)
@@ -305,10 +377,55 @@ def _bar_chart(story, title, categories, values, note=None, width=460, height=17
     chart.categoryAxis.labels.dy = -12
     chart.categoryAxis.labels.dx = -6
     chart.categoryAxis.labels.fontSize = 7
-    chart.valueAxis.valueMin = 0
+    if zero_floor:
+        chart.valueAxis.valueMin = 0
     chart.bars[0].fillColor = bar_color
     drawing.add(chart)
     story.append(drawing)
+
+
+_LINE_COLOR_HEX = ["#4A7A9D", "#C0392B", "#7F8C8D", "#27AE60"]
+_LINE_COLORS = [colors.HexColor(h) for h in _LINE_COLOR_HEX]
+
+
+def _line_chart(story, title, categories, series, note=None, width=460, height=180):
+    """A simple multi-line chart flowable for the PDF - categories is the
+    shared x-axis labels (e.g. tested_at dates), series is an ordered dict/
+    list of (label, values) pairs, each a same-length list of y-values
+    (None gaps are not supported by reportlab's HorizontalLineChart, so
+    callers should pre-filter to rows where every series has a value).
+    Used for genuine time-series (Trend Analysis's control chart / CUSUM)
+    where a bar chart would flatten the thing that actually matters - the
+    shape of the line over time."""
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(title, STYLES["Heading3"]))
+    if note:
+        story.append(_p(note))
+    if not categories or not series or not any(any(v is not None for v in vals) for _, vals in series):
+        story.append(_p("No data recorded."))
+        return
+    drawing = Drawing(width, height)
+    chart = HorizontalLineChart()
+    chart.x = 45
+    chart.y = 35
+    chart.height = height - 65
+    chart.width = width - 65
+    chart.data = [vals for _, vals in series]
+    chart.categoryAxis.categoryNames = [str(c)[:10] for c in categories]
+    chart.categoryAxis.labels.angle = 30
+    chart.categoryAxis.labels.dy = -12
+    chart.categoryAxis.labels.dx = -6
+    chart.categoryAxis.labels.fontSize = 6
+    for i, (_, vals) in enumerate(series):
+        color = _LINE_COLORS[i % len(_LINE_COLORS)]
+        chart.lines[i].strokeColor = color
+        chart.lines[i].strokeWidth = 1.5
+    drawing.add(chart)
+    story.append(drawing)
+    legend_bits = []
+    for i, (label, _) in enumerate(series):
+        legend_bits.append(f'<font color="{_LINE_COLORS[i % len(_LINE_COLORS)].hexval()}">■</font> {label}')
+    story.append(_p("  ".join(legend_bits)))
 
 
 def _p(text, style="Normal"):
@@ -2415,3 +2532,956 @@ def render_pi3_qa_report_docx(data):
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# 10. Recipe Optimization Report (Context / Analysis / Conclusions)
+#
+# Added 2026-08-04 as part of the Industrial Intelligence reports batch (per
+# user direction: "For most of the pages we have a PI3 Word generator on the
+# actual page... These reports should have: A. Context B. Analysis
+# C. Conclusions. The PI3 button stays on is only for the PI3 analysis or
+# answer of a question."). Deliberately NOT the PI3-generated recommendation
+# further up the page (that already has its own Word download via
+# render_pi3_docx_download) - this is the page's own deterministic analysis:
+# does the current recipe meet target, and where it doesn't, which raw
+# material's actual dosage is the strongest lead. Lives on
+# pages/15_Recipe_Optimization.py itself (a comprehensive multi-field
+# selection - foam grade, include-trials toggle, correlation property - not
+# a single dropdown choice), same placement logic as the Quality Test Result
+# Report. build_recipe_optimization_report_data() never re-derives the
+# page's own selection - it takes the exact grade, current recipe version,
+# cost, expectation summary, and correlation ranking the page has already
+# computed, so the report always matches what's on screen.
+# ---------------------------------------------------------------------------
+
+def build_recipe_optimization_report_data(
+    session, grade, current_version, current_cost, expectation_summary,
+    corr_property, actual_ranked, include_trials,
+):
+    """grade: FoamGrade. current_version: RecipeVersion (the active one).
+    current_cost: dict from analytics.recipe_version_cost(). expectation_summary:
+    DataFrame already computed by the page ("Does the current recipe meet
+    target?" - property_name/avg_actual/avg_target/unit/achieved/tolerance/
+    n/n_outside). corr_property: the currently selected property for the
+    ingredient-correlation drill-down. actual_ranked: DataFrame from
+    analytics.rank_component_actual_correlations() for corr_property."""
+    plant_name = None
+    if grade.product_family and grade.product_family.plant:
+        plant_name = grade.product_family.plant.name
+
+    cost_per_kg = None
+    if current_cost.get("total_cost") is not None and current_cost.get("total_php"):
+        cost_per_kg = round(current_cost["total_cost"] / current_cost["total_php"], 2)
+    cost_coverage_pct = (
+        round((current_cost["priced_php"] / current_cost["total_php"]) * 100, 0)
+        if current_cost.get("total_php") else None
+    )
+
+    expectation_rows = []
+    achieved_count = 0
+    not_achieved_count = 0
+    deviation_categories, deviation_values = [], []
+    if expectation_summary is not None and not expectation_summary.empty:
+        for _, row in expectation_summary.iterrows():
+            n_outside = int(row["n_outside"]) if pd.notna(row["n_outside"]) else 0
+            n_total = int(row["n"]) if pd.notna(row["n"]) else 0
+            expectation_rows.append({
+                "Property": row["property_name"],
+                "Avg actual": row["avg_actual"],
+                "Required (target)": row["avg_target"],
+                "UOM": row["unit"] or "—",
+                "Tolerance": row.get("tolerance", "—"),
+                "Achieved?": row["achieved"],
+                "Runs outside tolerance": f"{n_outside} of {n_total}" if n_total else "—",
+            })
+            if row["achieved"] == "Yes":
+                achieved_count += 1
+            elif row["achieved"] == "No":
+                not_achieved_count += 1
+            if pd.notna(row["avg_actual"]) and pd.notna(row["avg_target"]) and row["avg_target"]:
+                deviation_categories.append(row["property_name"])
+                deviation_values.append(
+                    round(100 * (row["avg_actual"] - row["avg_target"]) / row["avg_target"], 1)
+                )
+
+    correlation_rows = []
+    correlation_categories, correlation_values = [], []
+    top_correlation_line = None
+    if actual_ranked is not None and not actual_ranked.empty:
+        for _, row in actual_ranked.iterrows():
+            correlation_rows.append({
+                "Raw material": row["raw_material_name"],
+                "Runs compared": int(row["n_runs"]),
+                "Correlation with outcome": round(row["correlation"], 3),
+            })
+            correlation_categories.append(row["raw_material_name"])
+            correlation_values.append(round(row["correlation"], 3))
+        top = actual_ranked.iloc[0]
+        top_correlation_line = (
+            f"Strongest association for {corr_property}: {top['raw_material_name']} "
+            f"(correlation {top['correlation']:+.3f} across {int(top['n_runs'])} production runs' "
+            "metered dosage) - a lead to investigate on the floor, not a confirmed cause."
+        )
+
+    conclusions = []
+    if expectation_rows:
+        conclusions.append(
+            f"{achieved_count} of {achieved_count + not_achieved_count} tracked properties are "
+            f"achieved under the current recipe ({current_version.version_label}); "
+            f"{not_achieved_count} are not."
+        )
+    else:
+        conclusions.append(
+            f"No quality test results recorded yet under the current recipe "
+            f"({current_version.version_label}) to judge against target."
+        )
+    if top_correlation_line:
+        conclusions.append(top_correlation_line)
+    else:
+        conclusions.append(
+            f"Not enough metered stream-reading data paired with {corr_property} results yet to "
+            "identify a leading ingredient correlation."
+        )
+    if cost_per_kg is not None:
+        coverage_note = f" ({cost_coverage_pct:.0f}% cost coverage)" if cost_coverage_pct is not None else ""
+        conclusions.append(f"Current formulation cost: {cost_per_kg:.2f} USD per kg{coverage_note}.")
+    else:
+        conclusions.append("No cost data recorded for the current formulation yet.")
+
+    return {
+        "grade_name": grade.grade_name,
+        "plant_name": plant_name or "—",
+        "version_label": current_version.version_label,
+        "version_status": current_version.approval_status,
+        "include_trials": include_trials,
+        "component_count": len(current_version.components or []),
+        "cost_per_kg": cost_per_kg,
+        "cost_coverage_pct": cost_coverage_pct,
+        "expectation_rows": expectation_rows,
+        "deviation_categories": deviation_categories,
+        "deviation_values": deviation_values,
+        "corr_property": corr_property,
+        "correlation_rows": correlation_rows,
+        "correlation_categories": correlation_categories,
+        "correlation_values": correlation_values,
+        "conclusions": conclusions,
+        "generated_at": dt.datetime.utcnow(),
+    }
+
+
+def render_recipe_optimization_report_pdf(data):
+    def build(story):
+        _title_block(
+            story, "Recipe Optimization Report",
+            f"{data['grade_name']} · Plant: {data['plant_name']} · Recipe "
+            f"{data['version_label']} ({data['version_status']})",
+        )
+        story.append(Paragraph("Context", STYLES["Heading2"]))
+        story.append(_key_value_table([
+            ("Foam grade", data["grade_name"]), ("Plant", data["plant_name"]),
+            ("Recipe version", data["version_label"]), ("Status", data["version_status"]),
+            ("Ingredients", data["component_count"]),
+            ("Cost per kg (USD)", f"{data['cost_per_kg']:.2f}" if data["cost_per_kg"] is not None else "—"),
+            (
+                "Cost coverage",
+                f"{data['cost_coverage_pct']:.0f}%" if data["cost_coverage_pct"] is not None else "—",
+            ),
+            (
+                "Lab trial data included",
+                "Yes" if data["include_trials"] else "No (production runs only)",
+            ),
+        ]))
+
+        story.append(Paragraph("Analysis", STYLES["Heading2"]))
+        _section(story, "Does the current recipe meet target?", data["expectation_rows"])
+        _bar_chart(
+            story, "Deviation from target, by property (%)",
+            data["deviation_categories"], data["deviation_values"],
+            note="Positive = above target, negative = below target, as a % of target.",
+            zero_floor=False,
+        )
+        _section(
+            story, f"Ingredient-dosage correlation with {data['corr_property']}",
+            data["correlation_rows"],
+        )
+        _bar_chart(
+            story, f"Correlation with {data['corr_property']}, by raw material",
+            data["correlation_categories"], data["correlation_values"],
+            zero_floor=False,
+        )
+
+        story.append(Paragraph("Conclusions", STYLES["Heading2"]))
+        for line in data["conclusions"]:
+            story.append(_p(f"• {line}"))
+    return _pdf_bytes(build)
+
+
+def render_recipe_optimization_report_excel(data):
+    header = [{
+        "Foam grade": data["grade_name"], "Plant": data["plant_name"],
+        "Recipe version": data["version_label"], "Status": data["version_status"],
+        "Ingredients": data["component_count"],
+        "Cost per kg (USD)": data["cost_per_kg"],
+        "Cost coverage %": data["cost_coverage_pct"],
+        "Lab trial data included": "Yes" if data["include_trials"] else "No",
+    }]
+    deviation_rows = [
+        {"Property": c, "Deviation from target (%)": v}
+        for c, v in zip(data["deviation_categories"], data["deviation_values"])
+    ]
+    conclusions_rows = [{"Conclusion": line} for line in data["conclusions"]]
+    correlation_sheet_name = f"Correlation - {data['corr_property']}"[:31]
+    sheets = {
+        "Header": header,
+        "Meets Target": data["expectation_rows"],
+        "Deviation by Property": deviation_rows,
+        correlation_sheet_name: data["correlation_rows"],
+        "Conclusions": conclusions_rows,
+    }
+    charts = [
+        (
+            "Deviation by Property",
+            lambda ws, df: _add_bar_chart(
+                ws, df, "Deviation from target, by property (%)", "Property",
+                ["Deviation from target (%)"],
+            ),
+        ),
+        (
+            correlation_sheet_name,
+            lambda ws, df: _add_bar_chart(
+                ws, df, f"Correlation with {data['corr_property']}", "Raw material",
+                ["Correlation with outcome"],
+            ),
+        ),
+    ]
+    return _excel_bytes(sheets, charts=charts)
+
+
+# ---------------------------------------------------------------------------
+# 11. Trend Analysis Report (Context / Analysis / Conclusions)
+#
+# Added 2026-08-04, same batch and placement logic as the Recipe
+# Optimization Report above - lives on pages/16_Trend_Analysis.py itself
+# (foam grade/family, property, recipe/machine filters: a comprehensive
+# multi-field selection, not a single dropdown choice). This is the page's
+# own deterministic SPC results (control chart, capability, CUSUM, trend
+# test - all computed by analytics.py), never the PI3 interpretation
+# further down (which has its own separate Word download).
+# build_trend_analysis_report_data() takes the exact chart_result/
+# capability/cusum/trend/change_rows objects the page has already computed
+# - it never re-runs the SPC math itself.
+# ---------------------------------------------------------------------------
+
+def build_trend_analysis_report_data(
+    session, unit, property_name, series, pooling_grades,
+    chart_result, capability, cusum, trend, change_rows, include_trials,
+):
+    """unit: the dict returned by helpers.analysis_unit_picker() (label/
+    mode/member_grade_names/...). series: the DataFrame from
+    analytics.property_run_series(), already filtered by the page (recipe
+    version / machine). chart_result/capability/cusum/trend: the exact
+    deterministic SPC results from analytics.control_chart_analysis()/
+    capability_analysis()/cusum_analysis()/trend_test() the page already
+    computed. change_rows: the machine-change + quality-issue timeline the
+    page already assembled."""
+    subject_desc = (
+        f"foam grade {unit['label']}" if unit["mode"] == "grade"
+        else f"foam family {unit['label']} (pooling grades: {', '.join(unit['member_grade_names'])})"
+    )
+
+    control_categories, control_series = [], []
+    control_summary_line = "Not enough results yet for a control chart."
+    control_flag_rows = []
+    if chart_result and chart_result.get("ready"):
+        chart_df = chart_result["chart_df"]
+        control_categories = [str(d) for d in chart_df["tested_at"]]
+        control_series = [
+            ("Actual", chart_df["actual_value"].tolist()),
+            ("Center", chart_df["center_line"].tolist()),
+            ("Upper limit", chart_df["ucl"].tolist()),
+            ("Lower limit", chart_df["lcl"].tolist()),
+        ]
+        if chart_result["in_control"]:
+            control_summary_line = "In control - no unusual patterns found across these runs."
+        else:
+            control_summary_line = f"{len(chart_result['flags'])} unusual pattern(s) found."
+            control_flag_rows = [
+                {
+                    "Pattern": f["rule"], "First seen": str(f["first_tested_at"]),
+                    "Points matching": f["points_matching"],
+                }
+                for f in chart_result["flags"]
+            ]
+
+    capability_line = "Not enough data for a margin-to-spec check."
+    capability_kv = []
+    if capability is not None:
+        cpk = capability["cpk"]
+        if cpk >= 1.33:
+            read = "comfortable margin to spec"
+        elif cpk >= 1.0:
+            read = "tight - some results will likely fall outside spec"
+        else:
+            read = "not enough margin - this process routinely produces results outside spec"
+        capability_line = f"Cpk {cpk:.2f} - {read}."
+        capability_kv = [
+            ("Cpk (overall margin)", f"{cpk:.2f}"),
+            ("Cpu (margin to upper limit)", f"{capability['cpu']:.2f}"),
+            ("Cpl (margin to lower limit)", f"{capability['cpl']:.2f}"),
+            ("Spec range", f"{capability['lsl']:.3g} - {capability['usl']:.3g}"),
+        ]
+
+    cusum_categories, cusum_series = [], []
+    cusum_line = "Not enough data for a slow-drift check."
+    if cusum is not None:
+        cusum_df = cusum["chart_df"].copy()
+        cusum_df["upper_limit"] = cusum["h"]
+        cusum_df["lower_limit"] = -cusum["h"]
+        cusum_categories = [str(d) for d in cusum_df["tested_at"]]
+        cusum_series = [
+            ("CUSUM +", cusum_df["cusum_positive"].tolist()),
+            ("CUSUM -", cusum_df["cusum_negative"].tolist()),
+            ("Upper limit", cusum_df["upper_limit"].tolist()),
+            ("Lower limit", cusum_df["lower_limit"].tolist()),
+        ]
+        if cusum["breach_index"] is None:
+            cusum_line = "No slow drift detected - results have stayed close to target over time."
+        else:
+            cusum_line = (
+                f"A slow {cusum['breach_direction']} drift has been building up, first becoming "
+                f"clear at {cusum['breach_tested_at']}."
+            )
+
+    trend_line = "Not enough data to test whether this is a real trend."
+    if trend is not None:
+        if trend["significant"]:
+            trend_line = (
+                f"Yes - a real, sustained {trend['direction']} trend, changing by about "
+                f"{trend['slope_per_run']:+.4g} per run on average, across {trend['n']} runs."
+            )
+        else:
+            trend_line = (
+                f"No - the apparent {trend['direction']} movement across {trend['n']} runs looks "
+                "like normal run-to-run variation, not a real trend."
+            )
+
+    change_display_rows = [
+        {"Date": str(r["Date"]), "Run ID": r["Run ID"], "Change": r["Change"]}
+        for r in change_rows
+    ]
+
+    conclusions = [control_summary_line, capability_line, cusum_line, trend_line]
+    flagged = (
+        (chart_result and chart_result.get("ready") and not chart_result.get("in_control", True))
+        or (cusum is not None and cusum.get("breach_index") is not None)
+        or (trend is not None and trend.get("significant"))
+    )
+    if change_rows and flagged:
+        conclusions.append(
+            f"{len(change_rows)} machine change(s)/quality issue(s) recorded on this timeline - "
+            "cross-reference their dates against the flags above before drawing conclusions."
+        )
+
+    return {
+        "property_name": property_name,
+        "subject_desc": subject_desc,
+        "pooling_grades": pooling_grades,
+        "include_trials": include_trials,
+        "n_results": len(series),
+        "date_range": (
+            f"{series['tested_at'].min()} to {series['tested_at'].max()}" if len(series) else "—"
+        ),
+        "control_categories": control_categories,
+        "control_series": control_series,
+        "control_flag_rows": control_flag_rows,
+        "capability_kv": capability_kv,
+        "cusum_categories": cusum_categories,
+        "cusum_series": cusum_series,
+        "change_rows": change_display_rows,
+        "conclusions": conclusions,
+        "generated_at": dt.datetime.utcnow(),
+    }
+
+
+def render_trend_analysis_report_pdf(data):
+    def build(story):
+        _title_block(
+            story, "Trend Analysis Report",
+            f"{data['property_name']} · {data['subject_desc']}",
+        )
+        story.append(Paragraph("Context", STYLES["Heading2"]))
+        story.append(_key_value_table([
+            ("Property", data["property_name"]), ("Subject", data["subject_desc"]),
+            ("Results analyzed", data["n_results"]), ("Date range", data["date_range"]),
+            ("Lab trial data included", "Yes" if data["include_trials"] else "No"),
+            ("Pooled by % of target", "Yes" if data["pooling_grades"] else "No"),
+        ]))
+
+        story.append(Paragraph("Analysis", STYLES["Heading2"]))
+        _line_chart(
+            story, "Control chart (sudden changes)",
+            data["control_categories"], data["control_series"],
+            note="Actual result vs. center line and control limits." if data["control_categories"] else None,
+        )
+        if data["control_flag_rows"]:
+            _section(story, "Unusual patterns flagged", data["control_flag_rows"])
+        if data["capability_kv"]:
+            story.append(Spacer(1, 8))
+            story.append(Paragraph("Margin to spec", STYLES["Heading3"]))
+            story.append(_key_value_table(data["capability_kv"]))
+        _line_chart(
+            story, "CUSUM (slow drift)",
+            data["cusum_categories"], data["cusum_series"],
+            note=(
+                "Cumulative sum of small deviations from target over time."
+                if data["cusum_categories"] else None
+            ),
+        )
+        _section(story, "What else changed on this timeline", data["change_rows"])
+
+        story.append(Paragraph("Conclusions", STYLES["Heading2"]))
+        for line in data["conclusions"]:
+            story.append(_p(f"• {line}"))
+    return _pdf_bytes(build)
+
+
+def render_trend_analysis_report_excel(data):
+    header = [{
+        "Property": data["property_name"], "Subject": data["subject_desc"],
+        "Results analyzed": data["n_results"], "Date range": data["date_range"],
+        "Lab trial data included": "Yes" if data["include_trials"] else "No",
+        "Pooled by % of target": "Yes" if data["pooling_grades"] else "No",
+    }]
+    control_rows = [
+        {"Date": c, **{label: vals[i] for label, vals in data["control_series"]}}
+        for i, c in enumerate(data["control_categories"])
+    ]
+    cusum_rows = [
+        {"Date": c, **{label: vals[i] for label, vals in data["cusum_series"]}}
+        for i, c in enumerate(data["cusum_categories"])
+    ]
+    capability_rows = [{"Metric": k, "Value": v} for k, v in data["capability_kv"]]
+    conclusions_rows = [{"Conclusion": line} for line in data["conclusions"]]
+    sheets = {
+        "Header": header,
+        "Control Chart": control_rows,
+        "Unusual Patterns": data["control_flag_rows"],
+        "Margin to Spec": capability_rows,
+        "CUSUM": cusum_rows,
+        "Timeline Changes": data["change_rows"],
+        "Conclusions": conclusions_rows,
+    }
+    charts = []
+    if control_rows:
+        charts.append((
+            "Control Chart",
+            lambda ws, df: _add_line_chart(
+                ws, df, "Control chart", "Date", [label for label, _ in data["control_series"]],
+            ),
+        ))
+    if cusum_rows:
+        charts.append((
+            "CUSUM",
+            lambda ws, df: _add_line_chart(
+                ws, df, "CUSUM", "Date", [label for label, _ in data["cusum_series"]],
+            ),
+        ))
+    return _excel_bytes(sheets, charts=charts)
+
+
+# ---------------------------------------------------------------------------
+# 12. Process-Property Correlation Report (Context / Analysis / Conclusions)
+#
+# Added 2026-08-04, same batch and placement logic as the two reports
+# above - lives on pages/17_Process_Property_Correlation.py itself (foam
+# grade/family plus property: a comprehensive multi-field selection). This
+# is the page's own ranked correlation table (analytics.rank_setting_
+# correlations), never the PI3 synthesis further down (which has its own
+# separate Word download). build_correlation_report_data() takes the exact
+# `ranked` DataFrame the page has already computed - never re-derived.
+# ---------------------------------------------------------------------------
+
+def build_correlation_report_data(session, unit, property_name, ranked, pooling_grades):
+    """unit: the dict from helpers.analysis_unit_picker(). ranked: the
+    DataFrame from analytics.rank_setting_correlations() the page has
+    already computed for property_name (columns label/n/correlation/
+    field)."""
+    subject_desc = (
+        f"foam grade {unit['label']}" if unit["mode"] == "grade"
+        else f"foam family {unit['label']} (pooling grades: {', '.join(unit['member_grade_names'])})"
+    )
+
+    ranked_with_data = ranked.dropna(subset=["correlation"]) if ranked is not None else pd.DataFrame()
+    ranking_rows = []
+    categories, values = [], []
+    if ranked is not None:
+        for _, row in ranked.iterrows():
+            has_data = pd.notna(row["correlation"])
+            ranking_rows.append({
+                "Process setting": row["label"], "Runs compared": int(row["n"]),
+                "Strength (|r|)": round(abs(row["correlation"]), 3) if has_data else "—",
+                "Correlation": round(row["correlation"], 3) if has_data else "—",
+            })
+            if has_data:
+                categories.append(row["label"])
+                values.append(round(row["correlation"], 3))
+
+    top_line = "No process setting has enough paired data yet to correlate against this property."
+    if not ranked_with_data.empty:
+        top = ranked_with_data.iloc[0]
+        direction = "positive" if top["correlation"] > 0 else "negative"
+        top_line = (
+            f"Strongest association: {top['label']} ({direction}, r={top['correlation']:.2f}) "
+            f"across {int(top['n'])} runs - a lead to investigate, not a confirmed cause."
+        )
+
+    conclusions = [top_line]
+    if ranked is not None and len(ranked):
+        conclusions.append(
+            f"{len(ranked_with_data)} of {len(ranked)} tracked process settings have enough paired "
+            "data to compute a correlation with this property."
+        )
+
+    return {
+        "property_name": property_name,
+        "subject_desc": subject_desc,
+        "pooling_grades": pooling_grades,
+        "ranking_rows": ranking_rows,
+        "correlation_categories": categories,
+        "correlation_values": values,
+        "conclusions": conclusions,
+        "generated_at": dt.datetime.utcnow(),
+    }
+
+
+def render_correlation_report_pdf(data):
+    def build(story):
+        _title_block(
+            story, "Process-Property Correlation Report",
+            f"{data['property_name']} · {data['subject_desc']}",
+        )
+        story.append(Paragraph("Context", STYLES["Heading2"]))
+        story.append(_key_value_table([
+            ("Property", data["property_name"]), ("Subject", data["subject_desc"]),
+            ("Pooled by % of target", "Yes" if data["pooling_grades"] else "No"),
+            ("Process settings ranked", len(data["ranking_rows"])),
+        ]))
+
+        story.append(Paragraph("Analysis", STYLES["Heading2"]))
+        _section(story, "All settings, ranked by correlation strength", data["ranking_rows"])
+        _bar_chart(
+            story, f"Correlation with {data['property_name']}, by process setting",
+            data["correlation_categories"], data["correlation_values"],
+            note="Positive/negative shows direction; size shows strength of association.",
+            zero_floor=False,
+        )
+
+        story.append(Paragraph("Conclusions", STYLES["Heading2"]))
+        for line in data["conclusions"]:
+            story.append(_p(f"• {line}"))
+    return _pdf_bytes(build)
+
+
+def render_correlation_report_excel(data):
+    header = [{
+        "Property": data["property_name"], "Subject": data["subject_desc"],
+        "Pooled by % of target": "Yes" if data["pooling_grades"] else "No",
+        "Process settings ranked": len(data["ranking_rows"]),
+    }]
+    conclusions_rows = [{"Conclusion": line} for line in data["conclusions"]]
+    sheets = {
+        "Header": header,
+        "Ranked Settings": data["ranking_rows"],
+        "Conclusions": conclusions_rows,
+    }
+    charts = [
+        (
+            "Ranked Settings",
+            lambda ws, df: _add_bar_chart(
+                ws, df, f"Correlation with {data['property_name']}", "Process setting", ["Correlation"],
+            ),
+        ),
+    ]
+    return _excel_bytes(sheets, charts=charts)
+
+
+# ---------------------------------------------------------------------------
+# 13. Root-Cause Comparison Report (Context / Analysis / Conclusions)
+#
+# Added 2026-08-04, part of the same Industrial Intelligence reports batch
+# as the three reports above. Lives on pages/18_Root_Cause_Assistant.py
+# itself, per the user-approved plan grouping all 5 analysis pages (15-19)
+# together as "pages with PI3" that get their deterministic report on the
+# page rather than the Report page. This is the page's own deterministic
+# run-vs-prior-run diff (recipe/machine/Finalized-phase settings), never
+# the PI3 hypothesis further down (which has its own separate Word
+# download). build_root_cause_report_data() takes the exact `changes`/
+# `setting_shifts` the page has already computed - never re-derived.
+# ---------------------------------------------------------------------------
+
+def build_root_cause_report_data(session, obs, run, grade, prior, changes, setting_shifts):
+    """obs: QualityObservation. run: its ProductionRun. grade: run.foam_grade.
+    prior: the prior-run settings row (a pandas Series from analytics.
+    run_settings_dataframe()) the page already selected as the comparison
+    baseline. changes: the page's own list of formatted diff strings
+    ("What was different"). setting_shifts: a parallel list of dicts
+    ({"label", "pct_change"}) for the numeric Finalized-phase shifts only
+    (recipe/machine changes aren't percentages, so they're text-only in
+    `changes` and don't appear here) - lets the report chart the shift
+    magnitudes without re-deriving them."""
+    shift_categories = [s["label"] for s in setting_shifts]
+    shift_values = [round(s["pct_change"] * 100, 2) for s in setting_shifts]
+
+    if changes:
+        conclusion_lines = [f"{len(changes)} difference(s) found versus the prior run."]
+        if setting_shifts:
+            largest = max(setting_shifts, key=lambda s: abs(s["pct_change"]))
+            conclusion_lines.append(
+                f"Largest recorded process-setting shift: {largest['label']} "
+                f"({largest['pct_change']:+.2%})."
+            )
+    else:
+        conclusion_lines = [
+            "No meaningful difference found in recipe, machine, or recorded process settings "
+            "between these two runs - the cause may lie outside what this app currently "
+            "captures (raw material lot variation, ambient conditions, downstream handling)."
+        ]
+    if obs.suspected_cause:
+        conclusion_lines.append(f"Logged suspected cause: {obs.suspected_cause}")
+
+    return {
+        "observation_type": obs.observation_type,
+        "severity": obs.severity,
+        "frequency": obs.frequency,
+        "suspected_cause": obs.suspected_cause,
+        "run_id": run.id,
+        "run_date": str(run.run_date),
+        "grade_name": grade.grade_name,
+        "prior_run_id": int(prior["run_id"]),
+        "prior_run_date": str(prior["run_date"]),
+        "change_rows": [{"Change": c} for c in changes],
+        "shift_categories": shift_categories,
+        "shift_values": shift_values,
+        "conclusions": conclusion_lines,
+        "generated_at": dt.datetime.utcnow(),
+    }
+
+
+def render_root_cause_report_pdf(data):
+    def build(story):
+        _title_block(
+            story, "Root-Cause Comparison Report",
+            f"{data['observation_type']} on run #{data['run_id']} ({data['grade_name']})",
+        )
+        story.append(Paragraph("Context", STYLES["Heading2"]))
+        story.append(_key_value_table([
+            ("Quality issue", data["observation_type"]), ("Severity", data["severity"]),
+            ("Frequency", data["frequency"]), ("Run", f"#{data['run_id']} ({data['run_date']})"),
+            ("Foam grade", data["grade_name"]),
+            ("Compared against", f"run #{data['prior_run_id']} ({data['prior_run_date']})"),
+            ("Logged suspected cause", data["suspected_cause"] or "—"), ("", ""),
+        ]))
+
+        story.append(Paragraph("Analysis", STYLES["Heading2"]))
+        _section(story, "What was different vs. the prior run", data["change_rows"])
+        _bar_chart(
+            story, "Process-setting shifts (%)",
+            data["shift_categories"], data["shift_values"],
+            note="Only settings that shifted at least 2% between the two runs.",
+            zero_floor=False,
+        )
+
+        story.append(Paragraph("Conclusions", STYLES["Heading2"]))
+        for line in data["conclusions"]:
+            story.append(_p(f"• {line}"))
+    return _pdf_bytes(build)
+
+
+def render_root_cause_report_excel(data):
+    header = [{
+        "Quality issue": data["observation_type"], "Severity": data["severity"],
+        "Frequency": data["frequency"], "Run": f"#{data['run_id']} ({data['run_date']})",
+        "Foam grade": data["grade_name"],
+        "Compared against": f"run #{data['prior_run_id']} ({data['prior_run_date']})",
+        "Logged suspected cause": data["suspected_cause"] or "—",
+    }]
+    shift_rows = [
+        {"Process setting": c, "Shift (%)": v}
+        for c, v in zip(data["shift_categories"], data["shift_values"])
+    ]
+    conclusions_rows = [{"Conclusion": line} for line in data["conclusions"]]
+    sheets = {
+        "Header": header,
+        "What Was Different": data["change_rows"],
+        "Setting Shifts": shift_rows,
+        "Conclusions": conclusions_rows,
+    }
+    charts = [
+        (
+            "Setting Shifts",
+            lambda ws, df: _add_bar_chart(ws, df, "Process-setting shifts (%)", "Process setting", ["Shift (%)"]),
+        ),
+    ]
+    return _excel_bytes(sheets, charts=charts)
+
+
+# ---------------------------------------------------------------------------
+# 14. Machine Settings Optimization Report (Context / Analysis / Conclusions)
+#
+# Added 2026-08-04, same batch and placement logic as the Process-Property
+# Correlation Report above (structurally the closest sibling - both rank
+# every process setting against a chosen property) - lives on
+# pages/19_Machine_Settings_Optimization.py itself. This is the page's own
+# ranked table (analytics.rank_setting_optimization), never the PI3
+# synthesis further down (which has its own separate Word download).
+# build_machine_settings_report_data() takes the exact `ranked` DataFrame
+# the page has already computed - never re-derived.
+# ---------------------------------------------------------------------------
+
+def build_machine_settings_report_data(session, unit, property_name, ranked, pooling_grades):
+    """unit: the dict from helpers.analysis_unit_picker(). ranked: the
+    DataFrame from analytics.rank_setting_optimization() the page has
+    already computed for property_name (columns label/n/best_range/
+    best_range_setting/best_range_avg_dev_pct/spread_pct/field)."""
+    subject_desc = (
+        f"foam grade {unit['label']}" if unit["mode"] == "grade"
+        else f"foam family {unit['label']} (pooling grades: {', '.join(unit['member_grade_names'])})"
+    )
+
+    ranked_with_data = ranked.dropna(subset=["spread_pct"]) if ranked is not None else pd.DataFrame()
+    ranking_rows = []
+    categories, values = [], []
+    if ranked is not None:
+        for _, row in ranked.iterrows():
+            has_data = pd.notna(row["spread_pct"])
+            ranking_rows.append({
+                "Process setting": row["label"], "Runs compared": int(row["n"]),
+                "Best range": row["best_range"] if has_data else "—",
+                "Best range (values)": row["best_range_setting"] if has_data else "—",
+                "Best range avg deviation %": round(row["best_range_avg_dev_pct"], 1) if has_data else "—",
+                "Gap vs worst range (pts)": round(row["spread_pct"], 1) if has_data else "—",
+            })
+            if has_data:
+                categories.append(row["label"])
+                values.append(round(row["spread_pct"], 1))
+
+    top_line = "No process setting has enough data yet to rank for this property."
+    if not ranked_with_data.empty:
+        top = ranked_with_data.iloc[0]
+        top_line = (
+            f"Most actionable: {top['label']}, {top['best_range']} range ({top['best_range_setting']}) "
+            f"averages {top['best_range_avg_dev_pct']:.1f}% deviation from target - a "
+            f"{top['spread_pct']:.1f} point gap versus this setting's worst-performing range, across "
+            f"{int(top['n'])} runs."
+        )
+
+    conclusions = [top_line]
+    if ranked is not None and len(ranked):
+        conclusions.append(
+            f"{len(ranked_with_data)} of {len(ranked)} tracked process settings have enough data to "
+            "rank for this property."
+        )
+    conclusions.append(
+        "Review applicability against current raw materials and process conditions before "
+        "adjusting any setting."
+    )
+
+    return {
+        "property_name": property_name,
+        "subject_desc": subject_desc,
+        "pooling_grades": pooling_grades,
+        "ranking_rows": ranking_rows,
+        "gap_categories": categories,
+        "gap_values": values,
+        "conclusions": conclusions,
+        "generated_at": dt.datetime.utcnow(),
+    }
+
+
+def render_machine_settings_report_pdf(data):
+    def build(story):
+        _title_block(
+            story, "Machine Settings Optimization Report",
+            f"{data['property_name']} · {data['subject_desc']}",
+        )
+        story.append(Paragraph("Context", STYLES["Heading2"]))
+        story.append(_key_value_table([
+            ("Property", data["property_name"]), ("Subject", data["subject_desc"]),
+            ("Pooled by % of target", "Yes" if data["pooling_grades"] else "No"),
+            ("Process settings ranked", len(data["ranking_rows"])),
+        ]))
+
+        story.append(Paragraph("Analysis", STYLES["Heading2"]))
+        _section(story, "All settings, ranked by how clearly they separate outcomes", data["ranking_rows"])
+        _bar_chart(
+            story, "Gap vs. worst-performing range, by process setting (points)",
+            data["gap_categories"], data["gap_values"],
+            note="A bigger gap means a more actionable setting.",
+        )
+
+        story.append(Paragraph("Conclusions", STYLES["Heading2"]))
+        for line in data["conclusions"]:
+            story.append(_p(f"• {line}"))
+    return _pdf_bytes(build)
+
+
+def render_machine_settings_report_excel(data):
+    header = [{
+        "Property": data["property_name"], "Subject": data["subject_desc"],
+        "Pooled by % of target": "Yes" if data["pooling_grades"] else "No",
+        "Process settings ranked": len(data["ranking_rows"]),
+    }]
+    conclusions_rows = [{"Conclusion": line} for line in data["conclusions"]]
+    sheets = {
+        "Header": header,
+        "Ranked Settings": data["ranking_rows"],
+        "Conclusions": conclusions_rows,
+    }
+    charts = [
+        (
+            "Ranked Settings",
+            lambda ws, df: _add_bar_chart(
+                ws, df, "Gap vs. worst-performing range (points)", "Process setting",
+                ["Gap vs worst range (pts)"],
+            ),
+        ),
+    ]
+    return _excel_bytes(sheets, charts=charts)
+
+
+# ---------------------------------------------------------------------------
+# 15. Expert Notes Report (Context / Analysis / Conclusions)
+#
+# Added 2026-08-04, closing out the Industrial Intelligence reports batch.
+# Expert Notes doesn't fit either bucket the other 5 pages fall into (it
+# has no PI3-generated recommendation of its own to report on - the
+# existing conditional "Download as Word" button on a PI3-sourced note is
+# kept as-is, unchanged, per user direction: "The PI3 button stays on is
+# only for the PI3 analysis or answer of a question"). Instead this is a
+# standing aggregate over the notes the page is already showing - a
+# breakdown by confidence level, source (Manual vs PI3), and linked-entity
+# type - always visible, not conditional on selecting one note. Lives on
+# pages/20_Expert_Notes.py itself. build_expert_notes_report_data() takes
+# the exact `notes` list the page has already scoped (tenant) and is
+# already showing in its table - never re-derived.
+# ---------------------------------------------------------------------------
+
+def build_expert_notes_report_data(session, notes, scope_label):
+    """notes: the exact list of db.ExpertNote objects the page has already
+    scoped (tenant) and is showing in its own notes table. scope_label: a
+    display string describing the company scope in effect, shown in the
+    report header."""
+    total = len(notes)
+
+    confidence_counts = {}
+    source_counts = {}
+    link_type_counts = {}
+    in_pi3_count = 0
+    link_type_labels = {
+        "production_run": "Production Run", "foam_grade": "Foam Grade", "product_family": "Foam Family",
+    }
+    for n in notes:
+        conf = n.confidence_level or "—"
+        confidence_counts[conf] = confidence_counts.get(conf, 0) + 1
+        source = n.source or "Manual"
+        source_counts[source] = source_counts.get(source, 0) + 1
+        link_label = link_type_labels.get(n.linked_entity_type, n.linked_entity_type or "—")
+        link_type_counts[link_label] = link_type_counts.get(link_label, 0) + 1
+        if n.vector_store_file_id:
+            in_pi3_count += 1
+
+    confidence_rows = [
+        {"Confidence level": k, "Count": v}
+        for k, v in sorted(confidence_counts.items(), key=lambda kv: -kv[1])
+    ]
+    source_rows = [
+        {"Source": k, "Count": v} for k, v in sorted(source_counts.items(), key=lambda kv: -kv[1])
+    ]
+    link_type_rows = [
+        {"Linked to": k, "Count": v} for k, v in sorted(link_type_counts.items(), key=lambda kv: -kv[1])
+    ]
+
+    conclusions = [f"{total} expert note(s) recorded in this scope."]
+    if total:
+        top_confidence = max(confidence_counts.items(), key=lambda kv: kv[1])
+        top_source = max(source_counts.items(), key=lambda kv: kv[1])
+        top_link = max(link_type_counts.items(), key=lambda kv: kv[1])
+        conclusions.append(f"Most common confidence level: {top_confidence[0]} ({top_confidence[1]} note(s)).")
+        conclusions.append(f"Most common source: {top_source[0]} ({top_source[1]} note(s)).")
+        conclusions.append(f"Most common link type: {top_link[0]} ({top_link[1]} note(s)).")
+        conclusions.append(
+            f"{in_pi3_count} of {total} note(s) ({round(100 * in_pi3_count / total)}%) have been fed "
+            "into PI3's knowledge base."
+        )
+    else:
+        conclusions.append("No notes recorded yet in this scope.")
+
+    return {
+        "scope_label": scope_label,
+        "total": total,
+        "confidence_rows": confidence_rows,
+        "source_rows": source_rows,
+        "link_type_rows": link_type_rows,
+        "in_pi3_count": in_pi3_count,
+        "conclusions": conclusions,
+        "generated_at": dt.datetime.utcnow(),
+    }
+
+
+def render_expert_notes_report_pdf(data):
+    def build(story):
+        _title_block(story, "Expert Notes Report", data["scope_label"])
+        story.append(Paragraph("Context", STYLES["Heading2"]))
+        story.append(_key_value_table([
+            ("Scope", data["scope_label"]), ("Total notes", data["total"]),
+            ("Fed into PI3", f"{data['in_pi3_count']} of {data['total']}"),
+        ]))
+
+        story.append(Paragraph("Analysis", STYLES["Heading2"]))
+        _bar_chart(
+            story, "Notes by confidence level",
+            [r["Confidence level"] for r in data["confidence_rows"]],
+            [r["Count"] for r in data["confidence_rows"]],
+        )
+        _bar_chart(
+            story, "Notes by source",
+            [r["Source"] for r in data["source_rows"]],
+            [r["Count"] for r in data["source_rows"]],
+        )
+        _section(story, "Notes by linked entity type", data["link_type_rows"])
+
+        story.append(Paragraph("Conclusions", STYLES["Heading2"]))
+        for line in data["conclusions"]:
+            story.append(_p(f"• {line}"))
+    return _pdf_bytes(build)
+
+
+def render_expert_notes_report_excel(data):
+    header = [{
+        "Scope": data["scope_label"], "Total notes": data["total"],
+        "Fed into PI3": f"{data['in_pi3_count']} of {data['total']}",
+    }]
+    conclusions_rows = [{"Conclusion": line} for line in data["conclusions"]]
+    sheets = {
+        "Header": header,
+        "By Confidence Level": data["confidence_rows"],
+        "By Source": data["source_rows"],
+        "By Linked Entity Type": data["link_type_rows"],
+        "Conclusions": conclusions_rows,
+    }
+    charts = [
+        (
+            "By Confidence Level",
+            lambda ws, df: _add_bar_chart(ws, df, "Notes by confidence level", "Confidence level", ["Count"]),
+        ),
+        (
+            "By Source",
+            lambda ws, df: _add_bar_chart(ws, df, "Notes by source", "Source", ["Count"]),
+        ),
+        (
+            "By Linked Entity Type",
+            lambda ws, df: _add_bar_chart(ws, df, "Notes by linked entity type", "Linked to", ["Count"]),
+        ),
+    ]
+    return _excel_bytes(sheets, charts=charts)

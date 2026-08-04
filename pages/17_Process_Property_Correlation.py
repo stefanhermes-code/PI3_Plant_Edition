@@ -21,9 +21,11 @@ from analytics import (
 )
 from auth import current_user, logout_button, require_login
 from db import FoamGrade, get_session, init_db
+import reports
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company
 from helpers import (
     analysis_unit_picker,
+    log_export_click,
     page_setup,
     render_ask_pi3_section,
     render_data_table,
@@ -139,6 +141,40 @@ st.caption(
     f"Strongest association: **{top['label']}** ({direction}, r={top['correlation']:.2f}) across "
     f"{int(top['n'])} runs. Historical pattern for technical review - confirm against current raw "
     "materials and process conditions before treating it as causal."
+)
+
+# ---------------------------------------------------------------------------
+# Process-Property Correlation Report (Context / Analysis / Conclusions) -
+# the page's own ranked correlation table, distinct from PI3's synthesis
+# further down (which has its own separate Word download). Uses the exact
+# `ranked` DataFrame already computed above - never re-derived.
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Process-Property Correlation Report")
+st.caption(f"Context, analysis, and conclusions for {property_name} across {unit['label']}.")
+correlation_report_data = reports.build_correlation_report_data(
+    session, unit, property_name, ranked, pooling_grades,
+)
+pc_rc1, pc_rc2 = st.columns(2)
+pc_rc1.metric("Strongest association", top["label"] if not ranked_with_data.empty else "—")
+pc_rc2.metric(
+    "Settings with enough data", f"{len(ranked_with_data)} of {len(ranked)}",
+)
+pc_dl1, pc_dl2 = st.columns(2)
+pc_dl1.download_button(
+    "Download PDF", data=reports.render_correlation_report_pdf(correlation_report_data),
+    file_name="process_property_correlation_report.pdf", mime="application/pdf",
+    key=f"correlation_report_pdf_{unit['state_key']}_{property_name}",
+    on_click=log_export_click, args=("correlation_report_pdf",),
+    kwargs={"description": f"{property_name} · {unit['label']}"},
+)
+pc_dl2.download_button(
+    "Download Excel", data=reports.render_correlation_report_excel(correlation_report_data),
+    file_name="process_property_correlation_report.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    key=f"correlation_report_excel_{unit['state_key']}_{property_name}",
+    on_click=log_export_click, args=("correlation_report_excel",),
+    kwargs={"description": f"{property_name} · {unit['label']}"},
 )
 
 st.divider()

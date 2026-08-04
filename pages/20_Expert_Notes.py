@@ -190,6 +190,44 @@ else:
         or (n.linked_entity_type == "foam_grade" and n.linked_entity_id in scoped_grade_id_set)
         or (n.linked_entity_type == "product_family" and n.linked_entity_id in scoped_family_id_set)
     ]
+
+# ---------------------------------------------------------------------------
+# Expert Notes Report (Context / Analysis / Conclusions) - an always-
+# visible aggregate over the exact `notes` list already scoped above (by
+# confidence level, source, and linked-entity type), distinct from the
+# existing conditional per-note "Download as Word" button further down
+# (kept as-is - that button re-exports one PI3-sourced note's own original
+# report, this is a standing breakdown across every note in scope).
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Expert Notes Report")
+en_scope_label = company.name if company else "All companies"
+st.caption(f"Context, analysis, and conclusions for expert notes in scope: {en_scope_label}.")
+expert_notes_report_data = reports.build_expert_notes_report_data(session, notes, en_scope_label)
+en_rc1, en_rc2 = st.columns(2)
+en_rc1.metric("Total notes", expert_notes_report_data["total"])
+en_rc2.metric(
+    "Fed into PI3",
+    f"{expert_notes_report_data['in_pi3_count']} of {expert_notes_report_data['total']}"
+    if expert_notes_report_data["total"] else "—",
+)
+en_dl1, en_dl2 = st.columns(2)
+en_dl1.download_button(
+    "Download PDF", data=reports.render_expert_notes_report_pdf(expert_notes_report_data),
+    file_name="expert_notes_report.pdf", mime="application/pdf",
+    key="expert_notes_report_pdf",
+    on_click=log_export_click, args=("expert_notes_report_pdf",),
+    kwargs={"description": en_scope_label},
+)
+en_dl2.download_button(
+    "Download Excel", data=reports.render_expert_notes_report_excel(expert_notes_report_data),
+    file_name="expert_notes_report.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    key="expert_notes_report_excel",
+    on_click=log_export_click, args=("expert_notes_report_excel",),
+    kwargs={"description": en_scope_label},
+)
+
 if not notes:
     st.info("No expert notes recorded yet.")
 else:

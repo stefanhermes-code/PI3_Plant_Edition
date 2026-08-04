@@ -33,10 +33,12 @@ from analytics import (
 )
 from auth import current_user, logout_button, require_login
 from db import FoamGrade, QualityObservation, get_session, init_db
+import reports
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company
 from helpers import (
     CHART_ZOOM_HINT,
     analysis_unit_picker,
+    log_export_click,
     page_setup,
     render_ask_pi3_section,
     render_data_table,
@@ -425,6 +427,47 @@ if change_rows:
     st.caption("Cross-reference these dates against any unusual pattern, slow drift, or trend flagged above.")
 else:
     st.caption("No recipe-version changes, machine changes, or quality issues recorded across these runs.")
+
+# ---------------------------------------------------------------------------
+# Trend Analysis Report (Context / Analysis / Conclusions) - the page's own
+# deterministic SPC results, distinct from PI3's interpretation further
+# down (which has its own separate Word download). Uses the exact
+# chart_result/capability/cusum/trend/change_rows already computed above -
+# never re-derived.
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Trend Analysis Report")
+st.caption(
+    f"Context, analysis, and conclusions for {property_name} across {unit['label']}'s "
+    f"{len(series)} results analyzed above."
+)
+trend_report_data = reports.build_trend_analysis_report_data(
+    session, unit, property_name, series, pooling_grades,
+    chart_result, capability, cusum, trend, change_rows, include_trials,
+)
+tr_rc1, tr_rc2 = st.columns(2)
+tr_rc1.metric(
+    "Control chart", "In control" if chart_result.get("in_control") else (
+        "Flagged" if chart_result.get("ready") else "—"
+    ),
+)
+tr_rc2.metric("Real trend?", "Yes" if (trend and trend["significant"]) else ("No" if trend else "—"))
+tr_dl1, tr_dl2 = st.columns(2)
+tr_dl1.download_button(
+    "Download PDF", data=reports.render_trend_analysis_report_pdf(trend_report_data),
+    file_name="trend_analysis_report.pdf", mime="application/pdf",
+    key=f"trend_report_pdf_{unit['state_key']}_{property_name}",
+    on_click=log_export_click, args=("trend_analysis_report_pdf",),
+    kwargs={"description": f"{property_name} · {unit['label']}"},
+)
+tr_dl2.download_button(
+    "Download Excel", data=reports.render_trend_analysis_report_excel(trend_report_data),
+    file_name="trend_analysis_report.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    key=f"trend_report_excel_{unit['state_key']}_{property_name}",
+    on_click=log_export_click, args=("trend_analysis_report_excel",),
+    kwargs={"description": f"{property_name} · {unit['label']}"},
+)
 
 # ---------------------------------------------------------------------------
 # Raw results

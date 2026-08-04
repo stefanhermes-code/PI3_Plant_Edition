@@ -23,13 +23,18 @@ from auth import current_user, logout_button, require_login
 from db import FoamGrade, get_session, init_db
 from helpers import (
     analysis_unit_picker,
+    log_export_click,
     page_setup,
+    render_ask_pi3_section,
     render_data_table,
     render_function_action_intro,
+    render_pi3_docx_download,
     render_pi3_feedback_control,
+    render_save_to_expert_notes_button,
     render_scatter_chart_no_zero,
     view_only_notice,
 )
+import reports
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company
 
 page_setup("Machine Settings Optimization")
@@ -139,6 +144,40 @@ st.caption(
     "conditions before adjusting settings."
 )
 
+# ---------------------------------------------------------------------------
+# Machine Settings Optimization Report (Context / Analysis / Conclusions) -
+# the page's own ranked table, distinct from PI3's synthesis further down
+# (which has its own separate Word download). Uses the exact `ranked`
+# DataFrame already computed above - never re-derived.
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("Machine Settings Optimization Report")
+st.caption(f"Context, analysis, and conclusions for {property_name} across {unit['label']}.")
+mso_report_data = reports.build_machine_settings_report_data(
+    session, unit, property_name, ranked, pooling_grades,
+)
+mso_rc1, mso_rc2 = st.columns(2)
+mso_rc1.metric("Most actionable setting", top["label"])
+mso_rc2.metric(
+    "Settings with enough data", f"{len(ranked_with_data)} of {len(ranked)}",
+)
+mso_dl1, mso_dl2 = st.columns(2)
+mso_dl1.download_button(
+    "Download PDF", data=reports.render_machine_settings_report_pdf(mso_report_data),
+    file_name="machine_settings_optimization_report.pdf", mime="application/pdf",
+    key=f"mso_report_pdf_{unit['state_key']}_{property_name}",
+    on_click=log_export_click, args=("machine_settings_report_pdf",),
+    kwargs={"description": f"{property_name} · {unit['label']}"},
+)
+mso_dl2.download_button(
+    "Download Excel", data=reports.render_machine_settings_report_excel(mso_report_data),
+    file_name="machine_settings_optimization_report.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    key=f"mso_report_excel_{unit['state_key']}_{property_name}",
+    on_click=log_export_click, args=("machine_settings_report_excel",),
+    kwargs={"description": f"{property_name} · {unit['label']}"},
+)
+
 st.divider()
 st.subheader("Drill into one setting")
 setting_field = st.selectbox(
@@ -233,6 +272,7 @@ subject_desc = (
     f"foam grade {unit['label']}" if unit["mode"] == "grade"
     else f"foam family {unit['label']} (pooling grades: {', '.join(unit['member_grade_names'])})"
 )
+docx_grade_id = unit["entity_id"] if unit["mode"] == "grade" else None
 
 if ai_assistant.is_enabled_for_plant(session, plant_id):
     st.divider()
@@ -289,6 +329,27 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             session, st.session_state.get(f"optimization_ai_interaction_id_{unit['state_key']}_{property_name}"),
             key_prefix=f"optimization_fixed_{unit['state_key']}_{property_name}",
         )
+        optimization_question_label = f"PI3 interpretation of machine settings optimization for {property_name}, {unit['label']}"
+        opt_dl_col, opt_save_col = st.columns([1, 1])
+        with opt_dl_col:
+            render_pi3_docx_download(
+                session,
+                plant_id,
+                key_prefix=f"optimization_fixed_{unit['state_key']}_{property_name}",
+                question_label=optimization_question_label,
+                answer=ai_answer,
+                foam_grade_id=docx_grade_id,
+            )
+        with opt_save_col:
+            render_save_to_expert_notes_button(
+                session,
+                key_prefix=f"optimization_fixed_{unit['state_key']}_{property_name}",
+                answer=ai_answer,
+                question_label=optimization_question_label,
+                link_type=unit["link_type"],
+                entity_id=unit["entity_id"],
+                disabled=not page_usable,
+            )
 elif user["is_platform_owner"]:
     # Only the platform owner sees why PI3 is unavailable here - a customer
     # whose subscription/plant simply doesn't have it enabled shouldn't be
@@ -304,5 +365,25 @@ elif user["is_platform_owner"]:
         st.caption(
             "Enable PI3 connectivity for this plant (PI3 Connectivity, in Admin) to get PI3's "
             "interpretation here."
-    )
+        )
+
+st.divider()
+render_ask_pi3_section(
+    session,
+    plant_id,
+    default_foam_grade_id=docx_grade_id,
+    page_context=(
+        f"The reviewer is on the Machine Settings Optimization page, looking at '{property_name}' "
+        f"for {subject_desc}."
+    ),
+    sample_questions=[
+        f"Which process setting is most worth adjusting to improve {property_name} for {unit['label']}?",
+        f"What's the best range for the top-ranked setting, and how confident should we be in it?",
+        f"Have there been any quality issues reported for {unit['label']} recently?",
+    ],
+    note_link_type=unit["link_type"],
+    note_entity_id=unit["entity_id"],
+    key_prefix=f"ask_pi3_freeform_optimization_{unit['state_key']}_{property_name}",
+    disabled=not page_usable,
+)
 
