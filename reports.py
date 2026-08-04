@@ -100,7 +100,24 @@ the existing on-page Pareto chart it shares its scope with:
   deviation) - not the full underlying row set, which the page's own CSV
   export already covers.
 
-A sixth, narrower report type lives here too:
+A sixth report, added 2026-08-04, follows the same placement logic as the
+Quality Test Result report - its subject is a comprehensive multi-field
+selection (Severity, Foam scope, and the breakdown's group-by choice), not
+a single dropdown choice, so it lives on pages/6_Quality_Observation.py
+itself, right below that page's own filters and breakdown-by-issue chart:
+
+- build_quality_issue_report_data() / render_quality_issue_report_pdf()
+  / render_quality_issue_report_excel()
+  Takes the exact set of QualityObservation rows the page has already
+  scoped and filtered (Severity, Foam scope) - never re-derives its own
+  selection. Aggregates that set into a severity/recurring-vs-one-off
+  summary, a confidence-level breakdown, an issues-by-type-or-category
+  breakdown (bar chart, matching whichever grouping the page's own
+  breakdown chart was using), and a curated table of just the priority
+  issues (High severity and/or Recurring) - not every row, which the
+  page's own CSV export already covers.
+
+A seventh, narrower report type lives here too:
 
 - build_pi3_qa_report_data() / render_pi3_qa_report_docx()
   A single "Ask PI3" question-and-answer exchange (see
@@ -128,7 +145,7 @@ from reportlab.graphics.charts.barcharts import VerticalBarChart
 from reportlab.graphics.shapes import Drawing
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import (
     Paragraph,
@@ -140,6 +157,8 @@ from reportlab.platypus import (
 
 from analytics import PHASE_SETTING_FIELDS, PHASE_SETTING_LABELS, recipe_version_cost
 from db import (
+    CONFIDENCE_LEVELS,
+    SEVERITIES,
     ComponentStreamReading,
     CustomerTrial,
     FallplateSectionPosition,
@@ -158,9 +177,14 @@ from db import (
     RecipeComponent,
     RecipeVersion,
 )
+import quality_issue_taxonomy
 from quality_standards import compute_pass_fail
 
 STYLES = getSampleStyleSheet()
+STYLES.add(ParagraphStyle(name="Small", parent=STYLES["Normal"], fontSize=8, leading=10))
+STYLES.add(ParagraphStyle(
+    name="SmallBold", parent=STYLES["Normal"], fontSize=8, leading=10, fontName="Helvetica-Bold",
+))
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +350,38 @@ def _section(story, title, rows, col_widths=None):
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(t)
+
+
+def _wrapped_section(story, title, rows, columns, col_widths):
+    """Like _section, but every cell is a Paragraph so a long free-text
+    column (e.g. "Suspected cause") wraps within its column instead of
+    overflowing the page - _section's plain-string cells don't wrap,
+    which is fine for short values but breaks down once a table mixes a
+    long descriptive column with several rows. columns is the explicit,
+    ordered list of dict keys to display - lets the caller show a
+    narrower slice of a wider dict (e.g. dropping a couple of columns
+    from what's exported to Excel) to keep the PDF table print-width, all
+    without touching the underlying data itself. col_widths must be
+    supplied (no auto-sizing) and should sum to the usable page width."""
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(title, STYLES["Heading3"]))
+    if not rows:
+        story.append(_p("No data recorded."))
+        return
+    table_rows = [[_p(c, style="SmallBold") for c in columns]]
+    for row in rows:
+        table_rows.append([_p(row.get(c), style="Small") for c in columns])
+    t = Table(table_rows, colWidths=col_widths, repeatRows=1)
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DCE6EC")),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B0BEC5")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
     ]))
     story.append(t)
 
@@ -1452,6 +1508,190 @@ def render_quality_test_report_excel(data):
             "Failures by Foam Grade",
             lambda ws, df: _add_bar_chart(ws, df, "Failures by foam grade", "Foam grade", ["Fail count"]),
         ))
+    return _excel_bytes(sheets, charts=charts)
+
+
+# ---------------------------------------------------------------------------
+# 6. Quality Issue Report (Quality Observation page)
+#
+# Placement/mechanism (per user direction 2026-08-04): same logic as the
+# Quality Test Result report - this report's subject is a comprehensive
+# multi-field selection (Severity, Foam scope, and the breakdown's
+# group-by choice) built up on pages/6_Quality_Observation.py itself, not
+# a single dropdown choice, so it lives there rather than on the Report
+# page, and it is generated from exactly whatever the page's own filters
+# currently have selected.
+# ---------------------------------------------------------------------------
+
+def _qi_source_and_grade(obs):
+    """(source label, human-readable parent description, foam grade name)
+    for a QualityObservation, resolving whichever of the three mutually
+    exclusive parents it belongs to. Mirrors pages/6_Quality_Observation.
+    py's own _obs_source_desc()/_obs_foam_grade_id() - kept as a local
+    copy here since reports.py doesn't import from page modules."""
+    if obs.production_run_id is not None:
+        run = obs.production_run
+        grade = run.foam_grade if run else None
+        desc = f"Run #{run.id} — {grade.grade_name if grade else '—'} · {run.run_date}" if run else f"Run #{obs.production_run_id}"
+        return "Production Run", desc, grade.grade_name if grade else "—"
+    if obs.customer_trial_id is not None:
+        t = obs.customer_trial
+        grade = t.foam_grade if t else None
+        desc = f"Trial #{t.id} — {t.customer_name}" if t else f"Trial #{obs.customer_trial_id}"
+        return "Customer Trial", desc, grade.grade_name if grade else "—"
+    if obs.optimization_trial_id is not None:
+        t = obs.optimization_trial
+        grade = t.foam_grade if t else None
+        ref = (t.improvement_initiative_reference or "(no reference)") if t else ""
+        desc = f"Trial #{t.id} — {ref}" if t else f"Trial #{obs.optimization_trial_id}"
+        return "Optimization Trial", desc, grade.grade_name if grade else "—"
+    return "—", "—", "—"
+
+
+def build_quality_issue_report_data(session, observation_ids, scope):
+    """observation_ids: QualityObservation ids already scoped (tenant) and
+    filtered (Severity, Foam scope) by the caller - this function purely
+    aggregates that exact set, it never re-derives scope or filters
+    itself. scope: dict of already-formatted display strings -
+    severity_label, foam_scope_label, group_by_label ("Issue type" or
+    "Issue category", matching the page's own breakdown-chart toggle)."""
+    observations = (
+        session.query(QualityObservation)
+        .filter(QualityObservation.id.in_(observation_ids)).all()
+        if observation_ids else []
+    )
+
+    total = len(observations)
+    severity_counts = {s: 0 for s in SEVERITIES}
+    for o in observations:
+        if o.severity in severity_counts:
+            severity_counts[o.severity] += 1
+    severity_breakdown = [{"Severity": s, "Count": c} for s, c in severity_counts.items()]
+
+    recurring_count = sum(1 for o in observations if o.frequency == "Recurring")
+    one_off_count = total - recurring_count
+
+    confidence_counts = {c: 0 for c in CONFIDENCE_LEVELS}
+    for o in observations:
+        if o.confidence_level in confidence_counts:
+            confidence_counts[o.confidence_level] += 1
+    confidence_breakdown = [{"Confidence level": k, "Count": v} for k, v in confidence_counts.items()]
+
+    # Issues by type or category - the same grouping as the page's own
+    # breakdown-by-issue Pareto chart, recomputed here since reports.py
+    # can't import a Streamlit-rendering helper.
+    group_by_col = scope.get("group_by_label") or "Issue type"
+    issue_group_counts = {}
+    for o in observations:
+        if group_by_col == "Issue category":
+            label = (quality_issue_taxonomy.lookup(o.observation_type) or {}).get("category") or "Other / not yet classified"
+        else:
+            label = o.observation_type
+        issue_group_counts[label] = issue_group_counts.get(label, 0) + 1
+    issue_breakdown = [
+        {group_by_col: k, "Count": v}
+        for k, v in sorted(issue_group_counts.items(), key=lambda kv: -kv[1])
+    ]
+
+    # Priority issues - High severity and/or Recurring, the two signals
+    # that mark an issue as needing attention rather than a one-off, minor
+    # note. Not every row in the selection, which the page's own CSV
+    # export already covers.
+    priority_issues = []
+    for o in observations:
+        if o.severity == "High" or o.frequency == "Recurring":
+            _source_label, source_desc, grade_name = _qi_source_and_grade(o)
+            priority_issues.append({
+                "Source": source_desc, "Issue": o.observation_type,
+                "Severity": o.severity or "—", "Frequency": o.frequency or "—",
+                "Confidence": o.confidence_level or "—", "Foam grade": grade_name,
+                "Suspected cause": o.suspected_cause or "—", "Observed": o.observed_at,
+            })
+    priority_issues.sort(key=lambda r: (0 if r["Severity"] == "High" else 1, 0 if r["Frequency"] == "Recurring" else 1))
+
+    return {
+        "scope": scope,
+        "total_issues": total,
+        "severity_breakdown": severity_breakdown,
+        "recurring_count": recurring_count,
+        "one_off_count": one_off_count,
+        "confidence_breakdown": confidence_breakdown,
+        "issue_breakdown": issue_breakdown,
+        "group_by_col": group_by_col,
+        "priority_issues": priority_issues,
+    }
+
+
+def render_quality_issue_report_pdf(data):
+    scope = data["scope"]
+    group_col = data["group_by_col"]
+
+    def build(story):
+        _title_block(
+            story, "Quality Issue Report",
+            f"Severity: {scope['severity_label']} · Foam scope: {scope['foam_scope_label']} · "
+            f"Grouped by: {scope['group_by_label']}",
+        )
+        high_count = next((r["Count"] for r in data["severity_breakdown"] if r["Severity"] == "High"), 0)
+        story.append(_key_value_table([
+            ("Issues", data["total_issues"]), ("High severity", high_count),
+            ("Recurring", data["recurring_count"]), ("One-off", data["one_off_count"]),
+        ]))
+
+        sev_rows = data["severity_breakdown"]
+        _bar_chart(
+            story, "Severity breakdown",
+            [r["Severity"] for r in sev_rows], [r["Count"] for r in sev_rows],
+        )
+
+        issue_rows = data["issue_breakdown"]
+        _bar_chart(
+            story, f"Issues by {group_col.lower()}",
+            [r[group_col] for r in issue_rows], [r["Count"] for r in issue_rows],
+            note=f"Which {group_col.lower()}(s) occur most often in this selection." if issue_rows else None,
+        )
+
+        conf_rows = data["confidence_breakdown"]
+        _bar_chart(
+            story, "Confidence level breakdown",
+            [r["Confidence level"] for r in conf_rows], [r["Count"] for r in conf_rows],
+        )
+
+        # _wrapped_section, not _section: this table mixes a long free-
+        # text column (Suspected cause) with several rows, which
+        # overflowed the page under _section's no-wrap plain-string
+        # cells. Confidence/Foam grade/Observed (present in the Excel
+        # export) are dropped here to keep the remaining columns legible
+        # at print width - Source already carries the foam grade and date.
+        _wrapped_section(
+            story, "Priority issues (High severity and/or Recurring)",
+            data["priority_issues"], ["Source", "Issue", "Severity", "Frequency", "Suspected cause"],
+            [45 * mm, 35 * mm, 18 * mm, 22 * mm, 58 * mm],
+        )
+    return _pdf_bytes(build)
+
+
+def render_quality_issue_report_excel(data):
+    scope = data["scope"]
+    group_col = data["group_by_col"]
+    header = [{
+        "Severity filter": scope["severity_label"], "Foam scope": scope["foam_scope_label"],
+        "Grouped by": scope["group_by_label"], "Issues in selection": data["total_issues"],
+        "Recurring": data["recurring_count"], "One-off": data["one_off_count"],
+    }]
+    issue_sheet_name = f"Issues by {group_col}"
+    sheets = {
+        "Header": header,
+        "Severity Breakdown": data["severity_breakdown"],
+        issue_sheet_name: data["issue_breakdown"],
+        "Confidence Breakdown": data["confidence_breakdown"],
+        "Priority Issues": data["priority_issues"],
+    }
+    charts = [
+        ("Severity Breakdown", lambda ws, df: _add_bar_chart(ws, df, "Severity breakdown", "Severity", ["Count"])),
+        (issue_sheet_name, lambda ws, df: _add_bar_chart(ws, df, f"Issues by {group_col.lower()}", group_col, ["Count"])),
+        ("Confidence Breakdown", lambda ws, df: _add_bar_chart(ws, df, "Confidence level breakdown", "Confidence level", ["Count"])),
+    ]
     return _excel_bytes(sheets, charts=charts)
 
 

@@ -36,6 +36,7 @@ from helpers import (
     csv_excel_uploader,
     dedupe_import_rows,
     delete_with_confirm,
+    log_export_click,
     page_setup,
     render_data_table,
     render_function_action_intro,
@@ -44,6 +45,7 @@ from helpers import (
     show_pending_banner,
     view_only_notice,
 )
+import reports
 from tenant_scope import (
     apply_scope,
     company_picker,
@@ -526,6 +528,54 @@ else:
         .reset_index(name="Count")
     )
     render_pareto_chart(breakdown_counts, category_col=breakdown_col, count_col="Count")
+
+    # -------------------------------------------------------------------
+    # Quality Issue Report - exports exactly this selection (Severity +
+    # Foam scope filters, Group by choice above), aggregated into a
+    # severity/recurring-vs-one-off summary, a confidence-level breakdown,
+    # an issues-by-type-or-category breakdown, and a curated table of just
+    # the priority issues (High severity and/or Recurring) - not a dump of
+    # every row in the table above (the CSV export on that table already
+    # covers that). Lives here rather than on the Report page for the same
+    # reason as the Quality Test Result report: it needs this comprehensive
+    # selection built first, unlike the Report page's single-dropdown reports.
+    st.divider()
+    st.subheader("Quality Issue Report")
+    if set(severity_filter) == set(SEVERITIES):
+        severity_label = "All"
+    elif severity_filter:
+        severity_label = ", ".join(severity_filter)
+    else:
+        severity_label = "None selected"
+    st.caption(f"Severity: {severity_label} · Foam scope: {scope_label} · Grouped by: {breakdown_col}")
+
+    issue_report_data = reports.build_quality_issue_report_data(
+        session, [o.id for o in observations],
+        {"severity_label": severity_label, "foam_scope_label": scope_label, "group_by_label": breakdown_col},
+    )
+    ric1, ric2, ric3 = st.columns(3)
+    ric1.metric("Issues in selection", issue_report_data["total_issues"])
+    ric2.metric("Recurring", issue_report_data["recurring_count"])
+    ric3.metric(
+        "High severity",
+        next((r["Count"] for r in issue_report_data["severity_breakdown"] if r["Severity"] == "High"), 0),
+    )
+    rdl1, rdl2 = st.columns(2)
+    rdl1.download_button(
+        "Download PDF", data=reports.render_quality_issue_report_pdf(issue_report_data),
+        file_name="quality_issue_report.pdf", mime="application/pdf",
+        key="quality_issue_report_pdf",
+        on_click=log_export_click, args=("quality_issue_report_pdf",),
+        kwargs={"description": f"{severity_label} · {scope_label} · {breakdown_col}"},
+    )
+    rdl2.download_button(
+        "Download Excel", data=reports.render_quality_issue_report_excel(issue_report_data),
+        file_name="quality_issue_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="quality_issue_report_excel",
+        on_click=log_export_click, args=("quality_issue_report_excel",),
+        kwargs={"description": f"{severity_label} · {scope_label} · {breakdown_col}"},
+    )
 
     selected_id = st.session_state.get("obs_selected_id")
     selected = next((o for o in observations if o.id == selected_id), None) or (
