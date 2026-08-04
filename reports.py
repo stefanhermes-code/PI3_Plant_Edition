@@ -28,6 +28,30 @@ Streamlit import, easy to unit test) and a PDF + Excel renderer pair:
 pages/21_Report.py wires these to selectors, an in-app preview, and
 st.download_button for both file formats.
 
+Two purpose-built reports for the Recipes page (pages/3_Recipe_Version_
+Record.py), added 2026-08-04 as the first output of the app-wide Reports
+redesign (see PI3_Gaps note: reports must be aggregated/purpose-built
+answers to a specific question, never a raw-data dump or a PI3-narrative
+document - the CSV export on every table already covers raw-data needs,
+and PI3's own Word download on relevant pages already covers narrative):
+
+- build_recipe_formulation_record_data() / render_recipe_formulation_record_pdf()
+  / render_recipe_formulation_record_excel()
+  One recipe version: the formulation itself (materials/php/supplier/
+  role), its quality specs vs. actual results aggregated over a chosen
+  date range (across every production run/customer trial/optimization
+  trial built on this recipe version), and cost per kg - "is this
+  formulation meeting spec, and what does it cost" in one document for
+  internal use/approval (not customer-facing - a customer-facing version
+  would need to omit the formulation itself).
+- build_where_used_report_data() / render_where_used_report_pdf()
+  / render_where_used_report_excel()
+  One raw material: every recipe version (active and retired) that uses
+  it with its php/role, the target properties of every foam grade
+  affected, and any Customer/Optimization Trial precedent tied to a
+  recipe version containing it - "if I replace this material, what's
+  affected and what trials already exist to lean on."
+
 A fourth, narrower report type lives here too:
 
 - build_pi3_qa_report_data() / render_pi3_qa_report_docx()
@@ -62,10 +86,11 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from analytics import PHASE_SETTING_FIELDS, PHASE_SETTING_LABELS
+from analytics import PHASE_SETTING_FIELDS, PHASE_SETTING_LABELS, recipe_version_cost
 from db import (
     CustomerTrial,
     FoamGrade,
+    FoamGradeTargetProperty,
     OptimizationTrial,
     Plant,
     PhysicalPropertyResult,
@@ -73,7 +98,9 @@ from db import (
     ProductionPhase,
     ProductionRun,
     QualityObservation,
+    RawMaterial,
     RecipeComponent,
+    RecipeVersion,
 )
 from quality_standards import compute_pass_fail
 
@@ -570,7 +597,370 @@ def render_trial_report_excel(data):
 
 
 # ---------------------------------------------------------------------------
-# 4. PI3 Q&A Report (DOCX only)
+# 4. Recipe / Formulation Record Report
+#
+# Internal-use record for one recipe version: the formulation, its quality
+# specs vs. actual results aggregated over a chosen date range, and cost
+# per kg. NOT customer-facing as-is (see reports.py module docstring) -
+# the recipe/formulation section is the whole reason it can't be handed
+# to a customer.
+#
+# "Quality specs & results" pulls actual PhysicalPropertyResult rows from
+# every production run, customer trial, and optimization trial built on
+# this recipe version (the three mutually-exclusive parents - see
+# db.SAMPLE_SOURCE_TYPES), filtered to the caller's date range, then
+# aggregated per property (average actual, pass rate, sample count)
+# against that foam grade's target - never a flat row-by-row dump, per
+# the Reports redesign ruling that raw data belongs in each page's own
+# CSV export, not in a report.
+# ---------------------------------------------------------------------------
+
+def _recipe_version_target_properties(grade):
+    """FoamGrade's target specs as a flat list of {property_name, target_value,
+    unit} dicts - density/hardness (fixed columns on FoamGrade) plus any
+    additional targets recorded in FoamGradeTargetProperty."""
+    if grade is None:
+        return []
+    targets = []
+    if grade.target_density is not None:
+        targets.append({"property_name": "Density", "target_value": grade.target_density, "unit": "kg/m³"})
+    if grade.target_hardness is not None:
+        # "40% IFD / hardness" is the canonical property_name used app-wide
+        # (see quality_standards.INDUSTRY_TOLERANCES and pages/15_Recipe_
+        # Optimization.py's own target_by_name dict) - matching it here,
+        # rather than a differently-worded label, is what lets this target
+        # line up with actual PhysicalPropertyResult rows recorded against
+        # that same property name instead of showing as two separate rows.
+        targets.append({"property_name": "40% IFD / hardness", "target_value": grade.target_hardness, "unit": "N"})
+    for tp in grade.target_properties:
+        targets.append({"property_name": tp.property_name, "target_value": tp.target_value, "unit": tp.unit or ""})
+    return targets
+
+
+def _property_results_for_recipe_version(session, recipe_version_id, date_from=None, date_to=None):
+    """Every PhysicalPropertyResult tied (via production run, customer trial,
+    or optimization trial - see db.SAMPLE_SOURCE_TYPES) to this recipe
+    version, filtered to [date_from, date_to] on that parent's own date
+    field (run_date / trial_date). Three separate joins rather than one
+    query, since which date field applies depends on which of the three
+    parent types the result belongs to."""
+    results = []
+
+    run_q = (
+        session.query(PhysicalPropertyResult)
+        .join(ProductionRun, PhysicalPropertyResult.production_run_id == ProductionRun.id)
+        .filter(ProductionRun.recipe_version_id == recipe_version_id)
+    )
+    if date_from:
+        run_q = run_q.filter(ProductionRun.run_date >= date_from)
+    if date_to:
+        run_q = run_q.filter(ProductionRun.run_date <= date_to)
+    results.extend(run_q.all())
+
+    ct_q = (
+        session.query(PhysicalPropertyResult)
+        .join(CustomerTrial, PhysicalPropertyResult.customer_trial_id == CustomerTrial.id)
+        .filter(CustomerTrial.recipe_version_id == recipe_version_id)
+    )
+    if date_from:
+        ct_q = ct_q.filter(CustomerTrial.trial_date >= date_from)
+    if date_to:
+        ct_q = ct_q.filter(CustomerTrial.trial_date <= date_to)
+    results.extend(ct_q.all())
+
+    ot_q = (
+        session.query(PhysicalPropertyResult)
+        .join(OptimizationTrial, PhysicalPropertyResult.optimization_trial_id == OptimizationTrial.id)
+        .filter(OptimizationTrial.recipe_version_id == recipe_version_id)
+    )
+    if date_from:
+        ot_q = ot_q.filter(OptimizationTrial.trial_date >= date_from)
+    if date_to:
+        ot_q = ot_q.filter(OptimizationTrial.trial_date <= date_to)
+    results.extend(ot_q.all())
+
+    return results
+
+
+def build_recipe_formulation_record_data(session, recipe_version_id, date_from=None, date_to=None):
+    rv = session.get(RecipeVersion, recipe_version_id)
+    if rv is None:
+        return None
+    grade = rv.foam_grade
+    family = grade.product_family if grade else None
+
+    ordered_components = sorted(
+        rv.components,
+        key=lambda c: (c.role_in_formulation or "", c.raw_material_name or ""),
+    )
+    components = [
+        {
+            "Material": c.raw_material_name,
+            "Supplier": c.supplier or "—",
+            "PHP": c.php,
+            "Role": c.role_in_formulation or "—",
+            "Notes": c.notes or "—",
+        }
+        for c in ordered_components
+    ]
+
+    targets_by_name = {t["property_name"]: t for t in _recipe_version_target_properties(grade)}
+    results = _property_results_for_recipe_version(session, rv.id, date_from, date_to)
+    by_property = {}
+    for r in results:
+        by_property.setdefault(r.property_name, []).append(r)
+
+    quality_rows = []
+    # Show every declared target even if zero results fell in range (an
+    # honest "no data yet" beats silently omitting the row), plus any
+    # measured property that isn't a formally declared target.
+    for prop_name in sorted(set(targets_by_name) | set(by_property)):
+        rs = by_property.get(prop_name, [])
+        verdicts = [compute_pass_fail(r.property_name, r.target_value, r.actual_value) for r in rs]
+        pass_ct, fail_ct = verdicts.count("Pass"), verdicts.count("Fail")
+        scored = pass_ct + fail_ct
+        actuals = [r.actual_value for r in rs if r.actual_value is not None]
+        target = targets_by_name.get(prop_name)
+        target_value = target["target_value"] if target else next(
+            (r.target_value for r in rs if r.target_value is not None), None
+        )
+        unit = (target["unit"] if target else None) or next((r.unit for r in rs if r.unit), "")
+        quality_rows.append({
+            "Property": prop_name,
+            "Target": target_value,
+            "Avg. actual": round(sum(actuals) / len(actuals), 2) if actuals else None,
+            "Unit": unit,
+            "Results in range": len(rs),
+            "Pass rate": f"{round(100 * pass_ct / scored)}%" if scored else "—",
+        })
+
+    cost = recipe_version_cost(session, rv)
+    # Same php-parts-as-kg convention as pages/15_Recipe_Optimization.py's
+    # _cost_per_kg() - a formulation's php total already IS its cost basis
+    # (see analytics.recipe_version_cost's own docstring), so cost per kg
+    # is simply total cost / total php, once any component is priced.
+    cost_per_kg = (
+        round(cost["total_cost"] / cost["total_php"], 2)
+        if cost["total_cost"] is not None and cost["total_php"]
+        else None
+    )
+
+    return {
+        "recipe_version_id": rv.id,
+        "version_label": rv.version_label,
+        "foam_grade": grade.grade_name if grade else "—",
+        "product_family": family.name if family else "—",
+        "approval_status": rv.approval_status,
+        "is_active": rv.is_active,
+        "effective_date": rv.effective_date,
+        "created_by": rv.created_by or "—",
+        "change_note": rv.change_note or "",
+        "ratio_index": rv.ratio_index,
+        "components": components,
+        "date_from": date_from,
+        "date_to": date_to,
+        "quality_rows": quality_rows,
+        "cost_per_kg": cost_per_kg,
+        "cost_priced_php": cost["priced_php"],
+        "cost_total_php": cost["total_php"],
+        "cost_missing_materials": cost["missing"],
+    }
+
+
+def render_recipe_formulation_record_pdf(data):
+    def build(story):
+        _title_block(
+            story, f"Recipe / Formulation Record — {data['version_label']}",
+            f"{data['foam_grade']} · {data['product_family']} · "
+            f"{'Active recipe' if data['is_active'] else 'Retired version'}",
+        )
+        story.append(_key_value_table([
+            ("Approval status", data["approval_status"]), ("Active", "Yes" if data["is_active"] else "No"),
+            ("Effective date", data["effective_date"]), ("Created by", data["created_by"]),
+            ("Ratio / index", f"{data['ratio_index']:.3f}" if data["ratio_index"] is not None else "—"),
+            ("", ""),
+        ]))
+        if data["change_note"]:
+            story.append(Spacer(1, 6))
+            story.append(_p(f"Change note: {data['change_note']}"))
+        _section(story, "Formulation (recipe components)", data["components"])
+
+        date_range = f"{data['date_from'] or 'earliest'} to {data['date_to'] or 'latest'}"
+        _section(story, f"Quality specs vs. results ({date_range})", data["quality_rows"])
+
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Cost", STYLES["Heading3"]))
+        if data["cost_per_kg"] is None:
+            story.append(_p("No priced components - cost per kg cannot be calculated."))
+        else:
+            coverage = f"{data['cost_priced_php']:.2f} / {data['cost_total_php']:.2f} php priced"
+            story.append(_key_value_table([
+                ("Cost per kg", data["cost_per_kg"]), ("Cost coverage", coverage),
+            ]))
+            if data["cost_missing_materials"]:
+                story.append(_p("Unpriced materials (excluded from total): " + ", ".join(data["cost_missing_materials"])))
+    return _pdf_bytes(build)
+
+
+def render_recipe_formulation_record_excel(data):
+    header = [{
+        "Recipe version": data["version_label"], "Foam grade": data["foam_grade"],
+        "Product family": data["product_family"], "Approval status": data["approval_status"],
+        "Active": "Yes" if data["is_active"] else "No", "Effective date": data["effective_date"],
+        "Created by": data["created_by"], "Ratio / index": data["ratio_index"],
+        "Change note": data["change_note"], "Date from": data["date_from"], "Date to": data["date_to"],
+        "Cost per kg": data["cost_per_kg"],
+        "Cost coverage (php priced / total)": f"{data['cost_priced_php']} / {data['cost_total_php']}",
+        "Unpriced materials": ", ".join(data["cost_missing_materials"]) or "—",
+    }]
+    return _excel_bytes({
+        "Header": header,
+        "Formulation": data["components"],
+        "Quality vs Spec": data["quality_rows"],
+    })
+
+
+# ---------------------------------------------------------------------------
+# 5. Where Used Report
+#
+# Given a raw material, answers "which recipes use this, and what depends
+# on it" - the reverse lookup a Plant Manager needs before considering a
+# material substitution. Scoped inherently by the tenant boundary: it
+# joins on RecipeComponent.raw_material_id, a real FK to one specific
+# (already company-scoped) raw_materials row, not a name match, so it
+# can't cross into another company's recipes.
+# ---------------------------------------------------------------------------
+
+def build_where_used_report_data(session, raw_material_id):
+    rm = session.get(RawMaterial, raw_material_id)
+    if rm is None:
+        return None
+
+    components = (
+        session.query(RecipeComponent)
+        .filter(RecipeComponent.raw_material_id == rm.id)
+        .all()
+    )
+    recipe_version_ids = {c.recipe_version_id for c in components}
+    versions = (
+        session.query(RecipeVersion).filter(RecipeVersion.id.in_(recipe_version_ids)).all()
+        if recipe_version_ids else []
+    )
+    version_by_id = {v.id: v for v in versions}
+
+    def _sort_key(c):
+        v = version_by_id.get(c.recipe_version_id)
+        grade = v.foam_grade if v else None
+        return (grade.grade_name if grade else "", v.version_label if v else "")
+
+    usage_rows = []
+    grade_ids, family_names = set(), set()
+    for c in sorted(components, key=_sort_key):
+        v = version_by_id.get(c.recipe_version_id)
+        grade = v.foam_grade if v else None
+        family = grade.product_family if grade else None
+        if grade:
+            grade_ids.add(grade.id)
+        if family:
+            family_names.add(family.name)
+        usage_rows.append({
+            "Foam grade": grade.grade_name if grade else "—",
+            "Product family": family.name if family else "—",
+            "Recipe version": v.version_label if v else "—",
+            "Status": "Active" if v and v.is_active else "Retired",
+            "PHP": c.php,
+            "Role": c.role_in_formulation or "—",
+            "Approval status": v.approval_status if v else "—",
+        })
+
+    grades = session.query(FoamGrade).filter(FoamGrade.id.in_(grade_ids)).all() if grade_ids else []
+    target_rows = []
+    for g in sorted(grades, key=lambda g: g.grade_name):
+        for t in _recipe_version_target_properties(g):
+            target_rows.append({
+                "Foam grade": g.grade_name, "Property": t["property_name"],
+                "Target": t["target_value"], "Unit": t["unit"],
+            })
+
+    trial_rows = []
+    if recipe_version_ids:
+        customer_trials = (
+            session.query(CustomerTrial)
+            .filter(CustomerTrial.recipe_version_id.in_(recipe_version_ids))
+            .order_by(CustomerTrial.trial_date.desc())
+            .all()
+        )
+        for t in customer_trials:
+            trial_rows.append({
+                "Trial type": "Customer Trial", "Trial ID": t.id,
+                "Foam grade": t.foam_grade.grade_name if t.foam_grade else "—",
+                "Status": t.status, "Trial date": t.trial_date, "Outcome": t.outcome or "—",
+            })
+        optimization_trials = (
+            session.query(OptimizationTrial)
+            .filter(OptimizationTrial.recipe_version_id.in_(recipe_version_ids))
+            .order_by(OptimizationTrial.trial_date.desc())
+            .all()
+        )
+        for t in optimization_trials:
+            trial_rows.append({
+                "Trial type": "Optimization Trial", "Trial ID": t.id,
+                "Foam grade": t.foam_grade.grade_name if t.foam_grade else "—",
+                "Status": t.status, "Trial date": t.trial_date, "Outcome": t.conclusion or "—",
+            })
+
+    return {
+        "raw_material_id": rm.id,
+        "raw_material_name": rm.name,
+        "category": rm.category or "—",
+        "default_supplier": rm.default_supplier or "—",
+        "active": rm.active,
+        "recipe_version_count": len(recipe_version_ids),
+        "foam_grade_count": len(grade_ids),
+        "product_family_count": len(family_names),
+        "usage_rows": usage_rows,
+        "target_rows": target_rows,
+        "trial_rows": trial_rows,
+    }
+
+
+def render_where_used_report_pdf(data):
+    def build(story):
+        _title_block(
+            story, f"Where Used Report — {data['raw_material_name']}",
+            f"{data['category']} · Default supplier: {data['default_supplier']} · "
+            f"{'Active' if data['active'] else 'Inactive'} material",
+        )
+        story.append(_key_value_table([
+            ("Recipe versions using this material", data["recipe_version_count"]),
+            ("Foam grades affected", data["foam_grade_count"]),
+            ("Product families affected", data["product_family_count"]),
+            ("", ""),
+        ]))
+        _section(story, "Recipes using this material", data["usage_rows"])
+        _section(story, "Target properties of affected foam grades", data["target_rows"])
+        _section(story, "Trial precedent (Customer / Optimization Trials on these recipes)", data["trial_rows"])
+    return _pdf_bytes(build)
+
+
+def render_where_used_report_excel(data):
+    header = [{
+        "Raw material": data["raw_material_name"], "Category": data["category"],
+        "Default supplier": data["default_supplier"], "Active": "Yes" if data["active"] else "No",
+        "Recipe versions using it": data["recipe_version_count"],
+        "Foam grades affected": data["foam_grade_count"],
+        "Product families affected": data["product_family_count"],
+    }]
+    return _excel_bytes({
+        "Header": header,
+        "Recipe Usage": data["usage_rows"],
+        "Target Properties": data["target_rows"],
+        "Trial Precedent": data["trial_rows"],
+    })
+
+
+# ---------------------------------------------------------------------------
+# 6. PI3 Q&A Report (DOCX only)
 # ---------------------------------------------------------------------------
 
 _HTC_LOGO_PATH = "assets/htc_global_logo_blue_steel.png"

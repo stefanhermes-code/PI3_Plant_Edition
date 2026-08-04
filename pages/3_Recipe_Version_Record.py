@@ -33,6 +33,7 @@ from helpers import (
     csv_excel_uploader,
     dedupe_import_rows,
     delete_with_confirm,
+    log_export_click,
     next_version_label,
     page_setup,
     recipe_component_sort_index,
@@ -44,6 +45,7 @@ from helpers import (
     view_only_notice,
 )
 from tenant_scope import apply_scope, company_picker, grade_ids_for_company
+import reports
 
 RECIPE_VERSION_REQUIRED_COLUMNS = ["foam_grade_id", "version_label"]
 RECIPE_VERSION_OPTIONAL_COLUMNS = ["effective_date", "change_note", "approval_status", "created_by", "ratio_index"]
@@ -520,6 +522,47 @@ else:
                 st.success(f"'{v.version_label}' is now the active recipe for {v.foam_grade.grade_name}.")
                 st.rerun()
 
+        with st.expander("📄 Recipe / Formulation Record report"):
+            st.caption(
+                "Internal-use record for this recipe version - the formulation itself, quality specs "
+                "vs. actual results over a date range you choose, and cost per kg. Not for external/"
+                "customer use, since it includes the formulation."
+            )
+            frc1, frc2 = st.columns(2)
+            report_date_from = frc1.date_input(
+                "Quality results from", value=dt.date.today() - dt.timedelta(days=180), key=f"formrec_from_{v.id}"
+            )
+            report_date_to = frc2.date_input("to", value=dt.date.today(), key=f"formrec_to_{v.id}")
+            report_data = reports.build_recipe_formulation_record_data(
+                session, v.id, date_from=report_date_from, date_to=report_date_to
+            )
+
+            st.write("**Formulation**")
+            render_data_table(pd.DataFrame(report_data["components"] or [{"—": "No data recorded"}]))
+            st.write("**Quality specs vs. results**")
+            render_data_table(pd.DataFrame(report_data["quality_rows"] or [{"—": "No data recorded"}]))
+            if report_data["cost_per_kg"] is not None:
+                st.metric("Cost per kg", report_data["cost_per_kg"])
+            else:
+                st.caption("No priced components yet - cost per kg cannot be calculated.")
+
+            frdl1, frdl2 = st.columns(2)
+            frdl1.download_button(
+                "Download PDF", data=reports.render_recipe_formulation_record_pdf(report_data),
+                file_name=f"recipe_{v.id}_formulation_record.pdf", mime="application/pdf",
+                key=f"formrec_pdf_{v.id}",
+                on_click=log_export_click, args=("recipe_formulation_record_pdf",),
+                kwargs={"description": f"Recipe version #{v.id} ({v.version_label})"},
+            )
+            frdl2.download_button(
+                "Download Excel", data=reports.render_recipe_formulation_record_excel(report_data),
+                file_name=f"recipe_{v.id}_formulation_record.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"formrec_excel_{v.id}",
+                on_click=log_export_click, args=("recipe_formulation_record_excel",),
+                kwargs={"description": f"Recipe version #{v.id} ({v.version_label})"},
+            )
+
         with st.expander("Edit details / delete this recipe version"):
             if not page_usable:
                 st.caption("View-only access - editing and deleting is restricted for your role.")
@@ -725,3 +768,59 @@ else:
                             session.commit()
                             st.success("Component added.")
                             st.rerun()
+
+# ---------------------------------------------------------------------------
+# Where Used Report - reverse lookup: which recipes use a given raw material.
+# Kept at the very bottom since it's scoped by raw material, not by any
+# recipe version selected above.
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("📄 Where Used Report")
+st.caption(
+    "Pick a raw material to see every recipe version - active and retired - that uses it, the "
+    "target properties of the foam grades affected, and any Customer/Optimization Trial precedent "
+    "tied to those recipes. Useful before considering a material substitution."
+)
+wu_rm_query = session.query(RawMaterial)
+if active_company_id is not None:
+    wu_rm_query = wu_rm_query.filter(RawMaterial.company_id == active_company_id)
+wu_materials = wu_rm_query.order_by(RawMaterial.name).all()
+
+if not wu_materials:
+    st.info("No raw materials recorded yet.")
+else:
+    wu_material = st.selectbox(
+        "Raw material", wu_materials,
+        format_func=lambda m: f"{m.name} ({m.category})" if m.category else m.name,
+        key="where_used_material_select",
+    )
+    wu_data = reports.build_where_used_report_data(session, wu_material.id)
+
+    wc1, wc2, wc3 = st.columns(3)
+    wc1.metric("Recipe versions using it", wu_data["recipe_version_count"])
+    wc2.metric("Foam grades affected", wu_data["foam_grade_count"])
+    wc3.metric("Product families affected", wu_data["product_family_count"])
+
+    st.write("**Recipes using this material**")
+    render_data_table(pd.DataFrame(wu_data["usage_rows"] or [{"—": "No data recorded"}]))
+    st.write("**Target properties of affected foam grades**")
+    render_data_table(pd.DataFrame(wu_data["target_rows"] or [{"—": "No data recorded"}]))
+    st.write("**Trial precedent**")
+    render_data_table(pd.DataFrame(wu_data["trial_rows"] or [{"—": "No data recorded"}]))
+
+    wudl1, wudl2 = st.columns(2)
+    wudl1.download_button(
+        "Download PDF", data=reports.render_where_used_report_pdf(wu_data),
+        file_name=f"where_used_{wu_data['raw_material_id']}_report.pdf", mime="application/pdf",
+        key="where_used_pdf",
+        on_click=log_export_click, args=("where_used_report_pdf",),
+        kwargs={"description": wu_data["raw_material_name"]},
+    )
+    wudl2.download_button(
+        "Download Excel", data=reports.render_where_used_report_excel(wu_data),
+        file_name=f"where_used_{wu_data['raw_material_id']}_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="where_used_excel",
+        on_click=log_export_click, args=("where_used_report_excel",),
+        kwargs={"description": wu_data["raw_material_name"]},
+    )
