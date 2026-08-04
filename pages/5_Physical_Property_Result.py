@@ -296,7 +296,15 @@ with tab_result_manual:
                 method_revision = c5.text_input("Method edition / revision (e.g. 2017)")
                 if property_def:
                     st.caption(f"Industry accepted tolerance for {property_def.name}: {tolerance_label(property_def.name)}")
-                replicate_no = st.number_input("Replicate no.", min_value=1, step=1, value=1)
+                replicate_no = st.number_input(
+                    "Replicate no.", min_value=1, step=1, value=1,
+                    help=(
+                        "Which repeat this is when the same property is tested more than once on "
+                        "the same sample (e.g. running tensile strength 3 times for a reliable "
+                        "average) - use 1 for the first/only measurement, 2 for the second, and so "
+                        "on. Leave at 1 if you're only testing this property once per sample."
+                    ),
+                )
                 tested_at = st.date_input("Tested on", value=dt.date.today())
                 notes = st.text_area("Notes (e.g. specimen geometry, orientation, deflection, temperature)")
                 submitted = st.form_submit_button("Save result")
@@ -756,7 +764,13 @@ if selected_result:
             "Method edition / revision", value=selected_result.method_revision or "", key=f"edit_result_rev_{selected_result.id}"
         )
         e_replicate = st.number_input(
-            "Replicate no.", min_value=1, step=1, value=selected_result.replicate_no or 1, key=f"edit_result_replicate_{selected_result.id}"
+            "Replicate no.", min_value=1, step=1, value=selected_result.replicate_no or 1,
+            key=f"edit_result_replicate_{selected_result.id}",
+            help=(
+                "Which repeat this is when the same property is tested more than once on the same "
+                "sample (e.g. running tensile strength 3 times for a reliable average) - use 1 for "
+                "the first/only measurement, 2 for the second, and so on."
+            ),
         )
         e_tested_at = st.date_input(
             "Tested on", value=selected_result.tested_at or dt.date.today(), key=f"edit_result_tested_{selected_result.id}"

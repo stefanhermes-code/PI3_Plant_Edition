@@ -186,7 +186,7 @@ with tab_create:
             else:
                 with st.form(f"add_sample_{managed_trial.id}"):
                     zone_label = st.selectbox("Zone *", ZONE_LABELS, key=f"ot_sample_zone_{managed_trial.id}")
-                    sample_ts = combine_date_time("Sample extraction time", f"ot_sample_ts_{managed_trial.id}")
+                    sample_ts = combine_date_time("Sample creation time", f"ot_sample_ts_{managed_trial.id}")
                     sample_notes = st.text_area("Notes", key=f"ot_sample_notes_{managed_trial.id}")
                     if st.form_submit_button("Save sample"):
                         session.add(
@@ -232,7 +232,7 @@ with tab_create:
                             key=f"edit_ot_sample_zone_{selected_sample.id}",
                         )
                         e_sample_ts = combine_date_time(
-                            "Sample extraction time", f"edit_ot_sample_ts_{selected_sample.id}",
+                            "Sample creation time", f"edit_ot_sample_ts_{selected_sample.id}",
                             default_date=selected_sample.sample_ts.date() if selected_sample.sample_ts else None,
                             default_time=selected_sample.sample_ts.time() if selected_sample.sample_ts else None,
                         )

@@ -253,14 +253,22 @@ setup_pages = [
 
 production_pages = [
     ("production_run", st.Page("pages/4_Production_Run_Trial_Record.py", title="Production Run", icon="⚙️")),
-    ("quality_test_result", st.Page("pages/5_Physical_Property_Result.py", title="Quality Test Result", icon="📏")),
-    ("quality_issue", st.Page("pages/6_Quality_Observation.py", title="Quality Issue", icon="🔍")),
 ]
 
 experiment_pages = [
     ("samples_conditioning", st.Page("pages/9_Samples_Conditioning.py", title="Production Samples", icon="🧊")),
     ("customer_trials", st.Page("pages/11_Customer_Trials.py", title="Customer Trials & Samples", icon="🤝")),
     ("optimization_trials", st.Page("pages/12_Optimization_Trials.py", title="Optimization Trials & Samples", icon="🚀")),
+]
+
+# Split out from Production 2026-08-04 per user direction (segregation of
+# duties: quality inspection/testing shouldn't sit under the same nav
+# section as the production floor that made the batch). Ordered after
+# Samples & Trials since a result/issue is always recorded against a
+# sample, and a sample can come from any of the 3 pages in that section.
+quality_pages = [
+    ("quality_test_result", st.Page("pages/5_Physical_Property_Result.py", title="Quality Test Result", icon="📏")),
+    ("quality_issue", st.Page("pages/6_Quality_Observation.py", title="Quality Issue", icon="🔍")),
 ]
 
 # The value of PI3 Plant Edition is the join that already exists in the
@@ -301,6 +309,7 @@ nav_sections_with_keys = {
     "Setup": setup_pages,
     "Production": production_pages,
     "Samples & Trials": experiment_pages,
+    "Quality": quality_pages,
     "Industrial Intelligence": industrial_intelligence_pages,
     "Company Admin": admin_pages,
     "Application Admin": platform_admin_pages,

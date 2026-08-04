@@ -71,7 +71,7 @@ render_function_action_intro(
         "(Customer Trials & Samples / Optimization Trials & Samples), alongside the trial itself."
     ),
     action_text=(
-        "Pick the production run this sample came from, then record its block zone and extraction "
+        "Pick the production run this sample came from, then record its block zone and creation "
         "time. Use the CSV/Excel import tab to bulk-load a batch of samples at once instead of "
         "entering them one by one."
     ),
@@ -102,7 +102,7 @@ with tab_create:
     if not page_usable:
         st.caption("View-only access - adding a sample is restricted for your role.")
     else:
-        # Run picker lives outside the form: the extraction-time validation
+        # Run picker lives outside the form: the creation-time validation
         # below depends on which run is picked, and form-internal widgets
         # don't rerun until submit.
         run = st.selectbox(
@@ -112,7 +112,7 @@ with tab_create:
         )
         with st.form("add_sample"):
             zone_label = st.selectbox("Zone *", ZONE_LABELS)
-            sample_ts = combine_date_time("Sample extraction time", "sample_ts")
+            sample_ts = combine_date_time("Sample creation time", "sample_ts")
             notes = st.text_area("Notes")
             submitted = st.form_submit_button("Save sample")
             if submitted:
@@ -125,7 +125,7 @@ with tab_create:
                 )
                 if earliest_start and sample_ts < earliest_start:
                     st.error(
-                        f"Sample extraction time ({sample_ts:%Y-%m-%d %H:%M}) is before this run started "
+                        f"Sample creation time ({sample_ts:%Y-%m-%d %H:%M}) is before this run started "
                         f"({earliest_start:%Y-%m-%d %H:%M}). Check the date/time."
                     )
                 else:
@@ -230,7 +230,7 @@ with tab_edit_delete:
                     key=f"edit_sample_zone_{selected_sample.id}",
                 )
                 e_sample_ts = combine_date_time(
-                    "Sample extraction time", f"edit_sample_ts_{selected_sample.id}",
+                    "Sample creation time", f"edit_sample_ts_{selected_sample.id}",
                     default_date=selected_sample.sample_ts.date() if selected_sample.sample_ts else None,
                     default_time=selected_sample.sample_ts.time() if selected_sample.sample_ts else None,
                 )
@@ -245,7 +245,7 @@ with tab_edit_delete:
                     )
                     if earliest_start and e_sample_ts < earliest_start:
                         st.error(
-                            f"Sample extraction time ({e_sample_ts:%Y-%m-%d %H:%M}) is before this run started "
+                            f"Sample creation time ({e_sample_ts:%Y-%m-%d %H:%M}) is before this run started "
                             f"({earliest_start:%Y-%m-%d %H:%M}). Check the date/time."
                         )
                     else:
