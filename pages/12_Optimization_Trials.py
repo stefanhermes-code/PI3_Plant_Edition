@@ -60,7 +60,15 @@ from helpers import (
     show_pending_banner,
     view_only_notice,
 )
-from tenant_scope import apply_scope, company_picker, grade_ids_for_company, plant_ids_for_company
+from tenant_scope import (
+    apply_scope,
+    company_picker,
+    customer_trial_ids_for_company,
+    grade_ids_for_company,
+    optimization_trial_ids_for_company,
+    plant_ids_for_company,
+    run_ids_for_company,
+)
 
 TRIAL_REQUIRED_COLUMNS = ["foam_grade_id"]
 TRIAL_OPTIONAL_COLUMNS = [
@@ -117,6 +125,21 @@ trials = (
     .order_by(OptimizationTrial.created_at.desc())
     .all()
 )
+
+# Which source_id values are legal for the multi-source sample importer
+# below, per source_type - None means unfiltered (platform owner viewing
+# "All companies"). Without this, a crafted CSV row could attach a sample
+# to another company's production run/trial by guessing its id (found in
+# the 2026-08-04 Duroflex-pilot tenant-scoping audit; page 9's
+# single-source importer already had the equivalent check).
+_valid_run_ids = run_ids_for_company(session, active_company_id)
+_valid_ct_ids = customer_trial_ids_for_company(session, active_company_id)
+_valid_ot_ids = optimization_trial_ids_for_company(session, active_company_id)
+valid_source_ids = {
+    "Production Run": None if _valid_run_ids is None else set(_valid_run_ids),
+    "Customer Trial": None if _valid_ct_ids is None else set(_valid_ct_ids),
+    "Optimization Trial": None if _valid_ot_ids is None else set(_valid_ot_ids),
+}
 
 
 def _resolve_recipe_version(grade_id):
@@ -290,7 +313,12 @@ with tab_create:
                         source_id_val = int(row.get("source_id"))
                     except (TypeError, ValueError):
                         source_id_val = None
-                    if source_type in SAMPLE_SOURCE_TYPES and source_id_val is not None and str(row.get("zone_label", "")).strip():
+                    ids_for_type = valid_source_ids.get(source_type)
+                    source_id_in_scope = (
+                        source_id_val is not None
+                        and (ids_for_type is None or source_id_val in ids_for_type)
+                    )
+                    if source_type in SAMPLE_SOURCE_TYPES and source_id_in_scope and str(row.get("zone_label", "")).strip():
                         good_rows.append(row)
                     else:
                         bad_rows.append(row)
@@ -299,7 +327,9 @@ with tab_create:
                 if bad_rows:
                     st.warning(
                         "These rows have an invalid source_type (must be one of: "
-                        + ", ".join(SAMPLE_SOURCE_TYPES) + "), a missing/non-numeric source_id, or a missing zone_label."
+                        + ", ".join(SAMPLE_SOURCE_TYPES) + "), a missing/non-numeric source_id, a source_id that "
+                        "doesn't belong to " + (company.name if company else "the current company") + ", or a "
+                        "missing zone_label."
                     )
                     render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 

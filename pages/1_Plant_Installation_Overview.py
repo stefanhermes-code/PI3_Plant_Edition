@@ -257,7 +257,17 @@ else:
                         st.success(f"Machine '{name}' added.")
                         st.rerun()
 
-    machines = session.query(Machine).order_by(Machine.plant_id, Machine.name).all()
+    # Scoped to the same plant set as the "Plants" table above (`plants`,
+    # already filtered by company_filter) - previously unfiltered here,
+    # which meant every company's machines were visible to every other
+    # company once a second company existed. Fixed 2026-08-04 (Duroflex
+    # pilot readiness audit).
+    machines = (
+        session.query(Machine)
+        .filter(Machine.plant_id.in_([p.id for p in plants]))
+        .order_by(Machine.plant_id, Machine.name)
+        .all()
+    )
     if not machines:
         st.info("No machines recorded yet.")
     else:
