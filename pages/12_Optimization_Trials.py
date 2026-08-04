@@ -32,6 +32,7 @@ db.sample_source_fk_field()).
 import pandas as pd
 import streamlit as st
 
+import reports
 from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from cascades import delete_optimization_trial_cascade, optimization_trial_dependency_counts
@@ -53,6 +54,7 @@ from helpers import (
     csv_excel_uploader,
     dedupe_import_rows,
     delete_with_confirm,
+    log_export_click,
     page_setup,
     render_data_table,
     render_function_action_intro,
@@ -150,7 +152,9 @@ def _resolve_recipe_version(grade_id):
     return current_version.id if current_version else None
 
 
-tab_create, tab_edit_delete, tab_import = st.tabs(["Create Trial", "Edit/Delete Trial", "CSV / Excel import"])
+tab_create, tab_edit_delete, tab_import, tab_report = st.tabs(
+    ["Create Trial", "Edit/Delete Trial", "CSV / Excel import", "Sample Report"]
+)
 
 with tab_create:
     st.subheader("Flag a new optimization trial")
@@ -559,3 +563,69 @@ with tab_edit_delete:
             if st.button("Clear selection", key="clear_ot_selection"):
                 st.session_state.pop("ot_selected_id", None)
                 st.rerun()
+
+with tab_report:
+    st.caption(
+        "Reports on samples currently in scope (your company's optimization trials, across all of "
+        "them - not just the one selected in 'Manage samples' above). Narrow by zone and/or "
+        "creation date below, then download - charts only, no raw sample list."
+    )
+    all_ot_samples = (
+        session.query(Sample)
+        .filter(Sample.optimization_trial_id.in_([t.id for t in trials]))
+        .order_by(Sample.id.desc())
+        .all()
+    )
+    if not all_ot_samples:
+        st.info("No samples recorded yet.")
+    else:
+        zone_options = sorted({s.zone_label for s in all_ot_samples if s.zone_label})
+        zone_filter = st.multiselect("Zone", zone_options, default=zone_options, key="ot_report_zone")
+        rc1, rc2 = st.columns(2)
+        date_from = rc1.date_input("Sampled from (optional)", value=None, key="ot_report_from")
+        date_to = rc2.date_input("Sampled to (optional)", value=None, key="ot_report_to")
+
+        filtered_ot_samples = [
+            s for s in all_ot_samples
+            if (s.zone_label in zone_filter)
+            and (date_from is None or (s.sample_ts and s.sample_ts.date() >= date_from))
+            and (date_to is None or (s.sample_ts and s.sample_ts.date() <= date_to))
+        ]
+
+        if zone_filter == zone_options:
+            zone_label_text = "All zones"
+        elif zone_filter:
+            zone_label_text = ", ".join(zone_filter)
+        else:
+            zone_label_text = "None selected"
+        date_label_text = (
+            f"{date_from or 'earliest'} to {date_to or 'latest'}" if (date_from or date_to) else "All dates"
+        )
+        selection_label = f"Zone: {zone_label_text} · Sampled: {date_label_text} · {len(trials)} optimization trial(s) in scope"
+        st.caption(selection_label)
+
+        report_data = reports.build_sample_report_data(
+            session, "Optimization Trial", [s.id for s in filtered_ot_samples], {"selection_label": selection_label}
+        )
+        rc1, rc2, rc3 = st.columns(3)
+        rc1.metric("Samples in selection", report_data["total_samples"])
+        rc2.metric("Coverage", f"{report_data['coverage_pct']}%" if report_data["coverage_pct"] is not None else "—")
+        rc3.metric("Pass rate (linked results)", f"{report_data['pass_rate']}%" if report_data["pass_rate"] is not None else "—")
+
+        if report_data["zone_breakdown"]:
+            st.bar_chart(pd.DataFrame(report_data["zone_breakdown"]).set_index("Zone"))
+
+        dl1, dl2 = st.columns(2)
+        dl1.download_button(
+            "Download PDF", data=reports.render_sample_report_pdf(report_data),
+            file_name="optimization_trial_samples_report.pdf", mime="application/pdf",
+            key="ot_sample_report_pdf", disabled=report_data["total_samples"] == 0,
+            on_click=log_export_click, args=("ot_sample_report_pdf",), kwargs={"description": selection_label},
+        )
+        dl2.download_button(
+            "Download Excel", data=reports.render_sample_report_excel(report_data),
+            file_name="optimization_trial_samples_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="ot_sample_report_excel", disabled=report_data["total_samples"] == 0,
+            on_click=log_export_click, args=("ot_sample_report_excel",), kwargs={"description": selection_label},
+        )

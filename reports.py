@@ -176,6 +176,7 @@ from db import (
     RawMaterial,
     RecipeComponent,
     RecipeVersion,
+    Sample,
 )
 import quality_issue_taxonomy
 from quality_standards import compute_pass_fail
@@ -1691,6 +1692,146 @@ def render_quality_issue_report_excel(data):
         ("Severity Breakdown", lambda ws, df: _add_bar_chart(ws, df, "Severity breakdown", "Severity", ["Count"])),
         (issue_sheet_name, lambda ws, df: _add_bar_chart(ws, df, f"Issues by {group_col.lower()}", group_col, ["Count"])),
         ("Confidence Breakdown", lambda ws, df: _add_bar_chart(ws, df, "Confidence level breakdown", "Confidence level", ["Count"])),
+    ]
+    return _excel_bytes(sheets, charts=charts)
+
+
+# ---------------------------------------------------------------------------
+# Sample Report (Production Samples / Customer Trials & Samples /
+# Optimization Trials & Samples pages)
+#
+# Placement/mechanism (per user direction 2026-08-04): same pattern as the
+# Quality Test Result and Quality Issue reports - a comprehensive,
+# multi-field selection built up on the page itself (which run/trial(s),
+# which company/plant scope is active), so it lives on each of pages 9/11/
+# 12 rather than as a single dropdown choice on the Report page. This
+# function is source_type-aware (Production Run / Customer Trial /
+# Optimization Trial - see db.SAMPLE_SOURCE_TYPES) but otherwise identical
+# across all three pages, so it's one shared function rather than three
+# near-duplicates.
+#
+# This report purely aggregates the exact Sample id set the calling page
+# has already scoped (tenant) and filtered - it does not apply any scope
+# or filtering of its own. Answers two questions a raw sample list can't:
+# how complete is this selection's traceability (coverage - the % of
+# samples that actually have a quality test result attached), and what did
+# testing find once it happened (pass/fail rate of just the results linked
+# to these samples) - both as charts, per the Reports redesign ruling that
+# no report in this app dumps a raw row-by-row table.
+# ---------------------------------------------------------------------------
+
+def build_sample_report_data(session, source_type, sample_ids, scope):
+    """sample_ids: Sample ids already scoped (tenant) and filtered by the
+    calling page - see the module note above. scope: dict of already-
+    formatted display strings for the report header (selection_label
+    describing which run/trial(s)/date range was selected)."""
+    samples = (
+        session.query(Sample).filter(Sample.id.in_(sample_ids)).all()
+        if sample_ids else []
+    )
+    total_samples = len(samples)
+
+    zone_counts = {}
+    for s in samples:
+        zone = s.zone_label or "Unspecified"
+        zone_counts[zone] = zone_counts.get(zone, 0) + 1
+    zone_breakdown = [
+        {"Zone": k, "Sample count": v}
+        for k, v in sorted(zone_counts.items(), key=lambda kv: -kv[1])
+    ]
+
+    sample_id_set = {s.id for s in samples}
+    linked_results = (
+        session.query(PhysicalPropertyResult)
+        .filter(PhysicalPropertyResult.sample_id.in_(sample_id_set)).all()
+        if sample_id_set else []
+    )
+    samples_with_results = len({r.sample_id for r in linked_results if r.sample_id is not None})
+    coverage_pct = round(100 * samples_with_results / total_samples) if total_samples else None
+
+    pass_count = fail_count = not_computed_count = 0
+    for r in linked_results:
+        verdict = compute_pass_fail(r.property_name, r.target_value, r.actual_value) or "Not computed"
+        if verdict == "Pass":
+            pass_count += 1
+        elif verdict == "Fail":
+            fail_count += 1
+        else:
+            not_computed_count += 1
+    total_scored = pass_count + fail_count
+    pass_rate = round(100 * pass_count / total_scored) if total_scored else None
+
+    return {
+        "source_type": source_type,
+        "scope": scope,
+        "total_samples": total_samples,
+        "zone_breakdown": zone_breakdown,
+        "samples_with_results": samples_with_results,
+        "samples_without_results": total_samples - samples_with_results,
+        "coverage_pct": coverage_pct,
+        "pass_count": pass_count,
+        "fail_count": fail_count,
+        "not_computed_count": not_computed_count,
+        "pass_rate": pass_rate,
+    }
+
+
+def render_sample_report_pdf(data):
+    scope = data["scope"]
+
+    def build(story):
+        _title_block(story, f"Sample Report — {data['source_type']}", scope.get("selection_label", ""))
+        story.append(_key_value_table([
+            ("Samples in selection", data["total_samples"]),
+            ("With a quality result", data["samples_with_results"]),
+            ("Coverage", f"{data['coverage_pct']}%" if data["coverage_pct"] is not None else "—"),
+            ("Pass rate (linked results)", f"{data['pass_rate']}%" if data["pass_rate"] is not None else "—"),
+            ("Pass", data["pass_count"]), ("Fail", data["fail_count"]),
+        ]))
+
+        zone_rows = data["zone_breakdown"]
+        _bar_chart(
+            story, "Samples by zone",
+            [row["Zone"] for row in zone_rows], [row["Sample count"] for row in zone_rows],
+        )
+
+        _bar_chart(
+            story, "Linked quality result outcomes",
+            ["Pass", "Fail", "Not computed"],
+            [data["pass_count"], data["fail_count"], data["not_computed_count"]],
+            note="Pass/Fail of the quality test results recorded against these samples - not every "
+                 "sample has one yet, see Coverage above.",
+        )
+    return _pdf_bytes(build)
+
+
+def render_sample_report_excel(data):
+    scope = data["scope"]
+    header = [{
+        "Source": data["source_type"], "Selection": scope.get("selection_label", ""),
+        "Samples in selection": data["total_samples"],
+        "Samples with a quality result": data["samples_with_results"],
+        "Coverage": f"{data['coverage_pct']}%" if data["coverage_pct"] is not None else "—",
+        "Pass rate (linked results)": f"{data['pass_rate']}%" if data["pass_rate"] is not None else "—",
+        "Pass count": data["pass_count"], "Fail count": data["fail_count"],
+        "Not computed count": data["not_computed_count"],
+    }]
+    outcome_summary = [
+        {"Verdict": "Pass", "Count": data["pass_count"]},
+        {"Verdict": "Fail", "Count": data["fail_count"]},
+        {"Verdict": "Not computed", "Count": data["not_computed_count"]},
+    ]
+    sheets = {
+        "Header": header,
+        "By Zone": data["zone_breakdown"],
+        "Linked Result Outcomes": outcome_summary,
+    }
+    charts = [
+        ("By Zone", lambda ws, df: _add_bar_chart(ws, df, "Samples by zone", "Zone", ["Sample count"])),
+        (
+            "Linked Result Outcomes",
+            lambda ws, df: _add_bar_chart(ws, df, "Linked quality result outcomes", "Verdict", ["Count"]),
+        ),
     ]
     return _excel_bytes(sheets, charts=charts)
 
