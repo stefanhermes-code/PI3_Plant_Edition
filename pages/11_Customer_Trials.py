@@ -63,6 +63,7 @@ from helpers import (
 )
 from tenant_scope import (
     apply_scope,
+    clear_scope_cache,
     company_picker,
     customer_trial_ids_for_company,
     grade_ids_for_company,
@@ -194,6 +195,7 @@ with tab_create:
                         )
                     )
                     session.commit()
+                    clear_scope_cache()
                     st.success("Customer trial created.")
                     st.rerun()
 
@@ -555,6 +557,7 @@ with tab_edit_delete:
             def _do_delete(_session=session, _id=selected.id):
                 delete_customer_trial_cascade(_session, _id)
                 _session.commit()
+                clear_scope_cache()
                 st.session_state.pop("ct_selected_id", None)
 
             if page_usable:

@@ -85,6 +85,8 @@ used both to build app.py's nav and to render the permission grid on the
 User Roles / Default User Roles admin pages.
 """
 
+import streamlit as st
+
 from db import RolePagePermission
 
 # The three states the admin UI ever offers for a role's access to a page -
@@ -151,12 +153,24 @@ PLATFORM_ONLY_KEYS = frozenset(
 )
 
 
-def denied_page_keys(session, role_id):
-    """Every page_key this role has an explicit can_view=False row for."""
+@st.cache_data(ttl=60)
+def denied_page_keys(_session, role_id):
+    """Every page_key this role has an explicit can_view=False row for.
+
+    Cached (2026-08-05, performance audit): this runs from app.py's
+    module-level code, which reruns on every single widget interaction
+    anywhere in the app - previously that meant a fresh DB round trip for
+    nav visibility on every click. `_session` is underscore-prefixed so
+    Streamlit doesn't try to hash the SQLAlchemy Session object; the cache
+    key is just role_id, which is what actually determines the result.
+    save_access_states() below clears this cache immediately after any
+    edit, so a permission change is never masked by the 60s TTL - the TTL
+    is only there as a safety net for cache entries from a role that gets
+    edited by a process other than this one (e.g. a second browser tab)."""
     if not role_id:
         return set()
     rows = (
-        session.query(RolePagePermission)
+        _session.query(RolePagePermission)
         .filter(RolePagePermission.role_id == role_id, RolePagePermission.can_view.is_(False))
         .all()
     )
@@ -189,7 +203,15 @@ def save_access_states(session, role_id, states):
     (page_key -> ACCESS_HIDDEN/ACCESS_VIEW_ONLY/ACCESS_FULL). ACCESS_FULL
     entries are simply omitted, matching the existing "no row = full
     access" deny-list convention. Does not commit - caller controls the
-    transaction."""
+    transaction.
+
+    Clears denied_page_keys()'s cache for every role (st.cache_data has no
+    per-key clear, only clear-everything) so this edit takes effect on the
+    very next rerun instead of waiting out that cache's 60s TTL - the two
+    call sites (User Roles, Default User Roles) both save then immediately
+    rerun the page, so without this the admin would see their own edit
+    appear to not work."""
+    st.cache_data.clear()
     session.query(RolePagePermission).filter(RolePagePermission.role_id == role_id).delete(
         synchronize_session=False
     )

@@ -1430,8 +1430,32 @@ ALL_MODELS = [
 
 
 def init_db():
-    """Create all tables if they do not already exist. Safe to call on every app start."""
+    """Create all tables if they do not already exist. Safe to call on every
+    app start - the actual schema-reflection work now only runs once per
+    server process (see _ensure_schema_ready below), not once per call.
+
+    Before 2026-08-05 this called Base.metadata.create_all() directly and
+    was invoked from app.py's module-level code, which reruns on EVERY
+    Streamlit widget interaction anywhere in the app (app.py is the
+    st.navigation entry point - its top-level code re-executes on every
+    click, not just on navigation). That meant a full schema check
+    (Inspector round trip(s) against all ~39 mapped tables) against the
+    remote Supabase Postgres on every single click, forever, even though
+    the schema only ever needs checking once per process lifetime. This
+    was one of the largest fixed-overhead contributors to the "every
+    screen build takes 15-20s" performance report - see PROJECT_STATUS.md
+    / the v2.0 performance audit."""
+    _ensure_schema_ready()
+
+
+@st.cache_resource
+def _ensure_schema_ready():
+    """st.cache_resource caches the return value in-process, shared across
+    every browser session this server handles - so this body runs exactly
+    once per process, not once per rerun. Returns a value (rather than
+    None) only so the cache has something to store; callers never use it."""
     Base.metadata.create_all(bind=ENGINE)
+    return True
 
 
 def get_session():

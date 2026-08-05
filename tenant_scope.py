@@ -31,7 +31,40 @@ access_control.py and on the Plant/Raw Materials pages. An empty list
 - not silently fall through to "everything."
 """
 
+import streamlit as st
+
 from db import Company, CustomerTrial, FoamGrade, OptimizationTrial, Plant, ProductFamily, ProductionRun
+
+# TTL cache for every id-resolution helper below (2026-08-05 performance
+# audit): these walk Plant -> ProductFamily -> FoamGrade -> ... and are
+# called from the top of nearly every operational and Industrial
+# Intelligence page (18 of ~27 page files import this module) - often more
+# than once per page, and always identical within a short window since the
+# underlying master data (plants, families, grades, runs, trials) changes
+# far less often than Streamlit reruns happen (every widget click anywhere
+# in the app triggers a full script rerun). Before this, a single click on
+# a heavily-scoped page could easily cost 3-5 of these round trips just to
+# resolve "which ids am I allowed to see", on top of the page's own actual
+# data queries.
+#
+# 30s matches the precedent already established in analytics.py for the
+# same tradeoff. Correctness for the handful of pages that create/delete
+# Plant/ProductFamily/FoamGrade/ProductionRun/CustomerTrial/
+# OptimizationTrial rows (the six models these helpers resolve) is handled
+# by those pages calling clear_scope_cache() immediately after their own
+# commit, not by shortening this TTL - see clear_scope_cache() below.
+_SCOPE_CACHE_TTL = 30
+
+
+def clear_scope_cache():
+    """Call immediately after committing an add/edit/delete of a
+    Plant/ProductFamily/FoamGrade/ProductionRun/CustomerTrial/
+    OptimizationTrial row (or a Company row - company_picker's own list is
+    cached too), so the very next rerun sees fresh scope ids instead of
+    waiting out _SCOPE_CACHE_TTL. st.cache_data has no per-function/per-key
+    clear, only clear-everything - acceptable here since this only runs on
+    an actual write, not on every page view."""
+    st.cache_data.clear()
 
 
 def company_picker(st_module, session, is_platform_owner, own_company_id, key):
@@ -56,7 +89,7 @@ def company_picker(st_module, session, is_platform_owner, own_company_id, key):
     nothing downstream needs to special-case "exactly one company." As
     soon as a second company is created, the selectbox reappears
     automatically for platform owner on every page that calls this."""
-    all_companies = session.query(Company).order_by(Company.name).all()
+    all_companies = _all_companies(session)
     if is_platform_owner and len(all_companies) > 1:
         company = st_module.selectbox(
             "Company", [None] + all_companies,
@@ -70,31 +103,47 @@ def company_picker(st_module, session, is_platform_owner, own_company_id, key):
     return company, all_companies
 
 
-def plant_ids_for_company(session, company_id):
+def _all_companies(session):
+    """Deliberately NOT st.cache_data'd, unlike the id-list helpers below:
+    this returns live Company ORM objects, not plain ints. Each Streamlit
+    rerun opens its own fresh DB session, so a cached Company instance can
+    outlive the session that loaded it - the next rerun's lazy attribute
+    access (e.g. company.subscription_type) then hits SQLAlchemy's
+    DetachedInstanceError. Caught via AppTest during the 2026-08-05
+    performance batch. The companies table is tiny (one row per tenant),
+    so there's no real perf win worth that risk - only the scalar id-list
+    helpers below (plant_ids_for_company etc.) are cached."""
+    return session.query(Company).order_by(Company.name).all()
+
+
+@st.cache_data(ttl=_SCOPE_CACHE_TTL)
+def plant_ids_for_company(_session, company_id):
     """None (company_id is None) = unfiltered. Otherwise the list of
     Plant.id belonging to that company (possibly empty)."""
     if company_id is None:
         return None
-    return [pid for (pid,) in session.query(Plant.id).filter(Plant.company_id == company_id).all()]
+    return [pid for (pid,) in _session.query(Plant.id).filter(Plant.company_id == company_id).all()]
 
 
-def family_ids_for_plants(session, plant_ids):
+@st.cache_data(ttl=_SCOPE_CACHE_TTL)
+def family_ids_for_plants(_session, plant_ids):
     if plant_ids is None:
         return None
     if not plant_ids:
         return []
     return [
-        fid for (fid,) in session.query(ProductFamily.id).filter(ProductFamily.plant_id.in_(plant_ids)).all()
+        fid for (fid,) in _session.query(ProductFamily.id).filter(ProductFamily.plant_id.in_(plant_ids)).all()
     ]
 
 
-def grade_ids_for_families(session, family_ids):
+@st.cache_data(ttl=_SCOPE_CACHE_TTL)
+def grade_ids_for_families(_session, family_ids):
     if family_ids is None:
         return None
     if not family_ids:
         return []
     return [
-        gid for (gid,) in session.query(FoamGrade.id).filter(FoamGrade.product_family_id.in_(family_ids)).all()
+        gid for (gid,) in _session.query(FoamGrade.id).filter(FoamGrade.product_family_id.in_(family_ids)).all()
     ]
 
 
@@ -106,13 +155,14 @@ def grade_ids_for_company(session, company_id):
     return grade_ids_for_families(session, family_ids)
 
 
-def run_ids_for_plants(session, plant_ids):
+@st.cache_data(ttl=_SCOPE_CACHE_TTL)
+def run_ids_for_plants(_session, plant_ids):
     if plant_ids is None:
         return None
     if not plant_ids:
         return []
     return [
-        rid for (rid,) in session.query(ProductionRun.id).filter(ProductionRun.plant_id.in_(plant_ids)).all()
+        rid for (rid,) in _session.query(ProductionRun.id).filter(ProductionRun.plant_id.in_(plant_ids)).all()
     ]
 
 
@@ -122,13 +172,14 @@ def run_ids_for_company(session, company_id):
     return run_ids_for_plants(session, plant_ids)
 
 
-def customer_trial_ids_for_plants(session, plant_ids):
+@st.cache_data(ttl=_SCOPE_CACHE_TTL)
+def customer_trial_ids_for_plants(_session, plant_ids):
     if plant_ids is None:
         return None
     if not plant_ids:
         return []
     return [
-        tid for (tid,) in session.query(CustomerTrial.id).filter(CustomerTrial.plant_id.in_(plant_ids)).all()
+        tid for (tid,) in _session.query(CustomerTrial.id).filter(CustomerTrial.plant_id.in_(plant_ids)).all()
     ]
 
 
@@ -139,13 +190,14 @@ def customer_trial_ids_for_company(session, company_id):
     return customer_trial_ids_for_plants(session, plant_ids)
 
 
-def optimization_trial_ids_for_plants(session, plant_ids):
+@st.cache_data(ttl=_SCOPE_CACHE_TTL)
+def optimization_trial_ids_for_plants(_session, plant_ids):
     if plant_ids is None:
         return None
     if not plant_ids:
         return []
     return [
-        tid for (tid,) in session.query(OptimizationTrial.id).filter(OptimizationTrial.plant_id.in_(plant_ids)).all()
+        tid for (tid,) in _session.query(OptimizationTrial.id).filter(OptimizationTrial.plant_id.in_(plant_ids)).all()
     ]
 
 

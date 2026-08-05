@@ -24,7 +24,7 @@ from helpers import (
     show_pending_banner,
     view_only_notice,
 )
-from tenant_scope import apply_scope, company_picker, family_ids_for_plants, plant_ids_for_company
+from tenant_scope import apply_scope, clear_scope_cache, company_picker, family_ids_for_plants, plant_ids_for_company
 
 GRADE_REQUIRED_COLUMNS = ["product_family_id", "grade_name"]
 GRADE_OPTIONAL_COLUMNS = ["target_density", "target_hardness", "notes"]
@@ -106,6 +106,7 @@ with tab_family:
                             )
                         )
                         session.commit()
+                        clear_scope_cache()
                         st.success(f"Product family '{name}' added.")
                         st.rerun()
 
@@ -179,6 +180,7 @@ with tab_family:
                 def _do_delete_family(_session=session, _id=selected_family.id):
                     delete_product_family_cascade(_session, _id)
                     _session.commit()
+                    clear_scope_cache()
                     st.session_state.pop("family_selected_id", None)
 
                 delete_with_confirm(
@@ -228,6 +230,7 @@ with tab_grade:
                                     )
                                 )
                                 session.commit()
+                                clear_scope_cache()
                                 st.success(f"Foam grade '{grade_name}' added. Add any other target physical "
                                            "properties from the table below.")
                                 st.rerun()
@@ -275,6 +278,7 @@ with tab_grade:
                                 )
                             )
                         session.commit()
+                        clear_scope_cache()
                         msg = f"Imported {len(new_rows)} foam grade(s) from {filename}."
                         if dup_rows:
                             msg += f" Skipped {len(dup_rows)} row(s) already recorded for their product family (likely a repeat click)."
@@ -411,6 +415,7 @@ with tab_grade:
                     def _do_delete_grade(_session=session, _id=selected_grade.id):
                         delete_foam_grade_cascade(_session, _id)
                         _session.commit()
+                        clear_scope_cache()
                         st.session_state.pop("grade_selected_id", None)
 
                     delete_with_confirm(

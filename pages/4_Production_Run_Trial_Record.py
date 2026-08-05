@@ -99,7 +99,35 @@ from helpers import (
     upload_within_size_limit,
     view_only_notice,
 )
-from tenant_scope import apply_scope, company_picker, grade_ids_for_company, plant_ids_for_company
+from tenant_scope import apply_scope, clear_scope_cache, company_picker, grade_ids_for_company, plant_ids_for_company
+
+
+@st.cache_data(ttl=30)
+def _cached_versions_for_grade(_session, grade_id):
+    """RecipeVersion rows for one foam grade. This page's Edit-run form and
+    Add-run form each independently re-ran this exact query on every
+    rerun (a Streamlit rerun fires on every widget interaction anywhere on
+    the page, including switching tabs) - one of the contributors to this
+    page's ~31-query-per-click count found in the 2026-08-05 performance
+    audit. clear_scope_cache() (called after every write on this page)
+    invalidates this too."""
+    if not grade_id:
+        return []
+    return _session.query(RecipeVersion).filter(RecipeVersion.foam_grade_id == grade_id).all()
+
+
+@st.cache_data(ttl=30)
+def _cached_active_machines_for_plant(_session, plant_id):
+    """Active Machine rows for one plant - same repeated-query pattern as
+    _cached_versions_for_grade above, same fix."""
+    if not plant_id:
+        return []
+    return (
+        _session.query(Machine)
+        .filter(Machine.plant_id == plant_id, Machine.active.is_(True))
+        .all()
+    )
+
 
 RUN_REQUIRED_COLUMNS = ["foam_grade_id", "recipe_version_id"]
 RUN_OPTIONAL_COLUMNS = [
@@ -345,10 +373,7 @@ with tab_runs:
                     # a decision made on this page, it's whatever Recipes has marked
                     # current. Same fallback as Recipe Optimization's current_version
                     # for legacy data recorded before is_active existed.
-                    versions_for_grade = (
-                        session.query(RecipeVersion).filter(RecipeVersion.foam_grade_id == grade.id).all()
-                        if grade else []
-                    )
+                    versions_for_grade = _cached_versions_for_grade(session, grade.id if grade else None)
                     current_version = next(
                         (v for v in versions_for_grade if v.is_active),
                         versions_for_grade[-1] if versions_for_grade else None,
@@ -357,11 +382,8 @@ with tab_runs:
                         st.caption(f"Recipe version in use: **{current_version.version_label}** (current)")
                     else:
                         st.caption("⚠️ This foam grade has no recipe version yet - add one on the Recipes page first.")
-                    machines_for_plant = (
-                        session.query(Machine)
-                        .filter(Machine.plant_id == grade.product_family.plant_id, Machine.active.is_(True))
-                        .all()
-                        if grade else []
+                    machines_for_plant = _cached_active_machines_for_plant(
+                        session, grade.product_family.plant_id if grade else None
                     )
                     machine_options = [None] + machines_for_plant
                     machine_idx = next(
@@ -423,6 +445,7 @@ with tab_runs:
                 def _do_delete_run(_session=session, _run_id=selected_run.id):
                     delete_production_run_cascade(_session, _run_id)
                     _session.commit()
+                    clear_scope_cache()
                     st.session_state.pop("pr_selected_run_id", None)
 
                 if page_usable:
@@ -455,11 +478,7 @@ with tab_runs:
                 # No version picker - see the same note in the Edit Run form above.
                 # A new run always uses whichever recipe version is currently active
                 # for the chosen foam grade.
-                versions_for_grade = (
-                    session.query(RecipeVersion).filter(RecipeVersion.foam_grade_id == grade.id).all()
-                    if grade
-                    else []
-                )
+                versions_for_grade = _cached_versions_for_grade(session, grade.id if grade else None)
                 current_version = next(
                     (v for v in versions_for_grade if v.is_active),
                     versions_for_grade[-1] if versions_for_grade else None,
@@ -468,12 +487,8 @@ with tab_runs:
                     st.caption(f"Recipe version in use: **{current_version.version_label}** (current)")
                 else:
                     st.caption("⚠️ This foam grade has no recipe version yet - add one on the Recipes page first.")
-                machines_for_plant = (
-                    session.query(Machine)
-                    .filter(Machine.plant_id == grade.product_family.plant_id, Machine.active.is_(True))
-                    .all()
-                    if grade
-                    else []
+                machines_for_plant = _cached_active_machines_for_plant(
+                    session, grade.product_family.plant_id if grade else None
                 )
                 machine = st.selectbox(
                     "Machine / foaming line" + ("" if machines_for_plant else " (none set up for this plant yet)"),
@@ -502,6 +517,7 @@ with tab_runs:
                         )
                         session.add(run)
                         session.commit()
+                        clear_scope_cache()
                         st.session_state["pr_selected_run_id"] = run.id
                         st.success(f"Production run created. Batch reference: {run.batch_reference}.")
                         st.rerun()
@@ -515,7 +531,14 @@ with tab_runs:
             run_df, run_filename = csv_excel_uploader(RUN_REQUIRED_COLUMNS, RUN_OPTIONAL_COLUMNS, key="run_upload")
             if run_df is not None:
                 grades_by_id = {g.id: g for g in grades}
-                versions_by_id = {v.id: v for v in session.query(RecipeVersion).all()}
+                # Scoped to this company's grades (not an unfiltered, every-
+                # company RecipeVersion.all() as before the 2026-08-05
+                # performance audit) - cheaper, and no reason to pull other
+                # companies' recipe versions into a lookup dict just to
+                # validate this CSV upload.
+                versions_by_id = {
+                    v.id: v for v in apply_scope(session.query(RecipeVersion), RecipeVersion.foam_grade_id, grade_ids).all()
+                }
                 # Scoped to this company's plants too - otherwise a CSV row could
                 # reference a machine_id belonging to a different company (the
                 # foam_grade/recipe_version cross-check above doesn't catch this,
@@ -599,6 +622,7 @@ with tab_runs:
                             )
                         )
                     session.commit()
+                    clear_scope_cache()
                     msg = f"Imported {len(import_rows)} production run(s) from {run_filename}."
                     if dup_rows:
                         msg += f" Skipped {len(dup_rows)} row(s) whose batch_reference already exists (likely a repeat click)."

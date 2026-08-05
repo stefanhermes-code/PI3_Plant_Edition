@@ -17,7 +17,7 @@ from db import (
     init_db,
 )
 from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro, view_only_notice
-from tenant_scope import company_picker
+from tenant_scope import clear_scope_cache, company_picker
 
 page_setup("Plant & Foam Equipment Overview")
 init_db()
@@ -105,6 +105,7 @@ with st.expander("Add plant", expanded=False):
                         )
                     )
                     session.commit()
+                    clear_scope_cache()
                     st.success(f"Plant '{name}' added.")
                     st.rerun()
 
@@ -182,6 +183,7 @@ else:
             def _do_delete_plant(_session=session, _id=selected_plant.id):
                 delete_plant_cascade(_session, _id)
                 _session.commit()
+                clear_scope_cache()
                 st.session_state.pop("plant_selected_id", None)
 
             delete_with_confirm(

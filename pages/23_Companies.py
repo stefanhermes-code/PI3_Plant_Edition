@@ -28,6 +28,7 @@ import streamlit as st
 from auth import current_user, logout_button, require_login, require_platform_owner
 from db import Company, RawMaterial, Supplier, SubscriptionType, User, Plant, get_session, init_db
 from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
+from tenant_scope import clear_scope_cache
 from role_provisioning import clone_builtin_roles_for_company
 
 page_setup("Companies")
@@ -133,6 +134,7 @@ with st.expander("Add company", expanded=False):
                 session.flush()  # need new_company.id before cloning its roles
                 clone_builtin_roles_for_company(session, new_company.id)
                 session.commit()
+                clear_scope_cache()
                 st.success(f"Company '{name}' added. Go to User Accounts to create its first user.")
                 st.rerun()
 
@@ -263,6 +265,7 @@ else:
             def _do_delete_company(_session=session, _id=selected.id):
                 _session.query(Company).filter(Company.id == _id).delete(synchronize_session=False)
                 _session.commit()
+                clear_scope_cache()
                 st.session_state.pop("company_selected_id", None)
 
             delete_with_confirm(

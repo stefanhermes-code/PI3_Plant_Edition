@@ -64,6 +64,7 @@ from helpers import (
 )
 from tenant_scope import (
     apply_scope,
+    clear_scope_cache,
     company_picker,
     customer_trial_ids_for_company,
     grade_ids_for_company,
@@ -190,6 +191,7 @@ with tab_create:
                     )
                 )
                 session.commit()
+                clear_scope_cache()
                 st.success("Optimization trial created.")
                 st.rerun()
 
@@ -433,6 +435,7 @@ with tab_import:
                     )
                 )
             session.commit()
+            clear_scope_cache()
             msg = f"Imported {len(new_trial_rows)} optimization trial(s) from {trial_filename}."
             if dup_trial_rows:
                 msg += f" Skipped {len(dup_trial_rows)} row(s) already recorded for their grade + initiative ref + trial date (likely a repeat click)."
@@ -551,6 +554,7 @@ with tab_edit_delete:
             def _do_delete(_session=session, _id=selected.id):
                 delete_optimization_trial_cascade(_session, _id)
                 _session.commit()
+                clear_scope_cache()
                 st.session_state.pop("ot_selected_id", None)
 
             if page_usable:
