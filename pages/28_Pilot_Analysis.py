@@ -1,9 +1,13 @@
-"""Screen 28: Pilot Analysis
+"""Screen 28: Company Analysis
 
 Added 2026-08-03 for Gate 6, Item 56 of the Duroflex pilot readiness list
 (PI3_Application_Changes_Needed.docx, section 3.2): "HTC support/pilot-
-analysis view" - a single place for HTC to review how the pilot is
-actually being used, without needing direct Supabase access. Reads the
+analysis view" - a single place for HTC to review how a customer company is
+actually using the app, without needing direct Supabase access. Renamed
+2026-08-05 from "Pilot Analysis" to "Company Analysis" - the underlying
+page_key (pilot_analysis_admin) and file path are unchanged, this is a
+display-label-only rename, same pattern as the "Sidewall width" -> "Tunnel
+width" rename. Reads the
 seven audit tables added for Gate 6 (see db.py, "Audit / usage /
 pilot-learning logging package" and audit_log.py) - login/logout history
 (Item 47), page usage (Item 48), every PI3 question/answer with token
@@ -39,13 +43,13 @@ from db import (
 )
 from helpers import page_setup, render_data_table, render_function_action_intro
 
-page_setup("Pilot Analysis")
+page_setup("Company Analysis")
 init_db()
 require_login()
 require_platform_owner()
 logout_button()
 
-st.title("Pilot Analysis")
+st.title("Company Analysis")
 render_function_action_intro(
     function_text=(
         "HTC's own review of how a pilot deployment is actually being used - logins, page usage, "

@@ -165,7 +165,7 @@ PAGE_CATALOG = {
     "default_user_roles_admin": "Default User Roles",
     "user_accounts_admin": "User Accounts",
     "performance_admin": "Performance",
-    "pilot_analysis_admin": "Pilot Analysis",
+    "pilot_analysis_admin": "Company Analysis",
 }
 
 REPORT_KEYS = frozenset({"report"})
