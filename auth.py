@@ -182,7 +182,13 @@ def require_login():
         st.session_state.setdefault("auth_source", "dev")
         st.session_state.setdefault("username", "dev")
         st.session_state.setdefault("display_name", "Dev (auth disabled)")
-        st.session_state.setdefault("role", "Company Admin")
+        # "Platform Admin", not "Company Admin": this synthetic session also
+        # sets is_platform_owner=True below, and every real account with
+        # that flag set (HTC Global's own) is named "Platform Admin" - see
+        # access_control.STRUCTURALLY_REQUIRED_ROLE_NAMES's docstring for
+        # why the two names exist. Both satisfy the same require_role()
+        # checks either way, so this is cosmetic, not a capability change.
+        st.session_state.setdefault("role", "Platform Admin")
         st.session_state.setdefault("role_id", None)
         st.session_state.setdefault("company_id", None)
         st.session_state.setdefault("is_platform_owner", True)
