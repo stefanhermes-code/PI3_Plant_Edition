@@ -626,7 +626,7 @@ def _file_search_filters(company_id):
     }
 
 
-def ask_assistant(prompt, company_id=None):
+def ask_assistant(prompt, company_id=None, call_site="ask_assistant"):
     """Send a prompt to PI3 (file_search over the configured vector store,
     via the Responses API) and return (answer, interaction_log_id) - answer
     is the text response, or None (with an st.error already shown) on
@@ -651,6 +651,13 @@ def ask_assistant(prompt, company_id=None):
     has this in scope as `active_company_id` from company_picker(); pass
     it through rather than defaulting to None, or this call goes back to
     searching every company's documents.
+
+    `call_site` distinguishes which of the 5 fixed-prompt Intelligence
+    sections is asking (pages 15-19 each pass their own label - see those
+    callers) - added 2026-08-05 so the Performance admin page can break
+    PI3 response time down by page instead of pooling every fixed-prompt
+    call under one bucket. Defaults to the original "ask_assistant" label
+    for any caller that doesn't pass one.
     """
     if not prompt or not prompt.strip():
         return None, None
@@ -677,7 +684,7 @@ def ask_assistant(prompt, company_id=None):
         answer = response.output_text or None
         prompt_tokens, completion_tokens, total_tokens = _extract_token_usage(response)
         log_row = _record_pi3_interaction(
-            call_site="ask_assistant",
+            call_site=call_site,
             question_text=prompt,
             response_text=answer,
             company_id=company_id,
@@ -688,7 +695,7 @@ def ask_assistant(prompt, company_id=None):
         )
         return answer, (log_row.id if log_row is not None else None)
     except Exception as exc:
-        _record_pi3_error("ask_assistant", exc, company_id=company_id)
+        _record_pi3_error(call_site, exc, company_id=company_id)
         st.error("Could not reach PI3 right now. Try again in a moment, or contact your administrator if this continues.")
         return None, None
 

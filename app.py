@@ -11,10 +11,12 @@ the individual screens.
 """
 
 import datetime as dt
+import time
 
 import pandas as pd
 import streamlit as st
 
+import audit_log
 from access_control import denied_page_keys, page_visible
 from auth import current_user, logout_button, require_login
 from db import (
@@ -378,9 +380,23 @@ with st.sidebar:
         for page in pages:
             st.page_link(page)
 
+_page_load_t0 = time.perf_counter()
 try:
     pg.run()
 finally:
+    # Page-load timing (added 2026-08-05, v2.0 performance audit): pg.run()
+    # is the single choke point every page's script executes through, on
+    # both a fresh navigation and every widget-triggered rerun - timing
+    # around it here captures the real "how long did this page take"
+    # metric for every page, with no per-page-file instrumentation needed.
+    # Logged via the same session pg.run() itself used (get_session()
+    # returns one session per browser tab - see db.py), then committed by
+    # close_out_session() right below, same as any other write a page made
+    # during this rerun. Uses _nav_session rather than a fresh get_session()
+    # call so this still works even if the routed page's own script raised
+    # partway through (the finally still runs) and left that session's
+    # transaction in a state a NEW session wouldn't share.
+    audit_log.log_page_load(_nav_session, pg.title, (time.perf_counter() - _page_load_t0) * 1000)
     # See db.py close_out_session(): every rerun of every page must end
     # with no open transaction left on the database, or a read-only page
     # view (Trend Analysis, Recipe Optimization, ...) leaves one sitting

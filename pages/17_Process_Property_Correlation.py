@@ -238,7 +238,9 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "instructions to change a setting."
         )
         with st.spinner("Using PI3..."):
-            answer, interaction_log_id = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
+            answer, interaction_log_id = ai_assistant.ask_assistant(
+                prompt, company_id=active_company_id, call_site="process_property_correlation"
+            )
         if answer:
             st.session_state[f"correlation_ai_answer_{unit['state_key']}_{property_name}"] = answer
             st.session_state[f"correlation_ai_interaction_id_{unit['state_key']}_{property_name}"] = interaction_log_id

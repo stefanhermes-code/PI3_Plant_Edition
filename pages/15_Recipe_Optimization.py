@@ -632,7 +632,9 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             f"Target properties requested:\n{target_properties.strip()}\n"
         )
         with st.spinner("Using PI3..."):
-            answer, interaction_log_id = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
+            answer, interaction_log_id = ai_assistant.ask_assistant(
+                prompt, company_id=active_company_id, call_site="recipe_optimization"
+            )
         if answer:
             st.session_state[f"recipe_opt_ai_answer_{grade.id}"] = answer
             st.session_state[f"recipe_opt_ai_interaction_id_{grade.id}"] = interaction_log_id

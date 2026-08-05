@@ -21,12 +21,15 @@ st.error(), since a broken audit-log write is not something a plant
 reviewer needs to see or act on.
 """
 
+import datetime as dt
+import random
 import traceback as tb_module
 
 from db import (
     ErrorLog,
     ExportLog,
     LoginEvent,
+    PageLoadLog,
     PageViewEvent,
     PI3Feedback,
     PI3InteractionLog,
@@ -78,6 +81,33 @@ def log_page_view_if_new(session, session_state, user_id, company_id, page_name)
         session.add(row)
         if _safe_flush(session):
             session_state["_audit_last_page_logged"] = page_name
+    except Exception:
+        pass
+
+
+def log_page_load(session, page_name, duration_ms):
+    """Added 2026-08-05 for the v2.0 performance audit's Performance-page
+    expansion (page load time, by page). Called from app.py around the
+    single st.navigation() pg.run() call - the one choke point every
+    page's script runs through - so this fires for every page, on every
+    rerun, without touching any individual page file. Unlike
+    log_page_view_if_new above (deduped to once per navigation), this
+    logs every single rerun on purpose: a rerun re-executes the whole page
+    script, and "the app feels slow" was always about that per-rerun cost,
+    not just the first load.
+
+    Same best-effort + housekeeping convention as analytics._log_performance
+    (PerformanceLog): a logging failure must never break page routing, and
+    a ~2% chance per call of trimming rows older than 30 days keeps this
+    table from growing unbounded given how much more often it's written
+    than the once-per-navigation PageViewEvent."""
+    try:
+        session.add(PageLoadLog(page_name=page_name, duration_ms=round(duration_ms, 2)))
+        _safe_flush(session)
+        if random.random() < 0.02:
+            cutoff = dt.datetime.utcnow() - dt.timedelta(days=30)
+            session.query(PageLoadLog).filter(PageLoadLog.created_at < cutoff).delete()
+            _safe_flush(session)
     except Exception:
         pass
 

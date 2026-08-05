@@ -574,7 +574,9 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "the statistical vocabulary that should disappear, not the underlying facts."
         )
         with st.spinner("Using PI3..."):
-            answer, interaction_log_id = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
+            answer, interaction_log_id = ai_assistant.ask_assistant(
+                prompt, company_id=active_company_id, call_site="trend_analysis"
+            )
         if answer:
             st.session_state[f"trend_ai_answer_{unit['state_key']}_{property_name}"] = answer
             st.session_state[f"trend_ai_interaction_id_{unit['state_key']}_{property_name}"] = interaction_log_id

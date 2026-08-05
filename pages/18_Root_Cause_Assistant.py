@@ -253,7 +253,9 @@ if ai_assistant.is_enabled_for_plant(session, run.plant_id):
             f"What was different:\n{change_summary}\n"
         )
         with st.spinner("Using PI3..."):
-            answer, interaction_log_id = ai_assistant.ask_assistant(prompt, company_id=active_company_id)
+            answer, interaction_log_id = ai_assistant.ask_assistant(
+                prompt, company_id=active_company_id, call_site="root_cause_assistant"
+            )
         if answer:
             st.session_state[f"root_cause_ai_answer_{obs.id}"] = answer
             st.session_state[f"root_cause_ai_interaction_id_{obs.id}"] = interaction_log_id

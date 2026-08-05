@@ -1206,6 +1206,33 @@ class PerformanceLog(Base):
 
 
 # ---------------------------------------------------------------------------
+# 17b. page_load_logs
+# ---------------------------------------------------------------------------
+# Added 2026-08-05, alongside the v2.0 performance audit's caching batch, to
+# answer the actual original complaint directly ("a simple screen-build
+# takes 15-20 seconds") rather than only the narrower PerformanceLog metric
+# above (which only covers 3 shared data-loading functions, and only on a
+# cache miss). This instead records the FULL page-script execution time,
+# logged once per Streamlit rerun of ANY page - both a fresh navigation and
+# every widget-triggered rerun on that same page, since a rerun re-executes
+# the whole page script top to bottom under Streamlit's model. Measured
+# around app.py's single pg.run() call (see st.navigation()) - the one
+# choke point every page's script runs through - so this fires for every
+# page with no change needed to any of the ~27 individual page files.
+#
+# Much higher volume than PerformanceLog (every rerun, not just cache
+# misses), so it gets the same 30-day trim housekeeping - see
+# audit_log.log_page_load().
+class PageLoadLog(Base):
+    __tablename__ = "page_load_logs"
+
+    id = Column(Integer, primary_key=True)
+    page_name = Column(String(200), nullable=False)
+    duration_ms = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
 # 16a-16g. Audit / usage / pilot-learning logging package
 #
 # Added 2026-08-03 for Gate 6, Items 47-56 of the Duroflex pilot readiness
