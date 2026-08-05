@@ -14,6 +14,7 @@ import datetime as dt
 import time
 
 import pandas as pd
+import sqlalchemy.exc as sa_exc
 import streamlit as st
 
 import audit_log
@@ -383,25 +384,62 @@ with st.sidebar:
 _page_load_t0 = time.perf_counter()
 try:
     pg.run()
+    # Reaching here means this rerun's page script ran to completion using
+    # the cached session without SQLAlchemy objecting - clear any earlier
+    # recovery flag so a *future* one-off corruption (see except below) can
+    # still be auto-recovered from, rather than only ever once per tab.
+    st.session_state["_sa_session_recovery_attempted"] = False
+except sa_exc.InvalidRequestError:
+    # Production incident, 2026-08-05: a plain, ordinary .all() query on
+    # Default User Roles crashed with sqlalchemy.exc.InvalidRequestError
+    # from deep inside Session._connection_for_bind - not a bad query, a
+    # broken Session. get_session() deliberately caches ONE SQLAlchemy
+    # Session per browser tab across every rerun (see its docstring), but
+    # a Session is not thread-safe, and Streamlit can cancel an in-flight
+    # script run the moment a newer rerun supersedes it (e.g. two quick
+    # clicks, or a slow network round trip). If that cancellation lands
+    # mid-statement, the Session's internal transaction state machine is
+    # left stuck in a state that refuses ALL further SQL - on any page,
+    # not just the one that was interrupted - because the Session object
+    # itself is broken, not the data or the query.
+    #
+    # There is nothing page-specific to fix: discard the cached session
+    # (the next get_session() call builds a fresh one against a
+    # pool_pre_ping-verified connection) and rerun once so the user gets
+    # the page they asked for instead of a crash. Guarded to one recovery
+    # attempt per browser tab (reset above on the next clean run) so a
+    # different, page-code-level bug that happens to also raise
+    # InvalidRequestError can't silently rerun forever instead of
+    # surfacing normally.
+    if not st.session_state.get("_sa_session_recovery_attempted"):
+        st.session_state["_sa_session_recovery_attempted"] = True
+        st.session_state.pop("_sa_session", None)
+        st.rerun()
+    raise
 finally:
-    # Page-load timing (added 2026-08-05, v2.0 performance audit): pg.run()
-    # is the single choke point every page's script executes through, on
-    # both a fresh navigation and every widget-triggered rerun - timing
-    # around it here captures the real "how long did this page take"
-    # metric for every page, with no per-page-file instrumentation needed.
-    # Logged via the same session pg.run() itself used (get_session()
-    # returns one session per browser tab - see db.py), then committed by
-    # close_out_session() right below, same as any other write a page made
-    # during this rerun. Uses _nav_session rather than a fresh get_session()
-    # call so this still works even if the routed page's own script raised
-    # partway through (the finally still runs) and left that session's
-    # transaction in a state a NEW session wouldn't share.
-    audit_log.log_page_load(_nav_session, pg.title, (time.perf_counter() - _page_load_t0) * 1000)
-    # See db.py close_out_session(): every rerun of every page must end
-    # with no open transaction left on the database, or a read-only page
-    # view (Trend Analysis, Recipe Optimization, ...) leaves one sitting
-    # idle for as long as the browser tab stays open - which has already
-    # caused a real production incident (an 18-hour-old idle transaction
-    # blocking a schema migration). The try/finally ensures this still
-    # runs even if the routed page's script raised an exception.
-    close_out_session()
+    # Only touch the session if it's still the healthy one this rerun
+    # started with - if the except branch above discarded it, there is no
+    # transaction left to time/close, and touching the (broken, discarded)
+    # local reference again would just recreate the same failure.
+    if st.session_state.get("_sa_session") is _nav_session:
+        # Page-load timing (added 2026-08-05, v2.0 performance audit): pg.run()
+        # is the single choke point every page's script executes through, on
+        # both a fresh navigation and every widget-triggered rerun - timing
+        # around it here captures the real "how long did this page take"
+        # metric for every page, with no per-page-file instrumentation needed.
+        # Logged via the same session pg.run() itself used (get_session()
+        # returns one session per browser tab - see db.py), then committed by
+        # close_out_session() right below, same as any other write a page made
+        # during this rerun. Uses _nav_session rather than a fresh get_session()
+        # call so this still works even if the routed page's own script raised
+        # partway through (the finally still runs) and left that session's
+        # transaction in a state a NEW session wouldn't share.
+        audit_log.log_page_load(_nav_session, pg.title, (time.perf_counter() - _page_load_t0) * 1000)
+        # See db.py close_out_session(): every rerun of every page must end
+        # with no open transaction left on the database, or a read-only page
+        # view (Trend Analysis, Recipe Optimization, ...) leaves one sitting
+        # idle for as long as the browser tab stays open - which has already
+        # caused a real production incident (an 18-hour-old idle transaction
+        # blocking a schema migration). The try/finally ensures this still
+        # runs even if the routed page's script raised an exception.
+        close_out_session()
