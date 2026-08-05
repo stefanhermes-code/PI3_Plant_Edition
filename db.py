@@ -685,10 +685,14 @@ class ProductionPhase(Base):
     meters_produced = Column(Float)
 
     # Rise time - moved here from the now-retired RuntimeDataRecord table on
-    # 2026-08-02, so it flows through the same Setup-vs-Finalized comparison
-    # and PHASE_SETTING_FIELDS pipeline as every other process setting,
-    # rather than living in a separate loose runtime log. See
-    # RuntimeDataRecord below.
+    # 2026-08-02, so it lives on the same ProductionPhase row as everything
+    # else instead of a separate loose runtime log. See RuntimeDataRecord
+    # below. Like foam_height_mm/ambient_temperature_c/ambient_humidity_pct,
+    # this is a measured reaction-time OUTCOME, not a configured setting -
+    # removed from analytics.PHASE_SETTING_FIELDS on 2026-08-05 for that
+    # reason (see that list's docstring), so it no longer appears in the
+    # Machine Settings correlation/optimization rankings, only wherever a
+    # page genuinely wants the observed value.
     #
     # curing_notes (a free-text "curing/cutting timing notes" box) removed
     # 2026-08-03 per user direction - not a real, reliably-captured field in

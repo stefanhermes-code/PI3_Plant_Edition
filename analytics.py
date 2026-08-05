@@ -169,19 +169,35 @@ def _grade_id_list(foam_grade_id):
     return [foam_grade_id]
 
 # Machine/process settings captured per phase (see ProductionPhase in
-# db.py). These are the fields every process-vs-quality analysis works
-# from.
+# db.py) - deliberately CONTROLLABLE inputs only, not measured outcomes.
+# These are the fields every process-vs-quality analysis works from: the
+# "Machine Settings vs Physical Properties Correlation" and "Machine
+# Settings Optimization" pages both present this list as "the settings you
+# can act on", so a field that isn't actually something an operator sets
+# has no business appearing in either ranking - it would read as if
+# adjusting an outcome were the lever, which it never is.
+#
+# foam_height_mm, ambient_temperature_c, ambient_humidity_pct, and
+# rise_time were removed from this list on 2026-08-05 (a user correctly
+# spotted foam_height_mm still showing up in the correlation/optimization
+# rankings as if it were a "process setting"): all 4 are measured outcomes
+# of the foaming process, not configured inputs - see db.py's
+# ProductionPhase docstrings, and the 2026-08-03 decision that already
+# removed these same 4 fields from the Setup tab for exactly this reason
+# (foam_height_mm/ambient_* "RETIRED FROM THE SETUP TAB... a measured
+# outcome, not something planned"). That Setup-tab fix never propagated
+# back to this list, which is why the correlation/optimization pages kept
+# ranking them as settings for two more days. They're still readable
+# directly off ProductionPhase wherever a page genuinely wants the
+# observed outcome (e.g. Trend Analysis, or the Runtime Data tab's own
+# display) - just no longer treated as a lever to "optimize".
 PHASE_SETTING_FIELDS = [
     "mixer_rpm",
     "conveyor_speed",
     "air_injection_rate",
     "air_pressure_bar",
     "ratio_index",
-    "foam_height_mm",
     "sidewall_width_mm",
-    "ambient_temperature_c",
-    "ambient_humidity_pct",
-    "rise_time",
     "top_flat_system_used",
 ]
 
@@ -191,11 +207,7 @@ PHASE_SETTING_LABELS = {
     "air_injection_rate": "Air injection rate",
     "air_pressure_bar": "Air pressure (bar)",
     "ratio_index": "Ratio / index",
-    "foam_height_mm": "Foam height (mm)",
     "sidewall_width_mm": "Sidewall width (mm)",
-    "ambient_temperature_c": "Ambient temperature (°C)",
-    "ambient_humidity_pct": "Ambient humidity (%)",
-    "rise_time": "Rise time (s)",
     "top_flat_system_used": "Top-flat system in use",
 }
 
