@@ -8,13 +8,18 @@ validity window (valid_from/valid_until), and company/role scoping. A
 "company" is the tenant boundary (see db.py Company); a user's role can be
 one of the built-in role templates shared by every company (see the
 Default User Roles page) or a custom role a company's own admin defines
-on the User Roles page. "Company Admin" is the one structurally required
-template - see access_control.STRUCTURALLY_REQUIRED_ROLE_NAMES - every
-company always has a role by that exact name so its own admin pages stay
+on the User Roles page. "Company Admin" is the structurally required
+template every regular company is seeded with - see access_control.
+STRUCTURALLY_REQUIRED_ROLE_NAMES - so its own admin pages always stay
 reachable; renamed 2026-08-05 from "Platform Admin" (itself renamed
-2026-08-04 from the old literal "admin"), since that name misled people
-into thinking it granted cross-company platform-owner power - it never
-did (see require_platform_owner() below for what actually does).
+2026-08-04 from the old literal "admin"), since that name misled
+customers into thinking their own admin had cross-company platform-owner
+power - it never did (see require_platform_owner() below for what
+actually does). HTC's own company keeps a role literally named "Platform
+Admin" instead, on purpose - both names satisfy the exact same
+require_role() checks (see pages 24/25), so HTC's own admin is never
+worse off than a customer's, just labeled to match reality: HTC is the
+platform owner, every other company is a company.
 
 Legacy fallback: if the `users` table has zero rows at all (a deployment
 that hasn't been through the new User Accounts admin page yet), login
@@ -24,13 +29,15 @@ user exists, secrets.toml-based login is ignored entirely - there is no
 way to have both active at once, to avoid two disagreeing sources of truth
 for who's allowed in.
 
-Roles: full access ("Company Admin") down to read-only ("Read Only"),
-plus whatever else a company or the platform owner has added as a
-template on the Default User Roles page - not a fixed 3-tier list.
-"Company Admin" gets full access within its own company, including
-managing that company's users/custom roles; only the platform owner
-(HTC) can manage Companies or Subscription Types, regardless of any
-company's own Company Admin role (see require_platform_owner()).
+Roles: full access ("Company Admin", or "Platform Admin" for HTC's own
+company) down to read-only ("Read Only"), plus whatever else a company or
+the platform owner has added as a template on the Default User Roles
+page - not a fixed 3-tier list. "Company Admin"/"Platform Admin" gets
+full access within its own company, including managing that company's
+users/custom roles; only the platform owner (HTC) can manage Companies
+or Subscription Types, regardless of any company's own admin role name -
+that's gated by Company.is_platform_owner, not by role (see
+require_platform_owner()).
 
 is_super_admin (User.is_super_admin): an unconditional bypass of every
 RolePagePermission check, independent of role name or is_platform_owner -

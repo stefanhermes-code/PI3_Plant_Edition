@@ -34,7 +34,7 @@ from helpers import clickable_table, delete_with_confirm, page_access_grid, page
 page_setup("User Roles")
 init_db()
 require_login()
-require_role("Company Admin")
+require_role("Company Admin", "Platform Admin")
 logout_button()
 
 st.title("User Roles")

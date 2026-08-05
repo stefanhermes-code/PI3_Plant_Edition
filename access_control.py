@@ -103,20 +103,30 @@ ACCESS_STATE_LABELS = {
 }
 
 # Role names required by name-literal checks elsewhere in the app (see
-# auth.require_role("Company Admin") on the User Roles and User Accounts
-# pages, and pages/10_PI3_AI_Connectivity.py's role == "Company Admin"
-# check) - a company with no role named "Company Admin" could never
-# manage its own users or roles again. Enforced as a delete/rename guard
-# on the Default User Roles page. Renamed 2026-08-05 from "Platform Admin"
-# (itself renamed 2026-08-04 from the literal "admin") per user direction:
-# every company's own full-access role was showing up named "Platform
-# Admin" even though it only ever granted admin rights within that one
-# company - actual cross-company platform-owner power is, and always was,
-# controlled separately by Company.is_platform_owner / require_platform_
-# owner() and User.is_super_admin, never by this role's name. Every
-# company's existing "Platform Admin" clone was renamed to "Company
-# Admin" in the same batch, and new companies are no longer seeded with a
-# "Platform Admin" role at all - see role_provisioning.py.
+# auth.require_role("Company Admin", "Platform Admin") on the User Roles
+# and User Accounts pages, and pages/10_PI3_AI_Connectivity.py's role in
+# ("Company Admin", "Platform Admin") check) - a company with no role by
+# one of these two names could never manage its own users or roles again.
+# "Company Admin" is the one every regular company is seeded with (see
+# role_provisioning.py) and is what STRUCTURALLY_REQUIRED_ROLE_NAMES/
+# protected_role_name() actually protect on the Default User Roles page -
+# it's the only one of the two that's still a clonable template. "Platform
+# Admin" is a second, equally-valid name for the same two gates, reserved
+# exclusively for HTC's own company (the platform owner) - HTC's own role
+# is named that on purpose, distinct from every customer's "Company
+# Admin", even though the two names grant identical access to their own
+# company's admin pages. Neither name has ever granted cross-company
+# power on its own - that's controlled separately by Company.
+# is_platform_owner / require_platform_owner() and User.is_super_admin.
+#
+# History: renamed 2026-08-05 from "Platform Admin" (itself renamed
+# 2026-08-04 from the literal "admin") to "Company Admin" for every
+# regular company, since the old name misled customers into thinking
+# their own admin had platform-wide reach. HTC's own role was renamed
+# back to "Platform Admin" the same day, once it became clear HTC's own
+# admin should keep a visibly distinct label - the "Company Admin"
+# template itself was NOT reverted, so new companies still get the
+# correctly-scoped name.
 STRUCTURALLY_REQUIRED_ROLE_NAMES = frozenset({"company admin"})
 
 # page_key -> title (title kept here only for the permission-matrix editor;

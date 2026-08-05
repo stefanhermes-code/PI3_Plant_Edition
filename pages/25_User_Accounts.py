@@ -31,7 +31,7 @@ from helpers import clickable_table, delete_with_confirm, page_setup, render_fun
 page_setup("User Accounts")
 init_db()
 require_login()
-require_role("Company Admin")
+require_role("Company Admin", "Platform Admin")
 logout_button()
 
 st.title("User Accounts")
