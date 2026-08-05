@@ -26,12 +26,13 @@ access_control.py's PLATFORM_ONLY_KEYS.
 
 import datetime as dt
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
 from auth import logout_button, require_login, require_platform_owner
 from db import PerformanceLog, get_session, init_db
-from helpers import page_setup, render_data_table, render_function_action_intro
+from helpers import CHART_ZOOM_HINT, page_setup, render_data_table, render_function_action_intro
 
 page_setup("Performance")
 init_db()
@@ -126,10 +127,32 @@ timeline = (
     .mean()
     .dropna()
     .rename("Load time (ms)")
-    .to_frame()
+    .reset_index()
 )
-timeline["Overall average (ms)"] = log_df["duration_ms"].mean()
-st.line_chart(timeline)
+overall_avg = log_df["duration_ms"].mean()
+
+# Plain st.line_chart always anchors the Y-axis at 0, which is fine for a
+# metric that's naturally zero-based but not here: load times cluster in a
+# narrow band (see this page's earlier chart, roughly 700-1300ms), so a
+# zero-anchored axis squeezes all the real variation into a thin sliver at
+# the top - same fix applied to every other trend chart in the app (see
+# helpers.render_scatter_chart_no_zero, pages/16_Trend_Analysis.py).
+line = (
+    alt.Chart(timeline)
+    .mark_line(point=True)
+    .encode(
+        x=alt.X("created_at:T", title=None),
+        y=alt.Y("Load time (ms):Q", title="Load time (ms)", scale=alt.Scale(zero=False)),
+        tooltip=[alt.Tooltip("created_at:T", title="When"), alt.Tooltip("Load time (ms):Q", format=".0f")],
+    )
+)
+avg_rule = (
+    alt.Chart(pd.DataFrame({"avg": [overall_avg]}))
+    .mark_rule(color="#E45756", strokeDash=[4, 4])
+    .encode(y=alt.Y("avg:Q"))
+)
+st.altair_chart((line + avg_rule).interactive(), use_container_width=True)
+st.caption(CHART_ZOOM_HINT)
 
 st.subheader("By data type")
 st.caption(
