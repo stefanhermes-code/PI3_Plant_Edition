@@ -13,7 +13,6 @@ the individual screens.
 import datetime as dt
 import time
 
-import pandas as pd
 import sqlalchemy.exc as sa_exc
 import streamlit as st
 
@@ -30,11 +29,13 @@ from db import (
     ProductFamily,
     ProductionRun,
     QualityObservation,
+    RecipeVersion,
+    Sample,
     close_out_session,
     get_session,
     init_db,
 )
-from helpers import page_setup, render_data_table, render_function_action_intro
+from helpers import page_setup, render_function_action_intro
 from quality_standards import compute_pass_fail
 from version import APP_VERSION
 
@@ -96,16 +97,14 @@ def render_overview():
         )
     render_function_action_intro(
         function_text=(
-            "This is the landing dashboard: a snapshot of production run count, recurring "
-            "quality issues, quality test pass rate, and open customer/optimization trials across "
-            "whichever plant, product family, and foam grade you filter to, plus a table of the "
-            "most recently logged quality issues. The quick-action links below jump straight "
-            "into logging a new run, quality test result, or quality issue."
+            "This is the landing dashboard: a snapshot of how much is in the system and how it's "
+            "trending - recipes, production runs, samples/trials by source, quality tests, quality "
+            "issues, pass rate, and open trials - across whichever plant, product family, and foam "
+            "grade you filter to."
         ),
         action_text=(
-            "Filter by plant, product family, foam grade, and date range to scope the KPIs and "
-            "the recent-issues table to what you're reviewing. Use the quick-action links to jump "
-            "directly into common data-entry tasks instead of navigating the sidebar."
+            "Filter by plant, product family, foam grade, and date range to scope the KPIs to what "
+            "you're reviewing. Use the sidebar to navigate into any specific record or workflow."
         ),
     )
 
@@ -146,7 +145,9 @@ def render_overview():
 
     st.divider()
 
-    # --- KPI cards: production/quality first, experiments as a secondary metric ---
+    # --- KPI cards ----------------------------------------------------
+    # Row 1 (unchanged): the original production/quality-rate/open-trials
+    # snapshot.
     all_runs = session.query(ProductionRun).all()
     recurring_observations = (
         session.query(QualityObservation).filter(QualityObservation.frequency == "Recurring").all()
@@ -179,70 +180,32 @@ def render_overview():
     kpi3.metric("Quality test pass rate", pass_rate)
     kpi4.metric("Open customer/optimization trials", active_trials)
 
-    st.divider()
+    # Row 2 (added 2026-08-05 per user request): overall system volume -
+    # how much master data and how many quality records exist, full totals
+    # rather than the "recurring only"/"open only" slices above.
+    recipes_count = session.query(RecipeVersion).count()
+    quality_tests_count = len(all_results)
+    quality_issues_count = session.query(QualityObservation).count()
 
-    # --- Main table: recent quality issues by product family/grade ----
-    st.subheader("Recent quality issues")
+    kpi5, kpi6, kpi7 = st.columns(3)
+    kpi5.metric("Recipes", recipes_count)
+    kpi6.metric("Quality tests", quality_tests_count)
+    kpi7.metric("Quality issues", quality_issues_count)
 
-    obs_rows = []
-    for obs in session.query(QualityObservation).order_by(QualityObservation.observed_at.desc()).limit(25):
-        # Resolve whichever of the three mutually-exclusive sources this
-        # issue belongs to (see db.SAMPLE_SOURCE_TYPES) - a quality issue
-        # from a customer/optimization trial has no production_run at all.
-        if obs.production_run_id is not None:
-            run = obs.production_run
-            grade = run.foam_grade if run else None
-            source_desc = f"Run #{run.id}" if run else f"Run #{obs.production_run_id}"
-        elif obs.customer_trial_id is not None:
-            t = obs.customer_trial
-            grade = t.foam_grade if t else None
-            source_desc = f"Customer Trial #{t.id} — {t.customer_name}" if t else f"Customer Trial #{obs.customer_trial_id}"
-        elif obs.optimization_trial_id is not None:
-            t = obs.optimization_trial
-            grade = t.foam_grade if t else None
-            ref = (t.improvement_initiative_reference or "(no reference)") if t else ""
-            source_desc = f"Optimization Trial #{t.id} — {ref}" if t else f"Optimization Trial #{obs.optimization_trial_id}"
-        else:
-            grade = None
-            source_desc = "—"
-        family = grade.product_family if grade else None
-        obs_rows.append(
-            {
-                "Observed": obs.observed_at,
-                "Product family": family.name if family else "—",
-                "Foam grade": grade.grade_name if grade else "—",
-                "Source": source_desc,
-                "Issue type": obs.observation_type,
-                "Severity": obs.severity,
-                "Frequency": obs.frequency,
-                "Confidence": obs.confidence_level,
-            }
-        )
+    # Row 3 (added 2026-08-05): trials/samples broken out by the app's 3
+    # sample sources (see db.SAMPLE_SOURCE_TYPES) - "Production samples"
+    # covers the same production-run-linked samples the run count above
+    # doesn't otherwise surface a total for.
+    production_samples_count = (
+        session.query(Sample).filter(Sample.production_run_id.isnot(None)).count()
+    )
+    customer_trials_count = session.query(CustomerTrial).count()
+    optimization_trials_count = session.query(OptimizationTrial).count()
 
-    if obs_rows:
-        render_data_table(pd.DataFrame(obs_rows), max_height="500px")
-    else:
-        st.info("No quality issues recorded yet. Load demo data (see README) or start entering records.")
-
-    st.divider()
-
-    # --- Action buttons ------------------------------------------------------
-    # Each quick action links to a page that can itself be hidden by a role's
-    # page permissions or a subscription's feature flags (see access_control's
-    # _visible(), computed at module level once nav is built below) -
-    # st.page_link() raises if the target isn't among the pages passed to
-    # st.navigation(), so only show a quick action when its page is visible.
-    st.subheader("Quick actions")
-    quick_actions = [
-        ("pages/4_Production_Run_Trial_Record.py", "Add a production run", "➕", "production_run"),
-        ("pages/9_Samples_Conditioning.py", "Add a production sample", "🧊", "samples_conditioning"),
-        ("pages/5_Physical_Property_Result.py", "Record a quality test result", "📏", "quality_test_result"),
-        ("pages/6_Quality_Observation.py", "Add a quality issue", "📋", "quality_issue"),
-    ]
-    visible_actions = [a for a in quick_actions if _visible(a[3])]
-    if visible_actions:
-        for col, (page_path, label, icon, _key) in zip(st.columns(len(visible_actions)), visible_actions):
-            col.page_link(page_path, label=label, icon=icon)
+    kpi8, kpi9, kpi10 = st.columns(3)
+    kpi8.metric("Production samples", production_samples_count)
+    kpi9.metric("Customer trials", customer_trials_count)
+    kpi10.metric("Optimization trials", optimization_trials_count)
 
 overview_page = st.Page(render_overview, title="Overview", icon="🏠", default=True)
 report_page = st.Page("pages/21_Report.py", title="Report", icon="🖨️")
