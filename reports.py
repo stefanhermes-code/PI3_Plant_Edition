@@ -189,13 +189,14 @@ re-derives them, so the report always matches what's on screen:
 
 import datetime as dt
 import io
+import math
 import os
 import re
 
 import pandas as pd
 from docx import Document
 from docx.shared import Cm, Pt, RGBColor
-from reportlab.graphics import renderPM
+from PIL import Image, ImageDraw, ImageFont
 from reportlab.graphics.charts.barcharts import VerticalBarChart
 from reportlab.graphics.charts.linecharts import HorizontalLineChart
 from reportlab.graphics.shapes import Drawing
@@ -2557,14 +2558,182 @@ def render_pi3_qa_report_docx(data):
 # separately-drawn approximation.
 # ---------------------------------------------------------------------------
 
-def _drawing_to_png_bytes(drawing, dpi=144):
-    """Rasterizes a reportlab Drawing (a VerticalBarChart/HorizontalLineChart
-    flowable) to PNG bytes for embedding in a Word document - python-docx
-    has no native vector-chart support, so charts have to become images.
-    dpi=144 (2x the default 72) so the embed looks crisp at the width it's
-    placed at in the document, not blurry."""
+def _nice_ticks(vmin, vmax, target=5):
+    """Round-number axis ticks (the classic 1/2/5-times-a-power-of-ten
+    algorithm), so small integer ranges - e.g. a "samples by zone" count of
+    0-3 - get labels like 0, 1, 2, 3 instead of the literal vmin+span*i/5
+    fractions the first cut of these Pillow charts used (which produced
+    duplicate-looking labels like two rows both showing "2" and an odd
+    "0.60"). Returns (ticks, nice_min, nice_max)."""
+    if vmin == vmax:
+        vmin, vmax = vmin - 1, vmax + 1
+    raw_step = (vmax - vmin) / target
+    exponent = math.floor(math.log10(raw_step)) if raw_step > 0 else 0
+    fraction = raw_step / (10 ** exponent)
+    nice_fraction = 1 if fraction <= 1 else 2 if fraction <= 2 else 5 if fraction <= 5 else 10
+    step = nice_fraction * (10 ** exponent)
+    nice_min = math.floor(vmin / step) * step
+    nice_max = math.ceil(vmax / step) * step
+    n = max(1, round((nice_max - nice_min) / step))
+    ticks = [nice_min + i * step for i in range(n + 1)]
+    return ticks, nice_min, nice_max, step
+
+
+def _fmt_tick(v, step):
+    if step >= 1:
+        return f"{v:,.0f}"
+    decimals = max(0, -int(math.floor(math.log10(step))))
+    return f"{v:,.{decimals}f}"
+
+
+def _pil_font(size):
+    """ImageFont.load_default() has accepted a `size` argument (giving a
+    real scalable bitmap font instead of the tiny fixed 10px default) since
+    Pillow 9.2 - this app already requires Pillow 12.x as a transitive
+    reportlab dependency, so this is always available. No external .ttf
+    file needed, which matters: anything requiring a font file path is one
+    more thing that can be missing on a fresh Streamlit Cloud build."""
+    return ImageFont.load_default(size=size)
+
+
+def _pil_bar_chart_png(categories, values, bar_color_hex="#4A7A9D", zero_floor=True,
+                        width_px=1400, height_px=620):
+    """Pure-Pillow bar chart, rendered directly to PNG bytes for embedding
+    in a Word document. Replaces the old reportlab-Drawing +
+    renderPM.drawToFile() rasterization path (removed 2026-08-05): reportlab
+    5.0's renderPM hard-requires the rlPyCairo backend with no fallback
+    (see reportlab.graphics.renderPM._getPMBackend - 'cairo' not in the
+    backend name raises immediately), and pycairo publishes no Linux wheels
+    at all, so it can never install cleanly on Streamlit Cloud without a
+    from-source build needing system cairo dev headers - the same class of
+    problem already hit once with scipy/gfortran (see requirements.txt
+    history) and not worth repeating. Pillow is a mandatory, always-
+    installed reportlab dependency with real manylinux wheels for every
+    Python version this app runs on, so drawing the chart with it directly
+    sidesteps the cairo dependency entirely rather than trying to install
+    it. This crashed every Word report with a chart in production
+    (RenderPMError: cannot import desired renderPM backend rlPyCairo) until
+    fixed."""
+    cats = [str(c)[:16] for c in categories]
+    vals = [0.0 if v is None else float(v) for v in values]
+
+    margin_l, margin_r, margin_t, margin_b = 100, 30, 20, 90
+    plot_w = width_px - margin_l - margin_r
+    plot_h = height_px - margin_t - margin_b
+
+    if zero_floor:
+        raw_max = max(vals) if max(vals) > 0 else 1.0
+        ticks, _, vmax, step = _nice_ticks(0.0, raw_max)
+        vmin = 0.0
+        ticks = [t for t in ticks if t >= 0] or [0.0]
+    else:
+        raw_min, raw_max = min(vals), max(vals)
+        if raw_min == raw_max:
+            raw_min, raw_max = raw_min - 1, raw_max + 1
+        pad = (raw_max - raw_min) * 0.1
+        ticks, vmin, vmax, step = _nice_ticks(raw_min - pad, raw_max + pad)
+    span = (vmax - vmin) or 1.0
+
+    img = Image.new("RGB", (width_px, height_px), "white")
+    draw = ImageDraw.Draw(img)
+    font = _pil_font(22)
+
+    def y_for(v):
+        return margin_t + plot_h - (v - vmin) / span * plot_h
+
+    for v in ticks:
+        y = y_for(v)
+        draw.line([(margin_l, y), (width_px - margin_r, y)], fill="#E5E5E5", width=1)
+        label = _fmt_tick(v, step)
+        bbox = draw.textbbox((0, 0), label, font=font)
+        draw.text((margin_l - 12 - (bbox[2] - bbox[0]), y - (bbox[3] - bbox[1]) / 2 - bbox[1]),
+                   label, font=font, fill="#555555")
+
+    n = len(cats) or 1
+    slot_w = plot_w / n
+    bar_w = min(slot_w * 0.55, 100)
+    y_zero = y_for(0 if vmin <= 0 <= vmax else vmin)
+
+    for i, (cat, v) in enumerate(zip(cats, vals)):
+        cx = margin_l + slot_w * (i + 0.5)
+        y_val = y_for(v)
+        top, bottom = sorted([y_val, y_zero])
+        if bottom - top < 1:
+            bottom = top + 1
+        draw.rectangle([cx - bar_w / 2, top, cx + bar_w / 2, bottom], fill=bar_color_hex)
+        bbox = draw.textbbox((0, 0), cat, font=font)
+        draw.text((cx - (bbox[2] - bbox[0]) / 2, margin_t + plot_h + 14), cat, font=font, fill="#333333")
+
+    draw.line([(margin_l, margin_t), (margin_l, margin_t + plot_h)], fill="#999999", width=2)
+    draw.line([(margin_l, margin_t + plot_h), (width_px - margin_r, margin_t + plot_h)], fill="#999999", width=2)
+
     buf = io.BytesIO()
-    renderPM.drawToFile(drawing, buf, fmt="PNG", dpi=dpi)
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _pil_line_chart_png(categories, series, width_px=1400, height_px=640):
+    """Pure-Pillow multi-line chart, rendered directly to PNG bytes for
+    embedding in a Word document - see _pil_bar_chart_png's docstring for
+    why this replaced the reportlab-Drawing + renderPM path. series is an
+    ordered list of (label, values) pairs sharing the categories x-axis;
+    None values are simply skipped when drawing each line's polyline
+    (a real gap, not interpolated), matching the "no gaps" note the old
+    HorizontalLineChart-based version required callers to pre-filter for
+    anyway."""
+    cats = [str(c)[:10] for c in categories]
+    all_vals = [v for _, vals in series for v in vals if v is not None]
+    raw_min, raw_max = (min(all_vals), max(all_vals)) if all_vals else (0.0, 1.0)
+    if raw_min == raw_max:
+        raw_min, raw_max = raw_min - 1, raw_max + 1
+    pad = (raw_max - raw_min) * 0.1
+    ticks, vmin, vmax, tick_step = _nice_ticks(raw_min - pad, raw_max + pad)
+    span = (vmax - vmin) or 1.0
+
+    margin_l, margin_r, margin_t, margin_b = 100, 30, 20, 80
+    plot_w = width_px - margin_l - margin_r
+    plot_h = height_px - margin_t - margin_b
+    n = len(cats)
+
+    img = Image.new("RGB", (width_px, height_px), "white")
+    draw = ImageDraw.Draw(img)
+    font = _pil_font(20)
+
+    def y_for(v):
+        return margin_t + plot_h - (v - vmin) / span * plot_h
+
+    def x_for(i):
+        return margin_l + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
+
+    for v in ticks:
+        y = y_for(v)
+        draw.line([(margin_l, y), (width_px - margin_r, y)], fill="#E5E5E5", width=1)
+        label = _fmt_tick(v, tick_step)
+        bbox = draw.textbbox((0, 0), label, font=font)
+        draw.text((margin_l - 12 - (bbox[2] - bbox[0]), y - (bbox[3] - bbox[1]) / 2 - bbox[1]),
+                   label, font=font, fill="#555555")
+
+    step = max(1, n // 12)
+    for i, cat in enumerate(cats):
+        if i % step and i != n - 1:
+            continue
+        x = x_for(i)
+        bbox = draw.textbbox((0, 0), cat, font=font)
+        draw.text((x - (bbox[2] - bbox[0]) / 2, margin_t + plot_h + 10), cat, font=font, fill="#333333")
+
+    for s_idx, (_, series_vals) in enumerate(series):
+        color = _LINE_COLOR_HEX[s_idx % len(_LINE_COLOR_HEX)]
+        pts = [(x_for(i), y_for(v)) for i, v in enumerate(series_vals) if v is not None]
+        if len(pts) >= 2:
+            draw.line(pts, fill=color, width=3, joint="curve")
+        for (x, y) in pts:
+            draw.ellipse([x - 4, y - 4, x + 4, y + 4], fill=color)
+
+    draw.line([(margin_l, margin_t), (margin_l, margin_t + plot_h)], fill="#999999", width=2)
+    draw.line([(margin_l, margin_t + plot_h), (width_px - margin_r, margin_t + plot_h)], fill="#999999", width=2)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
     return buf.getvalue()
 
 
@@ -2616,8 +2785,9 @@ def _docx_section(doc, title, rows, columns=None, max_rows=200):
 
 def _docx_bar_chart(doc, title, categories, values, note=None, zero_floor=True,
                      bar_color=colors.HexColor("#4A7A9D")):
-    """Word twin of _bar_chart - same Drawing, rasterized to a PNG embed
-    since Word has no native vector-chart support via python-docx."""
+    """Word twin of _bar_chart - a pure-Pillow PNG embed (see
+    _pil_bar_chart_png's docstring) since Word has no native vector-chart
+    support via python-docx."""
     _docx_heading(doc, title, size=12, color=_HTC_GREY, space_before=10)
     if note:
         note_p = doc.add_paragraph(note)
@@ -2625,13 +2795,15 @@ def _docx_bar_chart(doc, title, categories, values, note=None, zero_floor=True,
     if not categories or not any(v not in (None, 0) for v in values):
         doc.add_paragraph("No data recorded.")
         return
-    drawing = _build_bar_chart_drawing(categories, values, bar_color=bar_color, zero_floor=zero_floor)
-    doc.add_picture(io.BytesIO(_drawing_to_png_bytes(drawing)), width=Cm(16))
+    png_bytes = _pil_bar_chart_png(categories, values, bar_color_hex="#" + bar_color.hexval()[2:],
+                                    zero_floor=zero_floor)
+    doc.add_picture(io.BytesIO(png_bytes), width=Cm(16))
 
 
 def _docx_line_chart(doc, title, categories, series, note=None):
-    """Word twin of _line_chart - same Drawing, rasterized to a PNG embed,
-    with the same color-coded legend line underneath."""
+    """Word twin of _line_chart - a pure-Pillow PNG embed (see
+    _pil_line_chart_png's docstring), with the same color-coded legend line
+    underneath."""
     _docx_heading(doc, title, size=12, color=_HTC_GREY, space_before=10)
     if note:
         note_p = doc.add_paragraph(note)
@@ -2639,8 +2811,8 @@ def _docx_line_chart(doc, title, categories, series, note=None):
     if not categories or not series or not any(any(v is not None for v in vals) for _, vals in series):
         doc.add_paragraph("No data recorded.")
         return
-    drawing = _build_line_chart_drawing(categories, series)
-    doc.add_picture(io.BytesIO(_drawing_to_png_bytes(drawing)), width=Cm(16))
+    png_bytes = _pil_line_chart_png(categories, series)
+    doc.add_picture(io.BytesIO(png_bytes), width=Cm(16))
     legend = doc.add_paragraph()
     for i, (label, _) in enumerate(series):
         run = legend.add_run(("   " if i else "") + "■ " + label)
