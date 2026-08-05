@@ -52,6 +52,57 @@ from db import (
 from quality_standards import compute_pass_fail
 
 
+def compute_runtime_output(phase, foam_grade):
+    """Derives the physical output of a production run (added 2026-08-05
+    per user request; moved here from pages/4_Production_Run_Trial_Record.py
+    on 2026-08-05 so the Overview page's meters/kg-produced KPIs can share
+    the exact same math as the Runtime Data tab's own calculated-output
+    display, instead of drifting apart as two copies) from whichever of
+    meters-produced / conveyor-speed / recorded start-end time is actually
+    known. Length and runtime are two ways of knowing the same thing
+    (length = speed x time), so this fills in whichever one is missing
+    rather than requiring both:
+    - meters_produced entered on the phase -> that IS the length; runtime is
+      only shown (by the caller) as an implied cross-check against the
+      recorded start/end times, never written back over them.
+    - meters_produced left blank -> length is calculated instead from
+      conveyor speed x the recorded start/end duration.
+    Sidewall width x foam height x length gives the produced volume (m3);
+    volume x the foam grade's target density gives the produced weight
+    (kg). Returns a dict of None-safe display values; never raises."""
+    result = {
+        "length_m": None, "length_source": None,
+        "actual_duration_min": None, "implied_duration_min": None,
+        "volume_m3": None, "weight_kg": None,
+    }
+    if phase is None:
+        return result
+
+    if phase.phase_start and phase.phase_end and phase.phase_end > phase.phase_start:
+        result["actual_duration_min"] = (phase.phase_end - phase.phase_start).total_seconds() / 60.0
+
+    speed = phase.conveyor_speed or None  # m/min
+
+    if phase.meters_produced:
+        result["length_m"] = phase.meters_produced
+        result["length_source"] = "entered"
+        if speed:
+            result["implied_duration_min"] = phase.meters_produced / speed
+    elif speed and result["actual_duration_min"] is not None:
+        result["length_m"] = speed * result["actual_duration_min"]
+        result["length_source"] = "calculated"
+
+    if result["length_m"] and phase.sidewall_width_mm and phase.foam_height_mm:
+        width_m = phase.sidewall_width_mm / 1000.0
+        height_m = phase.foam_height_mm / 1000.0
+        result["volume_m3"] = width_m * height_m * result["length_m"]
+        density = foam_grade.target_density if foam_grade else None
+        if density and result["volume_m3"] is not None:
+            result["weight_kg"] = result["volume_m3"] * density
+
+    return result
+
+
 def _log_performance(_session, function_name, foam_grade_id, property_name, duration_ms, row_count):
     """Records one PerformanceLog row (see db.py) for a cache-MISS call to
     one of the three functions below - added 2026-08-02 in response to a

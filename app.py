@@ -15,7 +15,9 @@ import time
 
 import sqlalchemy.exc as sa_exc
 import streamlit as st
+from sqlalchemy.orm import joinedload
 
+import analytics
 import audit_log
 from access_control import denied_page_keys, page_visible
 from auth import current_user, logout_button, require_login
@@ -27,6 +29,7 @@ from db import (
     PhysicalPropertyResult,
     Plant,
     ProductFamily,
+    ProductionPhase,
     ProductionRun,
     QualityObservation,
     RecipeVersion,
@@ -98,9 +101,10 @@ def render_overview():
     render_function_action_intro(
         function_text=(
             "This is the landing dashboard: a snapshot of how much is in the system and how it's "
-            "trending - recipes, production runs, samples/trials by source, quality tests, quality "
-            "issues, pass rate, and open trials - across whichever plant, product family, and foam "
-            "grade you filter to."
+            "trending, grouped into Volume, Quality & Performance, and Trials & Samples - across "
+            "whichever plant, product family, and foam grade you filter to. Meters/kg produced are "
+            "scoped to the date range below (defaults to year-to-date); every other KPI is an "
+            "all-time total."
         ),
         action_text=(
             "Filter by plant, product family, foam grade, and date range to scope the KPIs to what "
@@ -140,14 +144,15 @@ def render_overview():
     with col4:
         date_range = st.date_input(
             "Date range",
-            value=(dt.date.today() - dt.timedelta(days=90), dt.date.today()),
+            value=(dt.date(dt.date.today().year, 1, 1), dt.date.today()),
+            help="Defaults to year-to-date. Scopes the Meters produced / Kg produced KPIs below.",
         )
 
     st.divider()
 
-    # --- KPI cards ----------------------------------------------------
-    # Row 1 (unchanged): the original production/quality-rate/open-trials
-    # snapshot.
+    # --- KPI data --------------------------------------------------------
+    # All-time totals (unaffected by the date range above, same as before
+    # 2026-08-05's meters/kg addition).
     all_runs = session.query(ProductionRun).all()
     recurring_observations = (
         session.query(QualityObservation).filter(QualityObservation.frequency == "Recurring").all()
@@ -173,39 +178,89 @@ def render_overview():
         session.query(OptimizationTrial).filter(OptimizationTrial.status != "Closed").count()
     )
     active_trials = open_customer_trials + open_optimization_trials
-
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("Production runs", len(all_runs))
-    kpi2.metric("Recurring quality issues", len(recurring_observations))
-    kpi3.metric("Quality test pass rate", pass_rate)
-    kpi4.metric("Open customer/optimization trials", active_trials)
-
-    # Row 2 (added 2026-08-05 per user request): overall system volume -
-    # how much master data and how many quality records exist, full totals
-    # rather than the "recurring only"/"open only" slices above.
     recipes_count = session.query(RecipeVersion).count()
     quality_tests_count = len(all_results)
     quality_issues_count = session.query(QualityObservation).count()
-
-    kpi5, kpi6, kpi7 = st.columns(3)
-    kpi5.metric("Recipes", recipes_count)
-    kpi6.metric("Quality tests", quality_tests_count)
-    kpi7.metric("Quality issues", quality_issues_count)
-
-    # Row 3 (added 2026-08-05): trials/samples broken out by the app's 3
-    # sample sources (see db.SAMPLE_SOURCE_TYPES) - "Production samples"
-    # covers the same production-run-linked samples the run count above
-    # doesn't otherwise surface a total for.
+    # The app's 3 sample sources (see db.SAMPLE_SOURCE_TYPES) - "Production
+    # samples" covers the same production-run-linked samples the run count
+    # above doesn't otherwise surface a total for.
     production_samples_count = (
         session.query(Sample).filter(Sample.production_run_id.isnot(None)).count()
     )
     customer_trials_count = session.query(CustomerTrial).count()
     optimization_trials_count = session.query(OptimizationTrial).count()
 
-    kpi8, kpi9, kpi10 = st.columns(3)
-    kpi8.metric("Production samples", production_samples_count)
-    kpi9.metric("Customer trials", customer_trials_count)
-    kpi10.metric("Optimization trials", optimization_trials_count)
+    # Meters produced / Kg produced (added 2026-08-05 per user request) -
+    # the only 2 KPIs on this page scoped to the date-range filter above,
+    # since they're a rate/volume-over-time question ("how much did we make
+    # this year") rather than a system-size total. Reuses
+    # analytics.compute_runtime_output() - the exact same length/volume/
+    # weight math the Runtime Data tab's own calculated-output display
+    # uses - summed across every run in range, so the two never drift
+    # apart into two different answers for the same question.
+    #
+    # st.date_input's 2-tuple can momentarily be a 1-tuple while the user
+    # has only picked a start date - guarded here rather than crashing.
+    range_start, range_end = (date_range if len(date_range) == 2 else (None, None))
+    meters_produced_total = None
+    kg_produced_total = None
+    if range_start and range_end:
+        runs_in_range = (
+            session.query(ProductionRun)
+            .options(joinedload(ProductionRun.foam_grade))
+            .filter(ProductionRun.run_date >= range_start, ProductionRun.run_date <= range_end)
+            .all()
+        )
+        run_ids = [r.id for r in runs_in_range]
+        phases_by_run = {}
+        if run_ids:
+            phases_by_run = {
+                p.production_run_id: p
+                for p in session.query(ProductionPhase).filter(
+                    ProductionPhase.production_run_id.in_(run_ids),
+                    ProductionPhase.phase_name == "Finalized",
+                ).all()
+            }
+        meters_produced_total = 0.0
+        kg_produced_total = 0.0
+        for run in runs_in_range:
+            output = analytics.compute_runtime_output(phases_by_run.get(run.id), run.foam_grade)
+            if output["length_m"]:
+                meters_produced_total += output["length_m"]
+            if output["weight_kg"]:
+                kg_produced_total += output["weight_kg"]
+
+    # --- KPI cards, grouped for visual separation (2026-08-05) -----------
+    st.subheader("Volume")
+    v1, v2, v3, v4 = st.columns(4)
+    v1.metric("Recipes", recipes_count)
+    v2.metric("Production runs", len(all_runs))
+    v3.metric(
+        "Meters produced (in period)",
+        f"{meters_produced_total:,.0f} m" if meters_produced_total is not None else "—",
+    )
+    v4.metric(
+        "Kg produced (in period)",
+        f"{kg_produced_total:,.0f} kg" if kg_produced_total is not None else "—",
+    )
+
+    st.divider()
+
+    st.subheader("Quality & Performance")
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("Quality tests", quality_tests_count)
+    q2.metric("Quality issues", quality_issues_count)
+    q3.metric("Recurring quality issues", len(recurring_observations))
+    q4.metric("Quality test pass rate", pass_rate)
+
+    st.divider()
+
+    st.subheader("Trials & Samples")
+    t1, t2, t3, t4 = st.columns(4)
+    t1.metric("Production samples", production_samples_count)
+    t2.metric("Customer trials", customer_trials_count)
+    t3.metric("Optimization trials", optimization_trials_count)
+    t4.metric("Open customer/optimization trials", active_trials)
 
 overview_page = st.Page(render_overview, title="Overview", icon="🏠", default=True)
 report_page = st.Page("pages/21_Report.py", title="Report", icon="🖨️")
