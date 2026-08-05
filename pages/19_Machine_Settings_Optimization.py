@@ -1,7 +1,7 @@
 """Industrial Intelligence: Machine Settings Optimization
 
-Ranks every process setting (mixer rpm, ratio/index, air pressure, ...) by
-how clearly its low/medium/high ranges separate good outcomes from bad
+Ranks every process setting (mixer rpm, air pressure, conveyor speed, ...)
+by how clearly its low/medium/high ranges separate good outcomes from bad
 ones for a foam grade, so the setting most worth reviewing surfaces first
 - a starting point for technical review, not an automatic setpoint change.
 """
@@ -45,7 +45,7 @@ logout_button()
 st.title("Machine Settings Optimization")
 render_function_action_intro(
     function_text=(
-        "Ranks every Finalized-phase process setting (mixer rpm, ratio/index, air pressure, "
+        "Ranks every Finalized-phase process setting (mixer rpm, air pressure, "
         "conveyor speed, and so on) by how clearly its low/medium/high ranges separate outcomes "
         "closest to target from outcomes furthest from it, across a foam grade's production runs "
         "- a starting point for your team to review, not an automatic setpoint change. PI3 can "

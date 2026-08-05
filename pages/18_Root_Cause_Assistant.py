@@ -37,7 +37,7 @@ render_function_action_intro(
     function_text=(
         "Given a logged quality issue, compares that run against the most recent prior run of the "
         "same foam grade and lists what was different - recipe version, machine, or Finalized-"
-        "phase process settings (mixer rpm, ratio/index, air pressure, and so on) - as a starting "
+        "phase process settings (mixer rpm, air pressure, conveyor speed, and so on) - as a starting "
         "point for your own investigation, not a diagnosis. PI3 can then help interpret that diff "
         "against expert notes and similar past cases."
     ),

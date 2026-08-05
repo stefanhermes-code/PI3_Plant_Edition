@@ -1,7 +1,7 @@
 """Industrial Intelligence: Machine Settings vs Physical Properties Correlation
 
 Cross-references every machine/process setting (Finalized-phase mixer rpm,
-ratio/index, air pressure, ...) against a physical property outcome for
+air pressure, conveyor speed, ...) against a physical property outcome for
 the same production runs at once, ranked by strength, so the reviewer sees
 which settings actually move the needle on quality without checking each
 one individually. PI3 can then synthesize the ranked pattern into a plain-
@@ -45,7 +45,7 @@ logout_button()
 st.title("Machine Settings vs Physical Properties Correlation")
 render_function_action_intro(
     function_text=(
-        "Cross-references every Finalized-phase machine/process setting (mixer rpm, ratio/index, "
+        "Cross-references every Finalized-phase machine/process setting (mixer rpm, "
         "air pressure, conveyor speed, and so on) against a chosen physical property outcome, "
         "across the same production runs at once, ranked by correlation strength - so you see "
         "which settings actually move that property's outcome without checking each one "
