@@ -3156,13 +3156,24 @@ def build_trend_analysis_report_data(
     if trend is not None:
         if trend["significant"]:
             trend_line = (
-                f"Yes - a real, sustained {trend['direction']} trend, changing by about "
-                f"{trend['slope_per_run']:+.4g} per run on average, across {trend['n']} runs."
+                f"Yes - a real, sustained {trend['direction']} trend: the fitted straight line "
+                f"changes by {trend['slope_per_run']:+.4g} per run, explains "
+                f"{trend['r_squared'] * 100:.0f}% of the run-to-run variation (R²={trend['r_squared']:.2f}), "
+                f"with only a {trend['p_value'] * 100:.2g}% chance this slope is random noise "
+                f"(p={trend['p_value']:.4f}), across {trend['n']} runs."
             )
         else:
             trend_line = (
                 f"No - the apparent {trend['direction']} movement across {trend['n']} runs looks "
-                "like normal run-to-run variation, not a real trend."
+                f"like normal run-to-run variation: the fitted straight line explains only "
+                f"{trend['r_squared'] * 100:.0f}% of the run-to-run variation (R²={trend['r_squared']:.2f}), "
+                f"and there's a {trend['p_value'] * 100:.2g}% chance this slope is random noise "
+                f"(p={trend['p_value']:.4f})."
+            )
+        if trend["mk_significant"] != trend["significant"]:
+            trend_line += (
+                f" Note: a non-parametric Mann-Kendall cross-check disagrees (tau={trend['mk_tau']:+.2f}, "
+                f"p={trend['mk_p_value']:.4f}) - the drift may not be a straight line."
             )
 
     change_display_rows = [

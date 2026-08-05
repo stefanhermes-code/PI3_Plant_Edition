@@ -1172,13 +1172,34 @@ def cusum_analysis(series_df, k=0.5, h=5.0, min_points=8):
 
 
 def trend_test(series_df, min_points=5, alpha=0.05):
-    """Formal test for a monotonic trend over the run sequence: linear
-    regression of actual_value against run order, with a significance test
-    on the slope (via scipy.stats.linregress). This replaces an
-    eyeballed/first-half-vs-second-half average with an actual answer to
-    "is this a statistically real trend or is it noise" - p < 0.05 is the
-    conventional threshold used here. Returns None if there aren't enough
-    points yet."""
+    """Formal test for a monotonic trend over the run sequence - two
+    complementary checks, not one, so the verdict doesn't rest on a single
+    assumption about the trend's shape (fixed 2026-08-05: a user correctly
+    pointed out that a linear-only test silently assumes the drift is a
+    straight line, and never says so):
+
+    1. Linear regression (scipy.stats.linregress) of actual_value against
+       run order - the primary test. Assumes the drift proceeds at a
+       roughly CONSTANT rate (a straight line) - the shape a steady
+       mechanical/chemical cause (pump wear, catalyst degradation, a
+       drifting raw-material lot) typically produces. slope/intercept
+       together define the fitted line the page draws directly on the
+       results chart; r_squared is how much of the run-to-run variation
+       that line explains; p_value is the chance a slope this steep is
+       just random noise.
+    2. Mann-Kendall (Kendall's tau via scipy.stats.kendalltau, of
+       actual_value against run order) - a secondary, non-parametric
+       cross-check that only assumes the DIRECTION is consistent, not
+       that the rate is constant. This is what catches a real trend that
+       curves or changes pace, which the linear test's R² would otherwise
+       under-credit and risk being read as noise. mk_significant usually
+       agrees with `significant`; when it doesn't, that disagreement
+       itself is the useful signal (see pages/16_Trend_Analysis.py's
+       cross-check message) - it means the drift likely isn't a straight
+       line.
+
+    p < 0.05 (alpha) is the conventional threshold used for both. Returns
+    None if there aren't enough points yet."""
     n = len(series_df)
     if n < min_points:
         return None
@@ -1190,12 +1211,27 @@ def trend_test(series_df, min_points=5, alpha=0.05):
     direction = "increasing" if result.slope > 0 else ("decreasing" if result.slope < 0 else "flat")
     significant = result.pvalue < alpha
 
+    mk = scipy_stats.kendalltau(x, values)
+    mk_tau = float(mk.correlation)
+    mk_p_value = float(mk.pvalue)
+    if np.isnan(mk_tau):
+        mk_tau = 0.0
+    if np.isnan(mk_p_value):
+        mk_p_value = 1.0
+    mk_significant = mk_p_value < alpha
+    mk_direction = "increasing" if mk_tau > 0 else ("decreasing" if mk_tau < 0 else "flat")
+
     return {
         "n": n,
         "slope_per_run": round(float(result.slope), 5),
+        "intercept": round(float(result.intercept), 5),
         "r_squared": round(float(result.rvalue) ** 2, 3),
         "p_value": round(float(result.pvalue), 4),
         "significant": significant,
         "direction": direction,
         "alpha": alpha,
+        "mk_tau": round(mk_tau, 3),
+        "mk_p_value": round(mk_p_value, 4),
+        "mk_significant": mk_significant,
+        "mk_direction": mk_direction,
     }

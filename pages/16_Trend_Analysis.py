@@ -338,46 +338,75 @@ else:
 # Trend test
 # ---------------------------------------------------------------------------
 st.divider()
-st.subheader("Is this a real trend?")
+st.subheader(f"Is there a real trend in {property_name}?")
 trend = trend_test(series)
 if trend is None:
-    st.info("Not enough results yet to tell whether this is a real trend or just noise.")
+    st.info(f"Not enough results yet to tell whether {property_name} has a real trend or is just noise.")
 else:
     noise_chance_pct = trend["p_value"] * 100
     fit_pct = trend["r_squared"] * 100
+    mk_noise_chance_pct = trend["mk_p_value"] * 100
+
+    st.caption(
+        "Two checks are run together, since relying on one test's assumption about the trend's "
+        "shape can be misleading either way: a **linear regression** (assumes a constant rate of "
+        "change - the shape a steady mechanical/chemical cause like pump wear or catalyst "
+        "degradation actually produces) and a **Mann-Kendall test** (only assumes the direction is "
+        "consistent, not the rate - catches a real trend that curves or changes pace, which the "
+        "linear test alone could under-credit as noise)."
+    )
+
+    # The fitted straight line drawn directly on the actual results, so the
+    # line behind the verdict below is visible rather than just asserted -
+    # a user reasonably objected to being told "a straight line was fit"
+    # without ever being shown that line (fixed 2026-08-05).
+    fitted_line = [trend["intercept"] + trend["slope_per_run"] * i for i in range(len(series))]
+    trend_chart_df = series[["tested_at", "actual_value"]].copy().set_index("tested_at")
+    trend_chart_df["Linear trend line"] = fitted_line
+    trend_chart_df = trend_chart_df.rename(columns={"actual_value": "Actual result"})
+    _line_chart_no_zero(trend_chart_df, ["Actual result", "Linear trend line"])
+
     if trend["significant"]:
         st.info(
-            f"Yes - this is a real, sustained {trend['direction']} trend, not just noise: changing "
-            f"by about {trend['slope_per_run']:+.4g} per run on average, across {trend['n']} runs."
+            f"**Yes - real trend.** The fitted straight line changes by {trend['slope_per_run']:+.4g} "
+            f"per run and explains {fit_pct:.0f}% of the run-to-run variation (R²={trend['r_squared']:.2f}). "
+            f"A slope this steep has only a {noise_chance_pct:.2g}% chance of occurring from random "
+            "noise alone - below the 5% bar this test requires - so the "
+            f"**{trend['direction']}** movement across {trend['n']} runs is being read as a real, "
+            "sustained trend, not noise."
         )
     else:
         st.success(
-            f"No - the apparent {trend['direction']} movement across {trend['n']} runs looks like "
-            "normal run-to-run variation, not a real trend."
+            f"**No - not a confirmed trend.** The fitted straight line explains only {fit_pct:.0f}% "
+            f"of the run-to-run variation (R²={trend['r_squared']:.2f}), and there's a "
+            f"{noise_chance_pct:.2g}% chance a slope this steep would occur from random noise alone "
+            "- above the 5% bar this test requires. The apparent "
+            f"**{trend['direction']}** movement across {trend['n']} runs is being read as normal "
+            "run-to-run variation, not a real trend."
         )
-    # Plain-language breakdown of the actual criteria and numbers behind the
-    # verdict above, not just the yes/no - a straight line is fit through
-    # these results in production order, and it's only called a real trend
-    # when there's less than a 5% chance that line is just random noise
-    # (the conventional p<0.05 threshold - see trend_test() in analytics.py).
-    # This is deliberately the strictest of the four checks on this page:
-    # the control chart and slow-drift check above are tuned to catch a
-    # real problem early even from a handful of points, while this test's
-    # job is the final, rigorous confirmation - so "No" is the common,
-    # correct answer for anything short of a clean, sustained signal, and
-    # becomes easier to confirm as more results accumulate or the
-    # underlying noise is lower.
+
+    if trend["mk_significant"] == trend["significant"]:
+        st.caption(
+            f"Mann-Kendall agrees: tau={trend['mk_tau']:+.2f} ({trend['mk_direction']}), "
+            f"{mk_noise_chance_pct:.2g}% chance this is noise."
+        )
+    else:
+        mk_verdict = "flags a real trend" if trend["mk_significant"] else "finds no real trend"
+        linear_verdict = "did" if trend["significant"] else "did not"
+        st.warning(
+            f"Mann-Kendall disagrees with the straight-line test: tau={trend['mk_tau']:+.2f} "
+            f"({trend['mk_direction']}), {mk_noise_chance_pct:.2g}% chance this is noise - it "
+            f"{mk_verdict}, where the straight-line test {linear_verdict}. This usually means the "
+            "drift isn't a steady straight line - it may be curving, accelerating, or changing "
+            "pace - worth a visual check on the chart above before trusting either verdict alone."
+        )
+
     st.caption(
-        f"How this is decided: a straight line is fit through these {trend['n']} results in "
-        f"production order. It's only called a real trend when there's less than a 5% chance "
-        f"that a line this steep would appear just from random run-to-run noise - here, that "
-        f"chance is {noise_chance_pct:.3g}%. That line accounts for {fit_pct:.3g}% of the "
-        "run-to-run variation seen in these results (a low number means the results bounce "
-        "around too much for a straight trend line to be a good description at all, regardless "
-        "of direction). Fewer results or noisier data both make the 5% bar harder to clear, "
-        "which is why a real, gradual drift can take a while to get confirmed here - the control "
-        "chart and slow-drift check above are tuned to flag it earlier; this test is the final, "
-        "stricter word on whether it's statistically real."
+        f"Both tests use the conventional p<0.05 significance threshold, fit through these "
+        f"{trend['n']} results in production order. Fewer results or noisier data make the 5% bar "
+        "harder to clear either way, which is why a real, gradual drift can take a while to get "
+        "confirmed here - the control chart and slow-drift check above are tuned to flag a "
+        "problem earlier; these are the final, stricter word on whether it's statistically real."
     )
 
 # ---------------------------------------------------------------------------
@@ -447,13 +476,14 @@ trend_report_data = reports.build_trend_analysis_report_data(
     session, unit, property_name, series, pooling_grades,
     chart_result, capability, cusum, trend, change_rows, include_trials,
 )
-tr_rc1, tr_rc2 = st.columns(2)
+tr_rc1, tr_rc2, tr_rc3 = st.columns(3)
 tr_rc1.metric(
     "Control chart", "In control" if chart_result.get("in_control") else (
         "Flagged" if chart_result.get("ready") else "—"
     ),
 )
 tr_rc2.metric("Real trend?", "Yes" if (trend and trend["significant"]) else ("No" if trend else "—"))
+tr_rc3.metric("Trend strength (R²)", f"{trend['r_squared']:.2f}" if trend else "—")
 st.download_button(
     "Download Word", data=reports.render_trend_analysis_report_docx(trend_report_data),
     file_name="trend_analysis_report.docx",
@@ -524,9 +554,12 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
 
         if trend is not None:
             trend_summary = (
-                f"{'Statistically significant' if trend['significant'] else 'Not statistically significant'} "
+                f"Linear regression: {'statistically significant' if trend['significant'] else 'not statistically significant'} "
                 f"{trend['direction']} trend, p={trend['p_value']:.4f}, R²={trend['r_squared']:.2f}, "
-                f"slope {trend['slope_per_run']:+.4g} per run."
+                f"slope {trend['slope_per_run']:+.4g} per run. "
+                f"Mann-Kendall cross-check: tau={trend['mk_tau']:+.2f} ({trend['mk_direction']}), "
+                f"p={trend['mk_p_value']:.4f} "
+                f"({'agrees' if trend['mk_significant'] == trend['significant'] else 'DISAGREES - the drift may not be a straight line'})."
             )
         else:
             trend_summary = "Not enough data for a trend test."
