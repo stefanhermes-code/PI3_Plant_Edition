@@ -673,6 +673,17 @@ class ProductionPhase(Base):
     # are never destroyed, same precedent as RuntimeDataRecord.
     ratio_index = Column(Float)
 
+    # Length of foam actually produced during this phase, in metres - added
+    # 2026-08-05 per user request, Runtime Data (Finalized) only, same
+    # precedent as foam_height_mm above (a measured outcome, not a Setup
+    # setting - never shown on the Setup form). Optional: when left blank,
+    # the Runtime Data tab calculates it instead from conveyor_speed x the
+    # phase_start/phase_end duration - see pages/4's _compute_runtime_output().
+    # Combined with sidewall_width_mm and foam_height_mm this gives the
+    # produced volume (m3), and with the foam grade's target_density, the
+    # produced weight (kg).
+    meters_produced = Column(Float)
+
     # Rise time - moved here from the now-retired RuntimeDataRecord table on
     # 2026-08-02, so it flows through the same Setup-vs-Finalized comparison
     # and PHASE_SETTING_FIELDS pipeline as every other process setting,

@@ -160,7 +160,7 @@ SETUP_OPTIONAL_COLUMNS = [
 RUNTIME_REQUIRED_COLUMNS = ["production_run_id"]
 RUNTIME_OPTIONAL_COLUMNS = SETUP_OPTIONAL_COLUMNS + [
     "foam_height_mm", "ambient_temperature_c", "ambient_humidity_pct",
-    "rise_time",
+    "rise_time", "meters_produced",
 ]
 
 # Component stream readings are actual measurements taken once production is
@@ -237,6 +237,53 @@ def _run_selector(runs, key):
     if run is not None:
         st.session_state["pr_selected_run_id"] = run.id
     return run
+
+
+def _compute_runtime_output(phase, foam_grade):
+    """Derives the physical output of a run (added 2026-08-05 per user
+    request) from whichever of meters-produced / conveyor-speed / recorded
+    start-end time is actually known. Length and runtime are two ways of
+    knowing the same thing (length = speed x time), so this fills in
+    whichever one is missing rather than requiring both:
+    - meters_produced entered -> that IS the length; runtime is only shown
+      as an implied cross-check against the recorded start/end times, never
+      written back over the recorded times.
+    - meters_produced left blank -> length is calculated instead from
+      conveyor speed x the recorded start/end duration.
+    Sidewall width x foam height x length gives the produced volume (m3);
+    volume x the foam grade's target density gives the produced weight
+    (kg). Returns a dict of None-safe display values; never raises."""
+    result = {
+        "length_m": None, "length_source": None,
+        "actual_duration_min": None, "implied_duration_min": None,
+        "volume_m3": None, "weight_kg": None,
+    }
+    if phase is None:
+        return result
+
+    if phase.phase_start and phase.phase_end and phase.phase_end > phase.phase_start:
+        result["actual_duration_min"] = (phase.phase_end - phase.phase_start).total_seconds() / 60.0
+
+    speed = phase.conveyor_speed or None  # m/min
+
+    if phase.meters_produced:
+        result["length_m"] = phase.meters_produced
+        result["length_source"] = "entered"
+        if speed:
+            result["implied_duration_min"] = phase.meters_produced / speed
+    elif speed and result["actual_duration_min"] is not None:
+        result["length_m"] = speed * result["actual_duration_min"]
+        result["length_source"] = "calculated"
+
+    if result["length_m"] and phase.sidewall_width_mm and phase.foam_height_mm:
+        width_m = phase.sidewall_width_mm / 1000.0
+        height_m = phase.foam_height_mm / 1000.0
+        result["volume_m3"] = width_m * height_m * result["length_m"]
+        density = foam_grade.target_density if foam_grade else None
+        if density and result["volume_m3"] is not None:
+            result["weight_kg"] = result["volume_m3"] * density
+
+    return result
 
 
 # --- Production run cascade delete (a run can have a lot hanging off it) ---
@@ -1719,6 +1766,15 @@ with tab_runtime:
                         "Rise time (s)", min_value=0.0, step=1.0, value=float(finalized_phase.rise_time or 0.0),
                         key=f"edit_runtime_rise_{finalized_phase.id}",
                     )
+                    meters_produced = st.number_input(
+                        "Meters produced (m)", min_value=0.0, step=1.0,
+                        value=float(finalized_phase.meters_produced or 0.0), key=f"edit_runtime_meters_{finalized_phase.id}",
+                        help=(
+                            "Leave at 0 to have it calculated instead from conveyor speed x run start/end time. "
+                            "Combined with sidewall width and foam height, this drives the calculated volume/weight "
+                            "shown below once saved."
+                        ),
+                    )
 
                     notes = st.text_area(
                         "Notes", value=finalized_phase.notes or "", key=f"edit_runtime_notes_{finalized_phase.id}"
@@ -1742,10 +1798,52 @@ with tab_runtime:
                             finalized_phase.top_flat_system_used = top_flat_system_used
                             finalized_phase.sidewall_width_mm = sidewall_width_mm or None
                             finalized_phase.foam_height_mm = foam_height_mm or None
+                            finalized_phase.meters_produced = meters_produced or None
                             finalized_phase.notes = notes
                             session.commit()
                             st.success("Runtime Data updated.")
                             st.rerun()
+
+                st.markdown("**Calculated output**")
+                _output = _compute_runtime_output(finalized_phase, run.foam_grade)
+                if _output["length_m"] is None and _output["volume_m3"] is None:
+                    st.caption(
+                        "Not enough data yet to calculate output - needs conveyor speed plus either meters "
+                        "produced or a run start/end time, and sidewall width + foam height for volume/weight."
+                    )
+                else:
+                    oc1, oc2, oc3 = st.columns(3)
+                    length_label = "Meters produced"
+                    if _output["length_source"] == "calculated":
+                        length_label += " (calculated)"
+                    oc1.metric(length_label, f"{_output['length_m']:.1f} m" if _output["length_m"] is not None else "—")
+                    oc2.metric(
+                        "Calculated volume",
+                        f"{_output['volume_m3']:.2f} m³" if _output["volume_m3"] is not None else "—",
+                    )
+                    oc3.metric(
+                        "Calculated weight",
+                        f"{_output['weight_kg']:.0f} kg" if _output["weight_kg"] is not None else "—",
+                    )
+                    if _output["length_source"] == "entered" and _output["implied_duration_min"] is not None:
+                        note = (
+                            f"At this conveyor speed, {_output['length_m']:.1f} m implies a runtime of "
+                            f"{_output['implied_duration_min']:.1f} min"
+                        )
+                        if _output["actual_duration_min"] is not None:
+                            note += f" (recorded run start/end gives {_output['actual_duration_min']:.1f} min)."
+                        else:
+                            note += "."
+                        st.caption(note)
+                    elif _output["length_source"] == "calculated" and _output["actual_duration_min"] is not None:
+                        st.caption(
+                            "Meters produced wasn't entered - calculated from conveyor speed x the recorded run "
+                            f"duration ({_output['actual_duration_min']:.1f} min)."
+                        )
+                    if _output["volume_m3"] is None and _output["length_m"] is not None:
+                        st.caption("Sidewall width and/or foam height not recorded - can't calculate volume/weight yet.")
+                    elif _output["weight_kg"] is None and _output["volume_m3"] is not None:
+                        st.caption("This foam grade has no target density set - can't calculate weight yet.")
 
                 def _do_delete_runtime(_session=session, _phase=finalized_phase):
                     _delete_phase_cascade(_session, _phase)
@@ -1822,6 +1920,14 @@ with tab_runtime:
                         help="A result of the foaming process, measured here — not a Setup-tab setting.",
                     )
                     rise_time = st.number_input("Rise time (s)", min_value=0.0, step=1.0, key=f"new_runtime_rise_{run.id}")
+                    meters_produced = st.number_input(
+                        "Meters produced (m)", min_value=0.0, step=1.0, key=f"new_runtime_meters_{run.id}",
+                        help=(
+                            "Leave at 0 to have it calculated instead from conveyor speed x run start/end time. "
+                            "Combined with sidewall width and foam height, this drives the calculated volume/weight "
+                            "shown after saving."
+                        ),
+                    )
 
                     notes = st.text_area("Notes", key=f"new_runtime_notes_{run.id}")
 
@@ -1847,6 +1953,7 @@ with tab_runtime:
                                     top_flat_system_used=top_flat_system_used,
                                     sidewall_width_mm=sidewall_width_mm or None,
                                     foam_height_mm=foam_height_mm or None,
+                                    meters_produced=meters_produced or None,
                                     notes=notes,
                                     source_file_reference="manual entry",
                                 )
@@ -1926,6 +2033,7 @@ with tab_runtime:
                                         ),
                                         sidewall_width_mm=row.get("sidewall_width_mm"),
                                         foam_height_mm=row.get("foam_height_mm"),
+                                        meters_produced=row.get("meters_produced"),
                                         notes=str(row.get("notes", "") or ""),
                                         source_file_reference=uploaded.name,
                                     )
