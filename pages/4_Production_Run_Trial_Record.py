@@ -694,7 +694,7 @@ with tab_setup:
 
                     c5, c6, c7 = st.columns(3)
                     sidewall_width_mm = c5.number_input(
-                        "Sidewall width (mm)", min_value=0.0, step=1.0,
+                        "Tunnel width (mm)", min_value=0.0, step=1.0,
                         value=float(setup_phase.sidewall_width_mm or 0.0), key=f"edit_setup_sidewall_{setup_phase.id}",
                     )
                     foaming_mode_options = [None] + FOAMING_MODES
@@ -787,7 +787,7 @@ with tab_setup:
 
                     c5, c6, c7 = st.columns(3)
                     sidewall_width_mm = c5.number_input(
-                        "Sidewall width (mm)", min_value=0.0, step=1.0, key=f"new_setup_sidewall_{run.id}"
+                        "Tunnel width (mm)", min_value=0.0, step=1.0, key=f"new_setup_sidewall_{run.id}"
                     )
                     foaming_mode = c6.selectbox(
                         "Foaming mode", [None] + FOAMING_MODES,
@@ -1674,7 +1674,7 @@ with tab_runtime:
 
                     c5, c6, c7 = st.columns(3)
                     sidewall_width_mm = c5.number_input(
-                        "Sidewall width (mm)", min_value=0.0, step=1.0,
+                        "Tunnel width (mm)", min_value=0.0, step=1.0,
                         value=float(finalized_phase.sidewall_width_mm or 0.0), key=f"edit_runtime_sidewall_{finalized_phase.id}",
                     )
                     foaming_mode_options = [None] + FOAMING_MODES
@@ -1725,7 +1725,7 @@ with tab_runtime:
                         value=float(finalized_phase.meters_produced or 0.0), key=f"edit_runtime_meters_{finalized_phase.id}",
                         help=(
                             "Leave at 0 to have it calculated instead from conveyor speed x run start/end time. "
-                            "Combined with sidewall width and foam height, this drives the calculated volume/weight "
+                            "Combined with tunnel width and foam height, this drives the calculated volume/weight "
                             "shown below once saved."
                         ),
                     )
@@ -1763,7 +1763,7 @@ with tab_runtime:
                 if _output["length_m"] is None and _output["volume_m3"] is None:
                     st.caption(
                         "Not enough data yet to calculate output - needs conveyor speed plus either meters "
-                        "produced or a run start/end time, and sidewall width + foam height for volume/weight."
+                        "produced or a run start/end time, and tunnel width + foam height for volume/weight."
                     )
                 else:
                     oc1, oc2, oc3 = st.columns(3)
@@ -1795,7 +1795,7 @@ with tab_runtime:
                             f"duration ({_output['actual_duration_min']:.1f} min)."
                         )
                     if _output["volume_m3"] is None and _output["length_m"] is not None:
-                        st.caption("Sidewall width and/or foam height not recorded - can't calculate volume/weight yet.")
+                        st.caption("Tunnel width and/or foam height not recorded - can't calculate volume/weight yet.")
                     elif _output["weight_kg"] is None and _output["volume_m3"] is not None:
                         st.caption("This foam grade has no target density set - can't calculate weight yet.")
 
@@ -1845,7 +1845,7 @@ with tab_runtime:
 
                     c5, c6, c7 = st.columns(3)
                     sidewall_width_mm = c5.number_input(
-                        "Sidewall width (mm)", min_value=0.0, step=1.0, key=f"new_runtime_sidewall_{run.id}"
+                        "Tunnel width (mm)", min_value=0.0, step=1.0, key=f"new_runtime_sidewall_{run.id}"
                     )
                     foaming_mode = c6.selectbox(
                         "Foaming mode", [None] + FOAMING_MODES,
@@ -1878,7 +1878,7 @@ with tab_runtime:
                         "Meters produced (m)", min_value=0.0, step=1.0, key=f"new_runtime_meters_{run.id}",
                         help=(
                             "Leave at 0 to have it calculated instead from conveyor speed x run start/end time. "
-                            "Combined with sidewall width and foam height, this drives the calculated volume/weight "
+                            "Combined with tunnel width and foam height, this drives the calculated volume/weight "
                             "shown after saving."
                         ),
                     )

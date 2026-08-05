@@ -67,9 +67,12 @@ def compute_runtime_output(phase, foam_grade):
       recorded start/end times, never written back over them.
     - meters_produced left blank -> length is calculated instead from
       conveyor speed x the recorded start/end duration.
-    Sidewall width x foam height x length gives the produced volume (m3);
-    volume x the foam grade's target density gives the produced weight
-    (kg). Returns a dict of None-safe display values; never raises."""
+    Tunnel width (phase.sidewall_width_mm - renamed "Tunnel width" in the UI
+    2026-08-05, since "sidewall width" wasn't a term anyone recognized;
+    the column itself is unchanged) x foam height x length gives the
+    produced volume (m3); volume x the foam grade's target density gives
+    the produced weight (kg). Returns a dict of None-safe display values;
+    never raises."""
     result = {
         "length_m": None, "length_source": None,
         "actual_duration_min": None, "implied_duration_min": None,
@@ -207,7 +210,7 @@ PHASE_SETTING_LABELS = {
     "air_injection_rate": "Air injection rate",
     "air_pressure_bar": "Air pressure (bar)",
     "ratio_index": "Ratio / index",
-    "sidewall_width_mm": "Sidewall width (mm)",
+    "sidewall_width_mm": "Tunnel width (mm)",
     "top_flat_system_used": "Top-flat system in use",
 }
 

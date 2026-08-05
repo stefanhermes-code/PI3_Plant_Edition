@@ -650,6 +650,11 @@ class ProductionPhase(Base):
     # so historical free-text notes already entered are never destroyed -
     # same precedent as RuntimeDataRecord further down this file.
     section_positions_note = Column(Text)
+    # Displayed in the UI as "Tunnel width" since 2026-08-05 - "sidewall
+    # width" wasn't a term plant-floor users recognized. Column name kept
+    # as-is (no migration) - only every user-facing label was changed, via
+    # analytics.PHASE_SETTING_LABELS and each page's widget label/caption
+    # text.
     sidewall_width_mm = Column(Float)
     # RETIRED FROM THE SETUP TAB 2026-08-03: foam height is a measured
     # outcome of the foaming process, not something planned/configured at

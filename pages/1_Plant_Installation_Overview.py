@@ -219,7 +219,7 @@ def _machine_model_picker(oem, current_model, key_prefix):
 st.divider()
 st.subheader("Machines / foaming lines")
 st.caption(
-    "Process parameters (conveyor speed, sidewall width, laydown mode, etc.) connect to the "
+    "Process parameters (conveyor speed, tunnel width, laydown mode, etc.) connect to the "
     "specific equipment that produced them. A production run picks one of these."
 )
 
