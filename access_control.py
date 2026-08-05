@@ -129,6 +129,14 @@ ACCESS_STATE_LABELS = {
 # correctly-scoped name.
 STRUCTURALLY_REQUIRED_ROLE_NAMES = frozenset({"company admin"})
 
+# Both names that mean "the one administrator of this company" - see
+# STRUCTURALLY_REQUIRED_ROLE_NAMES's docstring above for why there are two.
+# Used by pages/25_User_Accounts.py to enforce a single company-wide rule
+# (2026-08-05, per user direction): a company should never have more than
+# one active user holding either of these role names at once, regardless
+# of which of the two names its own admin role happens to be called.
+ADMIN_ROLE_NAMES = frozenset({"company admin", "platform admin"})
+
 # page_key -> title (title kept here only for the permission-matrix editor;
 # app.py's own st.Page(..., title=...) calls remain the source of truth for
 # what's actually shown in the sidebar).

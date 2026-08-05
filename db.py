@@ -302,6 +302,13 @@ class User(Base):
 
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    # Login identifier as of 2026-08-05 (per user direction) - the login
+    # form asks for this, not username. username is kept (mirrored to the
+    # same value on every create/edit) purely so every existing username-
+    # keyed reference elsewhere in the app (session_state, audit logs)
+    # keeps working unchanged - it is never shown or asked for separately
+    # on the User Accounts page anymore.
+    email = Column(String(255), nullable=False, unique=True)
     username = Column(String(100), nullable=False, unique=True)
     password_hash = Column(String(255), nullable=False)
     display_name = Column(String(200))

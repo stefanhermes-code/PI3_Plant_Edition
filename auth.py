@@ -55,12 +55,15 @@ role = "Company Admin"
 """
 
 import datetime as dt
+from urllib.parse import quote
 
 import bcrypt
 import streamlit as st
+from sqlalchemy import func
 
 import audit_log
-from db import User, get_session
+from access_control import ADMIN_ROLE_NAMES
+from db import Role, User, get_session
 
 
 def _auth_disabled():
@@ -92,11 +95,17 @@ def _db_has_any_users(session):
     return session.query(User).first() is not None
 
 
-def _check_db_login(session, username, password):
-    """Returns (User, None) on success, or (None, error message) on failure."""
-    user = session.query(User).filter(User.username == username).first()
+def _check_db_login(session, email, password):
+    """Returns (User, None) on success, or (None, error message) on failure.
+
+    Looks up by email, not username (2026-08-05, per user direction: the
+    login field is now "Email address") - username still exists on the
+    User row (mirrored to the same value on every create/edit, see
+    pages/25_User_Accounts.py) but is no longer what a person types in
+    here."""
+    user = session.query(User).filter(User.email == email).first()
     if not user or not verify_password(password, user.password_hash):
-        return None, "Invalid username or password."
+        return None, "Invalid email or password."
     if not user.active:
         return None, "This account has been deactivated. Contact your administrator."
     today = dt.date.today()
@@ -105,6 +114,34 @@ def _check_db_login(session, username, password):
     if user.valid_until and today > user.valid_until:
         return None, f"This account's access window ended on {user.valid_until}. Contact your administrator."
     return user, None
+
+
+def _find_company_admin_contact(session, email):
+    """For the login page's Forgot Password link (2026-08-05): given the
+    email a locked-out user typed in, find their company's single
+    administrator (the one active user holding the Company Admin/Platform
+    Admin role - see access_control.ADMIN_ROLE_NAMES and pages/
+    25_User_Accounts.py's one-admin-per-company rule) and return
+    (admin_display_name, admin_email), or None if the email isn't
+    recognized or that company has no admin account with an email on
+    file. Runs before authentication, so it can't use st.session_state for
+    company context - looks the requester up by email instead."""
+    requester = session.query(User).filter(User.email == email).first()
+    if not requester:
+        return None
+    admin = (
+        session.query(User)
+        .join(Role, Role.id == User.role_id)
+        .filter(
+            User.company_id == requester.company_id,
+            User.active.is_(True),
+            func.lower(Role.name).in_(ADMIN_ROLE_NAMES),
+        )
+        .first()
+    )
+    if not admin:
+        return None
+    return admin.display_name or admin.username, admin.email
 
 
 def _start_db_session(session, user):
@@ -215,37 +252,70 @@ def require_login():
         )
         st.stop()
 
+    login_field_label = "Email address" if db_has_users else "Username"
     with st.form("login_form"):
-        username = st.text_input("Username").strip().lower()
+        login_id = st.text_input(login_field_label).strip().lower()
         password = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Log in")
 
     if submitted:
         if db_has_users:
-            user, error = _check_db_login(session, username, password)
+            user, error = _check_db_login(session, login_id, password)
             if error:
                 audit_log.log_login_event(
-                    session, "login_failure", username_attempted=username, detail=error,
+                    session, "login_failure", username_attempted=login_id, detail=error,
                 )
                 st.error(error)
             else:
                 _start_db_session(session, user)
                 st.rerun()
         else:
-            user_record = legacy_users.get(username)
+            user_record = legacy_users.get(login_id)
             if user_record and password == user_record.get("password"):
                 audit_log.log_login_event(
-                    session, "login_success", username_attempted=username,
+                    session, "login_success", username_attempted=login_id,
                     detail="legacy secrets.toml login",
                 )
-                _start_legacy_session(username, user_record)
+                _start_legacy_session(login_id, user_record)
                 st.rerun()
             else:
                 audit_log.log_login_event(
-                    session, "login_failure", username_attempted=username,
+                    session, "login_failure", username_attempted=login_id,
                     detail="invalid legacy credentials",
                 )
                 st.error("Invalid username or password.")
+
+    if db_has_users:
+        with st.expander("Forgot your password?"):
+            st.caption(
+                "Passwords are reset by your company's administrator (see the User Accounts "
+                "page), not automatically. Enter your email below and, if we recognize it, "
+                "we'll give you a ready-made email to send them."
+            )
+            forgot_email = st.text_input(
+                "Your email address", key="forgot_password_email"
+            ).strip().lower()
+            if st.button("Find my administrator", key="forgot_password_button"):
+                if not forgot_email:
+                    st.error("Enter your email address first.")
+                else:
+                    contact = _find_company_admin_contact(session, forgot_email)
+                    if contact:
+                        admin_name, admin_email = contact
+                        subject = quote("PI3 Plant Edition - password reset request")
+                        body = quote(
+                            f"Hi {admin_name},\n\nI'm locked out of my PI3 Plant Edition account "
+                            f"({forgot_email}) and need my password reset.\n\nThanks"
+                        )
+                        st.markdown(
+                            f"[Email {admin_name} to request a reset]"
+                            f"(mailto:{admin_email}?subject={subject}&body={body})"
+                        )
+                    else:
+                        st.info(
+                            "We can't find an administrator to route this to for that email. "
+                            "Contact HTC support directly."
+                        )
 
     st.stop()
 

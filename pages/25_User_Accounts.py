@@ -6,9 +6,21 @@ company and one role, can be deactivated without deleting its history, and
 can carry a validity window (valid_from/valid_until) for time-limited
 access such as a contractor or a trial user.
 
+Email, not username, is what a person actually types in to log in
+(2026-08-05, per user direction - see auth.py's login form). Every account
+still has a username under the hood (mirrored to the same value as its
+email on every create/edit here) purely so nothing else in the app that's
+keyed off username - session_state, audit logs - needed to change.
+
 The platform owner (HTC) sees and manages every company's users; a
 company's own admin only sees and manages their own company's users, and
 is blocked from exceeding that company's subscribed user limit.
+
+A company should never have more than one active administrator (Company
+Admin or Platform Admin role - see access_control.ADMIN_ROLE_NAMES) at a
+time, per user direction 2026-08-05: assigning that role to a second
+active user, while another one already holds it, is blocked here on both
+the Add and Edit forms.
 
 Only when the company being viewed IS the platform owner (HTC itself) does
 an extra "Super admin" checkbox appear, to set User.is_super_admin - an
@@ -22,8 +34,10 @@ grant to one of their own users.
 import datetime as dt
 
 import streamlit as st
+from sqlalchemy import func
 
 import audit_log
+from access_control import ADMIN_ROLE_NAMES
 from auth import current_user, hash_password, logout_button, require_login, require_role
 from db import Company, Role, User, get_session, init_db
 from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
@@ -73,6 +87,26 @@ def _active_user_count(company_id):
     return session.query(User).filter(User.company_id == company_id, User.active.is_(True)).count()
 
 
+def _existing_active_admin(company_id, exclude_user_id=None):
+    """The company's current administrator (Company Admin/Platform Admin
+    role - see access_control.ADMIN_ROLE_NAMES), if any, excluding
+    exclude_user_id (so editing the admin's own other fields doesn't trip
+    over itself). A company should never have more than one, per user
+    direction 2026-08-05 - callers use this to block a second one."""
+    query = (
+        session.query(User)
+        .join(Role, Role.id == User.role_id)
+        .filter(
+            User.company_id == company_id,
+            User.active.is_(True),
+            func.lower(Role.name).in_(ADMIN_ROLE_NAMES),
+        )
+    )
+    if exclude_user_id is not None:
+        query = query.filter(User.id != exclude_user_id)
+    return query.first()
+
+
 all_companies = session.query(Company).order_by(Company.name).all()
 if is_platform_owner:
     if not all_companies:
@@ -100,7 +134,7 @@ with st.expander("Add user", expanded=False):
             "Upgrade the subscription or deactivate an unused account before adding another."
         )
     with st.form("add_user"):
-        username = st.text_input("Username * (used to log in)")
+        email = st.text_input("Email address * (used to log in)")
         display_name = st.text_input("Display name")
         role = st.selectbox("Role *", roles_for_add, format_func=lambda r: r.name)
         password = st.text_input("Password *", type="password")
@@ -116,17 +150,26 @@ with st.expander("Add user", expanded=False):
             )
         submitted = st.form_submit_button("Save user", disabled=limit_reached)
         if submitted:
-            username_clean = username.strip().lower()
-            if not username_clean or not password:
-                st.error("Username and password are required.")
-            elif session.query(User).filter(User.username == username_clean).first():
-                st.error(f"Username '{username_clean}' is already taken.")
+            email_clean = email.strip().lower()
+            role_is_admin = role.name.strip().lower() in ADMIN_ROLE_NAMES
+            existing_admin = _existing_active_admin(company_filter.id) if (role_is_admin and active) else None
+            if not email_clean or not password:
+                st.error("Email address and password are required.")
+            elif session.query(User).filter(User.email == email_clean).first():
+                st.error(f"Email '{email_clean}' is already in use.")
+            elif existing_admin:
+                st.error(
+                    f"{company_filter.name} already has an administrator ({existing_admin.display_name or existing_admin.email}, "
+                    f"role '{existing_admin.role.name}') - a company can only have one. Change the existing admin's role or "
+                    "deactivate them first."
+                )
             else:
                 new_user = User(
                     company_id=company_filter.id,
-                    username=username_clean,
+                    email=email_clean,
+                    username=email_clean,
                     password_hash=hash_password(password),
-                    display_name=display_name or username_clean,
+                    display_name=display_name or email_clean,
                     role_id=role.id,
                     active=active,
                     valid_from=valid_from or None,
@@ -137,12 +180,12 @@ with st.expander("Add user", expanded=False):
                 session.flush()
                 audit_log.log_role_change(
                     session, target_type="user",
-                    change_summary=f"Created user '{username_clean}' with role '{role.name}'" + (" (super admin)" if super_admin else ""),
+                    change_summary=f"Created user '{email_clean}' with role '{role.name}'" + (" (super admin)" if super_admin else ""),
                     changed_by_user_id=user["id"], company_id=company_filter.id,
-                    target_id=new_user.id, target_label=username_clean,
+                    target_id=new_user.id, target_label=email_clean,
                 )
                 session.commit()
-                st.success(f"User '{username_clean}' added.")
+                st.success(f"User '{email_clean}' added.")
                 st.rerun()
 
 st.divider()
@@ -157,7 +200,7 @@ if not users:
 else:
     user_rows = [
         {
-            "Username": u.username,
+            "Email": u.email,
             "Display name": u.display_name or "",
             "Role": u.role.name if u.role else "—",
             "Active": "Yes" if u.active else "No",
@@ -179,9 +222,12 @@ else:
     selected = next((u for u in users if u.id == selected_id), None)
 
     if selected:
-        st.markdown(f"**Edit user: {selected.username}**")
+        st.markdown(f"**Edit user: {selected.email}**")
         roles_for_edit = _roles_for_company(selected.company_id)
         with st.form(f"edit_user_{selected.id}"):
+            e_email = st.text_input(
+                "Email address * (used to log in)", value=selected.email, key=f"edit_user_email_{selected.id}"
+            )
             e_display = st.text_input(
                 "Display name", value=selected.display_name or "", key=f"edit_user_disp_{selected.id}"
             )
@@ -208,39 +254,65 @@ else:
                     value=selected.is_super_admin, key=f"edit_user_super_{selected.id}",
                 )
             if st.form_submit_button("Save changes"):
-                changes = []
-                old_role = next((r for r in roles_for_edit if r.id == selected.role_id), None)
-                if e_role.id != selected.role_id:
-                    changes.append(f"role: '{old_role.name if old_role else '—'}' → '{e_role.name}'")
-                if e_active != selected.active:
-                    changes.append(f"active: {selected.active} → {e_active}")
-                if e_super_admin != selected.is_super_admin:
-                    changes.append(f"super admin: {selected.is_super_admin} → {e_super_admin}")
-                if (e_valid_from or None) != selected.valid_from:
-                    changes.append(f"valid from: {selected.valid_from or '—'} → {e_valid_from or '—'}")
-                if (e_valid_until or None) != selected.valid_until:
-                    changes.append(f"valid until: {selected.valid_until or '—'} → {e_valid_until or '—'}")
-                if e_new_password:
-                    changes.append("password reset")
-
-                selected.display_name = e_display
-                selected.role_id = e_role.id
-                selected.valid_from = e_valid_from or None
-                selected.valid_until = e_valid_until or None
-                selected.active = e_active
-                selected.is_super_admin = e_super_admin
-                if e_new_password:
-                    selected.password_hash = hash_password(e_new_password)
-                if changes:
-                    audit_log.log_role_change(
-                        session, target_type="user",
-                        change_summary=f"Updated user '{selected.username}': " + "; ".join(changes),
-                        changed_by_user_id=user["id"], company_id=selected.company_id,
-                        target_id=selected.id, target_label=selected.username,
+                e_email_clean = e_email.strip().lower()
+                role_is_admin = e_role.name.strip().lower() in ADMIN_ROLE_NAMES
+                existing_admin = (
+                    _existing_active_admin(selected.company_id, exclude_user_id=selected.id)
+                    if (role_is_admin and e_active) else None
+                )
+                duplicate_email = (
+                    session.query(User)
+                    .filter(User.email == e_email_clean, User.id != selected.id)
+                    .first()
+                )
+                if not e_email_clean:
+                    st.error("Email address is required.")
+                elif duplicate_email:
+                    st.error(f"Email '{e_email_clean}' is already in use.")
+                elif existing_admin:
+                    st.error(
+                        f"{company_filter.name} already has an administrator "
+                        f"({existing_admin.display_name or existing_admin.email}, role '{existing_admin.role.name}') - "
+                        "a company can only have one. Change the existing admin's role or deactivate them first."
                     )
-                session.commit()
-                st.success("User updated.")
-                st.rerun()
+                else:
+                    changes = []
+                    old_role = next((r for r in roles_for_edit if r.id == selected.role_id), None)
+                    if e_email_clean != selected.email:
+                        changes.append(f"email: '{selected.email}' → '{e_email_clean}'")
+                    if e_role.id != selected.role_id:
+                        changes.append(f"role: '{old_role.name if old_role else '—'}' → '{e_role.name}'")
+                    if e_active != selected.active:
+                        changes.append(f"active: {selected.active} → {e_active}")
+                    if e_super_admin != selected.is_super_admin:
+                        changes.append(f"super admin: {selected.is_super_admin} → {e_super_admin}")
+                    if (e_valid_from or None) != selected.valid_from:
+                        changes.append(f"valid from: {selected.valid_from or '—'} → {e_valid_from or '—'}")
+                    if (e_valid_until or None) != selected.valid_until:
+                        changes.append(f"valid until: {selected.valid_until or '—'} → {e_valid_until or '—'}")
+                    if e_new_password:
+                        changes.append("password reset")
+
+                    selected.email = e_email_clean
+                    selected.username = e_email_clean
+                    selected.display_name = e_display
+                    selected.role_id = e_role.id
+                    selected.valid_from = e_valid_from or None
+                    selected.valid_until = e_valid_until or None
+                    selected.active = e_active
+                    selected.is_super_admin = e_super_admin
+                    if e_new_password:
+                        selected.password_hash = hash_password(e_new_password)
+                    if changes:
+                        audit_log.log_role_change(
+                            session, target_type="user",
+                            change_summary=f"Updated user '{e_email_clean}': " + "; ".join(changes),
+                            changed_by_user_id=user["id"], company_id=selected.company_id,
+                            target_id=selected.id, target_label=e_email_clean,
+                        )
+                    session.commit()
+                    st.success("User updated.")
+                    st.rerun()
 
         def _do_delete_user(_session=session, _id=selected.id, _username=selected.username, _company_id=selected.company_id):
             audit_log.log_role_change(
