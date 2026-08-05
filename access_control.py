@@ -103,15 +103,21 @@ ACCESS_STATE_LABELS = {
 }
 
 # Role names required by name-literal checks elsewhere in the app (see
-# auth.require_role("Platform Admin") on the User Roles and User Accounts
-# pages, and pages/10_PI3_AI_Connectivity.py's role == "Platform Admin"
-# check) - a company with no role named "Platform Admin" could never
+# auth.require_role("Company Admin") on the User Roles and User Accounts
+# pages, and pages/10_PI3_AI_Connectivity.py's role == "Company Admin"
+# check) - a company with no role named "Company Admin" could never
 # manage its own users or roles again. Enforced as a delete/rename guard
-# on the Default User Roles page. Renamed 2026-08-04 from "admin" (the
-# literal stored value, not just a label) per user direction - every
-# existing Role row named "admin" was updated to "Platform Admin" in the
-# same batch, in both Supabase and any local test databases.
-STRUCTURALLY_REQUIRED_ROLE_NAMES = frozenset({"platform admin"})
+# on the Default User Roles page. Renamed 2026-08-05 from "Platform Admin"
+# (itself renamed 2026-08-04 from the literal "admin") per user direction:
+# every company's own full-access role was showing up named "Platform
+# Admin" even though it only ever granted admin rights within that one
+# company - actual cross-company platform-owner power is, and always was,
+# controlled separately by Company.is_platform_owner / require_platform_
+# owner() and User.is_super_admin, never by this role's name. Every
+# company's existing "Platform Admin" clone was renamed to "Company
+# Admin" in the same batch, and new companies are no longer seeded with a
+# "Platform Admin" role at all - see role_provisioning.py.
+STRUCTURALLY_REQUIRED_ROLE_NAMES = frozenset({"company admin"})
 
 # page_key -> title (title kept here only for the permission-matrix editor;
 # app.py's own st.Page(..., title=...) calls remain the source of truth for

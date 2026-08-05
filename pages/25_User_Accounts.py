@@ -31,7 +31,7 @@ from helpers import clickable_table, delete_with_confirm, page_setup, render_fun
 page_setup("User Accounts")
 init_db()
 require_login()
-require_role("Platform Admin")
+require_role("Company Admin")
 logout_button()
 
 st.title("User Accounts")
@@ -59,7 +59,7 @@ def _roles_for_company(company_id):
     # (see role_provisioning.py's docstring) - never assigned to a User
     # directly, only ever cloned per-company. Previously this filter also
     # matched those template rows via an OR, which meant every company's
-    # own "Platform Admin" clone (and any other role sharing a template's
+    # own "Company Admin" clone (and any other role sharing a template's
     # name) showed up twice in this dropdown - fixed 2026-08-04.
     return (
         session.query(Role)

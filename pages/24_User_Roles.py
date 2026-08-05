@@ -1,9 +1,9 @@
 """Screen: User Roles
 
 The built-in role templates (see the Default User Roles page - currently
-Platform Admin plus whatever else the platform owner has added) ship for
+Company Admin plus whatever else the platform owner has added) ship for
 every company and can't be renamed or deleted here - see auth.py's
-docstring for what Platform Admin grants today, and db.py's Role
+docstring for what Company Admin grants today, and db.py's Role
 docstring for why each company gets its own CLONE of these roles (created
 automatically when the company is added) rather than sharing one global
 row: narrowing one company's role must never narrow another company's.
@@ -34,7 +34,7 @@ from helpers import clickable_table, delete_with_confirm, page_access_grid, page
 page_setup("User Roles")
 init_db()
 require_login()
-require_role("Platform Admin")
+require_role("Company Admin")
 logout_button()
 
 st.title("User Roles")

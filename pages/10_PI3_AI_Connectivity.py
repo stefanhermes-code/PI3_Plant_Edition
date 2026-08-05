@@ -66,7 +66,7 @@ st.info(
     "optional, separately billed, and disabled by default per plant."
 )
 
-if current_user()["role"] == "Platform Admin":
+if current_user()["role"] == "Company Admin":
     st.subheader("Deployment diagnostics")
     st.caption(
         "Checks whether this deployment's secrets are actually visible to the app right "
