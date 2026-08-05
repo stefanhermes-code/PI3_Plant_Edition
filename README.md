@@ -263,6 +263,35 @@ version is the safe choice. "Newer Python forces a newer Streamlit
 minimum" is the opposite of the usual "pin everything down" instinct and
 is easy to get backwards under pressure, as happened here.
 
+## Troubleshooting: app shows "Oops" on every load, deploy log full of "GZipResponder.__init__() missing 1 required keyword-only argument: 'thread_minimum_size'"
+
+Different failure mode from the two sidebar cases above - this one crashes
+every single request (the deploy log shows the Streamlit server responding
+500 to its own health checks right after boot), so the app never renders
+at all, not even a broken sidebar.
+
+Cause: `streamlit==1.60.0` declares its own dependency on `starlette` as a
+wide, unpinned range (`starlette<2,>=0.40.0`) - nothing in this app's own
+`requirements.txt` constrained it further before 2026-08-05. On a routine
+reboot, `uv pip install` resolved that range to the newest release
+satisfying it, `starlette==1.4.0`. That starlette release added a new
+required keyword-only argument (`thread_minimum_size`) to its internal
+`GZipResponder.__init__` - and streamlit 1.60.0's own vendored subclass
+(`streamlit/web/server/starlette/starlette_gzip_middleware.py`) doesn't
+pass it, so every request crashes with the `TypeError` above before it
+ever reaches this app's code. Confirmed by installing streamlit 1.60.0
+with no other constraints in a clean venv: it resolves starlette to 1.4.0
+and fails the same way, so this is squarely an upstream
+streamlit/starlette incompatibility, not a bug introduced by this app.
+
+Fix (already applied, 2026-08-05): pin `starlette==1.3.1` explicitly in
+`requirements.txt` - the last release before that breaking change.
+Confirmed by running streamlit 1.60.0 against starlette 1.3.1 directly:
+the server boots and responds 200 to its own health check with no GZip
+error. If this recurs after a future streamlit upgrade, re-check what
+starlette version the new streamlit release actually needs before
+re-pinning - don't just bump the pin blindly.
+
 ## What v0.1 deliberately does not do
 
 No ERP integration, no live machine connection, no autonomous formulation

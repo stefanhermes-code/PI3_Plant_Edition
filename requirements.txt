@@ -42,6 +42,25 @@
 # analytics.py's `scipy_stats.linregress` (Trend Analysis trend test) -
 # that API is unchanged across this range.
 streamlit==1.60.0
+# starlette is one of streamlit's own dependencies (declared as
+# starlette<2,>=0.40.0 - a wide, unpinned-by-us range) - normally not
+# something this file needs to pin directly. Forced to pin it explicitly
+# 2026-08-05: starlette 1.4.0 added a new required keyword-only argument
+# (thread_minimum_size) to its internal GZipResponder.__init__, which
+# streamlit 1.60.0's own vendored _MediaAwareGZipResponder subclass (in
+# streamlit/web/server/starlette/starlette_gzip_middleware.py) does not
+# pass - so with no pin here, `uv pip install` resolves to the newest
+# starlette satisfying streamlit's own range (1.4.0), and the app throws
+# "TypeError: GZipResponder.__init__() missing 1 required keyword-only
+# argument: 'thread_minimum_size'" on every single request, immediately
+# after boot, with no traceback in the app's own code (this is entirely
+# an incompatibility between streamlit 1.60.0 and a too-new starlette,
+# not a bug in this app). Fix: pin to the last starlette release before
+# that breaking change (1.3.1) - confirmed by testing streamlit 1.60.0
+# against starlette 1.3.1 directly: the server boots and responds 200 to
+# its own health check with no GZip error. Re-verify this pin any time
+# streamlit itself is upgraded past 1.60.0.
+starlette==1.3.1
 bcrypt==5.0.0
 SQLAlchemy==2.0.51
 psycopg2-binary==2.9.12
