@@ -102,60 +102,70 @@ col2.metric("Avg duration", f"{log_df['duration_ms'].mean():.0f} ms")
 col3.metric("Slowest call", f"{log_df['duration_ms'].max():.0f} ms")
 col4.metric("Most recent", log_df["created_at"].max().strftime("%Y-%m-%d %H:%M UTC"))
 
-st.subheader("By function")
+st.subheader("Load time over time")
 st.caption(
-    "One row per shared data-loading function. 'Calls' is how many times this function actually "
-    "hit the database in this window - a low count relative to how much the app was used means "
-    "the cache is doing its job."
+    "How long a data load took, plotted over time. The dashed 'Overall average' line is the "
+    "average for the whole time window selected above - if the solid line is climbing above it "
+    "as more production data is recorded, that's the concrete signal something needs attention."
 )
+
+# Bucket size scales with the selected window so the chart always has a
+# sensible number of points: 5-minute buckets for "Last hour" (a daily
+# bucket would collapse it to one point), hourly for "Last 24 hours", daily
+# otherwise. Every bucket is one point on the chart, average load time
+# across all data types in that bucket.
+_BUCKET_FREQ = {
+    "Last hour": "5min",
+    "Last 24 hours": "1h",
+}
+bucket_freq = _BUCKET_FREQ.get(window_label, "1D")
+
+timeline = (
+    log_df.set_index("created_at")
+    .resample(bucket_freq)["duration_ms"]
+    .mean()
+    .dropna()
+    .rename("Load time (ms)")
+    .to_frame()
+)
+timeline["Overall average (ms)"] = log_df["duration_ms"].mean()
+st.line_chart(timeline)
+
+st.subheader("By data type")
+st.caption(
+    "PI3 loads three kinds of data behind the scenes for the analysis pages. This shows how long "
+    "each one takes to load, on average, when it actually has to fetch fresh data rather than "
+    "reuse a result it already loaded in the last 30 seconds."
+)
+FUNCTION_LABELS = {
+    "run_settings_dataframe": "Production run data",
+    "property_results_dataframe": "Quality test result data",
+    "actual_usage_dataframe": "Material usage data",
+}
 by_function = (
-    log_df.groupby("function_name")
+    log_df.assign(data_type=log_df["function_name"].map(lambda f: FUNCTION_LABELS.get(f, f)))
+    .groupby("data_type")
     .agg(
-        calls=("duration_ms", "count"),
         avg_duration_ms=("duration_ms", "mean"),
-        p95_duration_ms=("duration_ms", lambda s: s.quantile(0.95)),
-        max_duration_ms=("duration_ms", "max"),
-        avg_rows=("row_count", "mean"),
+        slowest_ms=("duration_ms", "max"),
+        reload_count=("duration_ms", "count"),
     )
     .reset_index()
 )
-by_function["avg_duration_ms"] = by_function["avg_duration_ms"].round(1)
-by_function["p95_duration_ms"] = by_function["p95_duration_ms"].round(1)
-by_function["avg_rows"] = by_function["avg_rows"].round(0)
+by_function["avg_duration_ms"] = by_function["avg_duration_ms"].round(0)
+by_function["slowest_ms"] = by_function["slowest_ms"].round(0)
 by_function = by_function.sort_values("avg_duration_ms", ascending=False).rename(
     columns={
-        "function_name": "Function",
-        "calls": "Calls",
-        "avg_duration_ms": "Avg duration (ms)",
-        "p95_duration_ms": "p95 duration (ms)",
-        "max_duration_ms": "Max duration (ms)",
-        "avg_rows": "Avg rows returned",
+        "data_type": "Data type",
+        "avg_duration_ms": "Average load time (ms)",
+        "slowest_ms": "Slowest load (ms)",
+        "reload_count": "Times reloaded",
     }
 )
 render_data_table(by_function)
-
-st.bar_chart(
-    log_df.groupby("function_name")["duration_ms"].mean().rename("Avg duration (ms)"),
-    horizontal=True,
-)
-
-st.subheader("Recent calls")
-st.caption("Most recent 200 logged calls in this window, newest first.")
-recent = log_df.head(200).copy()
-recent["created_at"] = recent["created_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
-recent = recent.rename(
-    columns={
-        "function_name": "Function",
-        "grade_ids": "Foam grade id(s)",
-        "property_name": "Property",
-        "row_count": "Rows",
-        "duration_ms": "Duration (ms)",
-        "created_at": "Logged at (UTC)",
-    }
-)
-render_data_table(
-    recent[["Logged at (UTC)", "Function", "Foam grade id(s)", "Property", "Rows", "Duration (ms)"]],
-    max_height="400px",
+st.caption(
+    "'Times reloaded' is how often this data type actually had to be fetched fresh in this window "
+    "- a low number relative to how much the app was used means the cache is doing its job."
 )
 
 st.caption(
