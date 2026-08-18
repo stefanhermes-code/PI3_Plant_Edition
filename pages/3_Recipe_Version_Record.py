@@ -246,10 +246,12 @@ with tab_edit:
                     active_version.components,
                     key=lambda c: recipe_component_sort_index(c.role_in_formulation, c.raw_material_name),
                 )
+                COMPONENT_COLUMNS = ["Remove", "Raw material", "Supplier", "php", "Role", "Notes"]
                 components_df = (
                     pd.DataFrame(
                         [
                             {
+                                "Remove": False,
                                 "Raw material": c.raw_material_name,
                                 "Supplier": _cell_text(c.supplier),
                                 "php": c.php,
@@ -260,32 +262,56 @@ with tab_edit:
                         ]
                     )
                     if active_version.components
-                    else pd.DataFrame(columns=["Raw material", "Supplier", "php", "Role", "Notes"])
+                    else pd.DataFrame(columns=COMPONENT_COLUMNS)
                 )
 
-                st.markdown("**Ingredients** — edit values directly, or use the row controls to add or remove ingredients.")
-                edited_df = st.data_editor(
-                    components_df,
-                    num_rows="dynamic",
-                    use_container_width=True,
-                    key=f"edit_recipe_components_{edit_grade.id}_{active_version.id}",
-                    column_config={
-                        # step is 0.001, not 0.1: catalysts are dosed well below 0.1 php
-                        # (Dabco BL11 at 0.03, 33LV at 0.09, Kosmos T9 at 0.19 on
-                        # STD 25170). A 0.1 step made the grid round those to 0.00 /
-                        # 0.00 / 0.10 on display and reject anything finer as invalid
-                        # on entry, so a catalyst level could not be edited at all.
-                        # format follows at 3dp so the stored value is what is shown.
-                        "php": st.column_config.NumberColumn(
-                            "php", min_value=0.0, step=0.001, format="%.3f",
-                            help="Parts per hundred polyol. Catalysts are typically 0.01-0.30.",
-                        ),
-                    },
-                )
-
-                suggested_label = next_version_label(active_version.version_label, len(edit_grade.recipe_versions))
-                st.caption(f"Saving creates version **{suggested_label}** and retires the current one.")
+                # The editor lives INSIDE the save form, and deletion is an explicit
+                # "Remove" column rather than the grid's own row-selection gutter.
+                #
+                # Both changes address the same report - that edits and deletes on
+                # this table did not take. Outside a form, every keystroke in the
+                # editor reruns the script, which also re-runs the selectable grade
+                # table above it (st.dataframe with on_select="rerun"); the editor's
+                # pending state and that selection fought each other, so an edit
+                # could be discarded before the user ever reached the save button.
+                # Inside a form nothing reruns until submit, so the whole set of
+                # edits, additions and removals is captured in one go.
+                #
+                # The gutter checkboxes the caption used to refer to are easy to
+                # miss and were not discoverable here at all. A visible Remove
+                # column is unambiguous, survives a rerun like any other cell, and
+                # makes a removal reviewable before it is committed.
                 with st.form(f"edit_recipe_{edit_grade.id}"):
+                    st.markdown(
+                        "**Ingredients** — edit any value in place, tick **Remove** to drop an "
+                        "ingredient, or type into the blank row at the bottom to add one. "
+                        "Nothing is saved until you press **Save as new version**."
+                    )
+                    edited_df = st.data_editor(
+                        components_df,
+                        num_rows="dynamic",
+                        use_container_width=True,
+                        key=f"edit_recipe_components_{edit_grade.id}_{active_version.id}",
+                        column_order=COMPONENT_COLUMNS,
+                        column_config={
+                            "Remove": st.column_config.CheckboxColumn(
+                                "Remove", default=False, width="small",
+                                help="Tick to drop this ingredient from the new version.",
+                            ),
+                            # step is 0.001, not 0.1: catalysts are dosed well below 0.1 php
+                            # (Dabco BL11 at 0.03, 33LV at 0.09, Kosmos T9 at 0.19 on
+                            # STD 25170). A 0.1 step made the grid round those to 0.00 /
+                            # 0.00 / 0.10 on display and reject anything finer as invalid
+                            # on entry, so a catalyst level could not be edited at all.
+                            "php": st.column_config.NumberColumn(
+                                "php", min_value=0.0, step=0.001, format="%.3f",
+                                help="Parts per hundred polyol. Catalysts are typically 0.01-0.30.",
+                            ),
+                        },
+                    )
+
+                    suggested_label = next_version_label(active_version.version_label, len(edit_grade.recipe_versions))
+                    st.caption(f"Saving creates version **{suggested_label}** and retires the current one.")
                     new_effective = st.date_input("Effective date", value=dt.date.today())
                     new_status = st.selectbox("Approval status", APPROVAL_STATUSES, index=0)
                     new_ratio_index = st.number_input(
@@ -297,7 +323,8 @@ with tab_edit:
                     save_edit = st.form_submit_button("Save as new version")
                     if save_edit:
                         clean_rows = [
-                            row for _, row in edited_df.iterrows() if str(row.get("Raw material") or "").strip()
+                            row for _, row in edited_df.iterrows()
+                            if _cell_text(row.get("Raw material")) and not bool(row.get("Remove"))
                         ]
                         if not clean_rows:
                             st.error("At least one ingredient is required.")
@@ -324,7 +351,7 @@ with tab_edit:
                             session.add(new_version)
                             session.flush()
                             for row in clean_rows:
-                                name = str(row["Raw material"]).strip()
+                                name = _cell_text(row["Raw material"])
                                 supplier = _cell_text(row.get("Supplier"))
                                 rm = _match_or_create_raw_material(name, supplier)
                                 session.add(
