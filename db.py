@@ -987,10 +987,24 @@ class Customer(Base):
     __table_args__ = (UniqueConstraint("company_id", "company_name", name="uq_customer_company_name"),)
 
     id = Column(Integer, primary_key=True)
+    # company_id is the TENANT that owns this record; company_name is the
+    # CUSTOMER's own name. Those two reading as the same thing is exactly what
+    # went wrong in the UI - see below.
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    # Labelled "Customer Name" everywhere in the UI, not "Company Name"
+    # (18 Aug 2026, Stefan: the old label sat next to the tenant "Company"
+    # column on pages/29_Customers.py and read as a duplicate of it). The
+    # column keeps its ported-from-Rigid-Foam name on purpose - renaming it
+    # would mean migrating the uq_customer_company_name constraint plus every
+    # read site, for nothing a user would ever see.
     company_name = Column(String(200), nullable=False)
     contact_person = Column(String(200))
     contact_email = Column(String(200))
+    # Free text for now. Stefan asked for a controlled dropdown on 18 Aug 2026;
+    # Charlie is drawing up the list of valid customer types, and this becomes a
+    # constrained field (constant + selectbox, the RAW_MATERIAL_CATEGORIES
+    # pattern) once that list exists. Left as text deliberately rather than
+    # guessing a vocabulary that would then have to be migrated.
     customer_type = Column(String(100))
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 

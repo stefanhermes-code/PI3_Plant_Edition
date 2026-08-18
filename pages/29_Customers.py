@@ -4,8 +4,17 @@ Ported from PI3 Rigid Foam Edition's CR-14 (12 Aug 2026) so both editions model
 customer identity the same way.
 
 Deliberately lightweight - a practical application reference rather than a full
-CRM: Company Name, Contact Person, Contact Email, and an optional free-text
-Customer Type. Sales pipeline, multiple contacts, commercial history and
+CRM: Customer Name, Contact Person, Contact Email, and an optional free-text
+Customer Type.
+
+The field is labelled "Customer Name" everywhere in the UI, but the column
+behind it is Customer.company_name. That mismatch is deliberate (18 Aug 2026,
+Stefan): this table lists customers, and "Company Name" sitting next to the
+"Company" column - which is the TENANT that owns the record - read as if the
+two were the same thing. Renaming the label fixed the confusion with no
+migration; renaming the column would have meant touching the unique
+constraint, cascades.backfill_trial_customers(), the importer and every
+read site for no user-visible gain. Sales pipeline, multiple contacts, commercial history and
 customer-category governance are out of scope.
 
 Before this, a customer existed only as free text on CustomerTrial.customer_name
@@ -39,7 +48,11 @@ from helpers import (
 )
 from tenant_scope import company_picker
 
-CUSTOMER_REQUIRED_COLUMNS = ["company_name"]
+# customer_name, not company_name, for the same reason the labels changed
+# above. Safe to change outright rather than accepting both: no customer has
+# ever been created by import (the only row in the table came from
+# backfill_trial_customers), so there is no existing spreadsheet to break.
+CUSTOMER_REQUIRED_COLUMNS = ["customer_name"]
 CUSTOMER_OPTIONAL_COLUMNS = ["contact_person", "contact_email", "customer_type"]
 
 # Local rather than in helpers.py: this is the only page that validates an
@@ -61,7 +74,7 @@ logout_button()
 st.title("Customers")
 render_function_action_intro(
     function_text=(
-        "Maintains a lightweight master list of customers - Company Name, Contact Person, Contact "
+        "Maintains a lightweight master list of customers - Customer Name, Contact Person, Contact "
         "Email and an optional Customer Type - so customer identity has one home instead of living "
         "only as free text on Customer Trials & Samples. A practical reference, not a CRM: no sales "
         "pipeline, multiple contacts or commercial history."
@@ -109,7 +122,7 @@ with tab_create:
     else:
         target_company = _target_company("add_customer_company")
         with st.form("add_customer"):
-            new_name = st.text_input("Company Name *")
+            new_name = st.text_input("Customer Name *")
             new_contact = st.text_input("Contact Person")
             new_email = st.text_input("Contact Email")
             new_type = st.text_input(
@@ -118,7 +131,7 @@ with tab_create:
             if st.form_submit_button("Add customer"):
                 name = new_name.strip()
                 if not name:
-                    st.error("Company Name is required.")
+                    st.error("Customer Name is required.")
                 elif not target_company:
                     st.error("Pick a company for this customer.")
                 elif not _valid_email(new_email):
@@ -155,7 +168,7 @@ with tab_manage:
         rows = [
             {
                 **({"Company": c.company.name if c.company else "—"} if is_platform_owner else {}),
-                "Company Name": c.company_name,
+                "Customer Name": c.company_name,
                 "Contact Person": c.contact_person or "—",
                 "Contact Email": c.contact_email or "—",
                 "Customer Type": c.customer_type or "—",
@@ -194,7 +207,7 @@ with tab_manage:
                     else:
                         e_company = company_filter
                     e_name = st.text_input(
-                        "Company Name *", value=selected.company_name,
+                        "Customer Name *", value=selected.company_name,
                         key=f"edit_customer_name_{selected.id}",
                     )
                     e_contact = st.text_input(
@@ -212,7 +225,7 @@ with tab_manage:
                     if st.form_submit_button("Save changes"):
                         name = e_name.strip()
                         if not name:
-                            st.error("Company Name is required.")
+                            st.error("Customer Name is required.")
                         elif not _valid_email(e_email):
                             st.error("Contact Email doesn't look like a valid email address.")
                         else:
@@ -314,7 +327,7 @@ with tab_import:
             }
             good_rows, dup_rows = [], []
             for _, row in df.iterrows():
-                name_val = str(row.get("company_name", "") or "").strip()
+                name_val = str(row.get("customer_name", "") or "").strip()
                 if not name_val:
                     continue
                 if name_val.lower() in existing_names:
@@ -335,7 +348,7 @@ with tab_import:
                     session.add(
                         Customer(
                             company_id=import_company.id,
-                            company_name=str(row["company_name"]).strip(),
+                            company_name=str(row["customer_name"]).strip(),
                             contact_person=str(row.get("contact_person", "") or "").strip(),
                             contact_email=str(row.get("contact_email", "") or "").strip(),
                             customer_type=str(row.get("customer_type", "") or "").strip(),
