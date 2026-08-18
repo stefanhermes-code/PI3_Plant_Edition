@@ -119,6 +119,27 @@ def _cell_text(value):
     return "" if text.lower() in {"nan", "none", "<na>"} else text
 
 
+def _lookup_raw_material(name):
+    """Find a RawMaterial by name in the company currently in view. Returns
+    None if there is no such material - it never creates one.
+
+    Recipe editing must not be able to mint raw materials. A recipe is a bill
+    of materials against the plant's actual master data; letting a typo in an
+    ingredient grid create a new "raw material" produces near-duplicate rows
+    (Kosmos T9 / KOSMOS T9 / Kosmus T9) that then split cost, supplier and
+    usage reporting across records that are really the same thing. New
+    materials are added on the Raw Materials page, deliberately, with their
+    category and supplier.
+    """
+    name = _cell_text(name)
+    if not name:
+        return None
+    q = session.query(RawMaterial).filter(RawMaterial.name.ilike(name))
+    if active_company_id is not None:
+        q = q.filter(RawMaterial.company_id == active_company_id)
+    return q.first()
+
+
 def _match_or_create_raw_material(name, supplier=None):
     """Look up a RawMaterial by name (case-insensitive); create one if it
     doesn't exist yet, so anything typed as a "new" material during recipe
@@ -246,12 +267,10 @@ with tab_edit:
                     active_version.components,
                     key=lambda c: recipe_component_sort_index(c.role_in_formulation, c.raw_material_name),
                 )
-                COMPONENT_COLUMNS = ["Remove", "Raw material", "Supplier", "php", "Role", "Notes"]
                 components_df = (
                     pd.DataFrame(
                         [
                             {
-                                "Remove": False,
                                 "Raw material": c.raw_material_name,
                                 "Supplier": _cell_text(c.supplier),
                                 "php": c.php,
@@ -262,115 +281,145 @@ with tab_edit:
                         ]
                     )
                     if active_version.components
-                    else pd.DataFrame(columns=COMPONENT_COLUMNS)
+                    else pd.DataFrame(columns=["Raw material", "Supplier", "php", "Role", "Notes"])
                 )
 
-                # The editor lives INSIDE the save form, and deletion is an explicit
-                # "Remove" column rather than the grid's own row-selection gutter.
-                #
-                # Both changes address the same report - that edits and deletes on
-                # this table did not take. Outside a form, every keystroke in the
-                # editor reruns the script, which also re-runs the selectable grade
-                # table above it (st.dataframe with on_select="rerun"); the editor's
-                # pending state and that selection fought each other, so an edit
-                # could be discarded before the user ever reached the save button.
-                # Inside a form nothing reruns until submit, so the whole set of
-                # edits, additions and removals is captured in one go.
-                #
-                # The gutter checkboxes the caption used to refer to are easy to
-                # miss and were not discoverable here at all. A visible Remove
-                # column is unambiguous, survives a rerun like any other cell, and
-                # makes a removal reviewable before it is committed.
-                with st.form(f"edit_recipe_{edit_grade.id}"):
-                    st.markdown(
-                        "**Ingredients** — edit any value in place, tick **Remove** to drop an "
-                        "ingredient, or type into the blank row at the bottom to add one. "
-                        "Nothing is saved until you press **Save as new version**."
-                    )
-                    edited_df = st.data_editor(
-                        components_df,
-                        num_rows="dynamic",
-                        use_container_width=True,
-                        key=f"edit_recipe_components_{edit_grade.id}_{active_version.id}",
-                        column_order=COMPONENT_COLUMNS,
-                        column_config={
-                            "Remove": st.column_config.CheckboxColumn(
-                                "Remove", default=False, width="small",
-                                help="Tick to drop this ingredient from the new version.",
-                            ),
-                            # step is 0.001, not 0.1: catalysts are dosed well below 0.1 php
-                            # (Dabco BL11 at 0.03, 33LV at 0.09, Kosmos T9 at 0.19 on
-                            # STD 25170). A 0.1 step made the grid round those to 0.00 /
-                            # 0.00 / 0.10 on display and reject anything finer as invalid
-                            # on entry, so a catalyst level could not be edited at all.
-                            "php": st.column_config.NumberColumn(
-                                "php", min_value=0.0, step=0.001, format="%.3f",
-                                help="Parts per hundred polyol. Catalysts are typically 0.01-0.30.",
-                            ),
-                        },
-                    )
+                # Raw material is a dropdown onto the raw-material master, so an
+                # ingredient is added by picking something the plant actually has
+                # rather than retyping a name and risking a near-duplicate record.
+                # Names already used by this recipe are unioned in, so a component
+                # whose material predates the master (or belongs to another
+                # company's scope) still renders instead of showing as invalid.
+                _rm_q = session.query(RawMaterial).filter(RawMaterial.active.is_(True))
+                if active_company_id is not None:
+                    _rm_q = _rm_q.filter(RawMaterial.company_id == active_company_id)
+                raw_material_names = {rm.name for rm in _rm_q.all() if rm.name}
+                raw_material_names.update(
+                    c.raw_material_name for c in ordered_components if c.raw_material_name
+                )
+                raw_material_choices = sorted(raw_material_names, key=str.lower)
 
-                    suggested_label = next_version_label(active_version.version_label, len(edit_grade.recipe_versions))
-                    st.caption(f"Saving creates version **{suggested_label}** and retires the current one.")
-                    new_effective = st.date_input("Effective date", value=dt.date.today())
-                    new_status = st.selectbox("Approval status", APPROVAL_STATUSES, index=0)
-                    new_ratio_index = st.number_input(
-                        "Ratio / index", min_value=0.0, step=0.01, format="%.3f",
-                        value=float(active_version.ratio_index or 0.0),
-                        help="Stoichiometric ratio/index for this formulation - determines the isocyanate "
-                        "php. Carried over from the version being replaced; adjust if this revision changes it.",
-                    )
-                    save_edit = st.form_submit_button("Save as new version")
-                    if save_edit:
-                        clean_rows = [
-                            row for _, row in edited_df.iterrows()
-                            if _cell_text(row.get("Raw material")) and not bool(row.get("Remove"))
-                        ]
-                        if not clean_rows:
-                            st.error("At least one ingredient is required.")
-                        else:
-                            new_label = suggested_label
-                            new_change_note = summarize_recipe_component_changes(
-                                active_version.components, clean_rows
-                            )
-                            new_created_by = user["display_name"] or user["username"] or ""
-                            new_version = RecipeVersion(
-                                foam_grade_id=edit_grade.id,
-                                version_label=new_label,
-                                effective_date=new_effective,
-                                change_note=new_change_note,
-                                approval_status=new_status,
-                                created_by=new_created_by,
-                                ratio_index=new_ratio_index or None,
-                                # See the identical note in the Create tab above:
-                                # must not flush as active while this grade's
-                                # current version still is - the DB now enforces
-                                # at most one active version per grade.
-                                is_active=False,
-                            )
-                            session.add(new_version)
-                            session.flush()
-                            for row in clean_rows:
-                                name = _cell_text(row["Raw material"])
-                                supplier = _cell_text(row.get("Supplier"))
-                                rm = _match_or_create_raw_material(name, supplier)
-                                session.add(
-                                    RecipeComponent(
-                                        recipe_version_id=new_version.id,
-                                        raw_material_id=rm.id if rm else None,
-                                        raw_material_name=name,
-                                        supplier=supplier,
-                                        php=row.get("php") if pd.notna(row.get("php")) else None,
-                                        role_in_formulation=_cell_text(row.get("Role")),
-                                        notes=_cell_text(row.get("Notes")),
-                                    )
+                # No st.form here, and none around the editor - deliberately.
+                #
+                # st.data_editor hands its edits back on the NEXT rerun. Inside a
+                # form nothing reruns until submit, so on the run that handles the
+                # submit the editor still returns the frame it was given and every
+                # edit, added row and deleted row is lost. That is why edits to this
+                # table never took: the grid accepted them on screen, then "Save as
+                # new version" wrote the original ingredients straight back.
+                #
+                # The pattern below - data_editor, then a plain st.button - is the
+                # one already used by the target-properties grid on
+                # 2_Product_Family_Foam_Grade.py, which works. Each keystroke reruns
+                # the script, the editor returns the edited frame, and the button
+                # reads whatever is current at the moment it is pressed.
+                st.markdown(
+                    "**Ingredients** — edit any value in place. Add an ingredient in the blank "
+                    "row at the bottom by picking a raw material from the dropdown, or select a "
+                    "row and use the grid's delete control to remove one. Press **Save as new "
+                    "version** to commit."
+                )
+                edited_df = st.data_editor(
+                    components_df,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key=f"edit_recipe_components_{edit_grade.id}_{active_version.id}",
+                    column_config={
+                        "Raw material": st.column_config.SelectboxColumn(
+                            "Raw material", options=raw_material_choices, required=True,
+                            help="Pick from the raw materials held for this company.",
+                        ),
+                        # step is 0.001, not 0.1: catalysts are dosed well below 0.1 php
+                        # (Dabco BL11 at 0.03, 33LV at 0.09, Kosmos T9 at 0.19 on
+                        # STD 25170). A 0.1 step rounded those to 0.00 / 0.00 / 0.10 on
+                        # display and rejected anything finer as invalid on entry.
+                        "php": st.column_config.NumberColumn(
+                            "php", min_value=0.0, step=0.001, format="%.3f",
+                            help="Parts per hundred polyol. Catalysts are typically 0.01-0.30.",
+                        ),
+                    },
+                )
+
+                suggested_label = next_version_label(active_version.version_label, len(edit_grade.recipe_versions))
+                st.caption(f"Saving creates version **{suggested_label}** and retires the current one.")
+                new_effective = st.date_input(
+                    "Effective date", value=dt.date.today(),
+                    key=f"edit_recipe_effective_{edit_grade.id}",
+                )
+                new_status = st.selectbox(
+                    "Approval status", APPROVAL_STATUSES, index=0,
+                    key=f"edit_recipe_status_{edit_grade.id}",
+                )
+                new_ratio_index = st.number_input(
+                    "Ratio / index", min_value=0.0, step=0.01, format="%.3f",
+                    value=float(active_version.ratio_index or 0.0),
+                    key=f"edit_recipe_ratio_{edit_grade.id}",
+                    help="Stoichiometric ratio/index for this formulation - determines the isocyanate "
+                    "php. Carried over from the version being replaced; adjust if this revision changes it.",
+                )
+                save_edit = st.button("Save as new version", key=f"save_recipe_{edit_grade.id}")
+                if save_edit:
+                    clean_rows = [
+                        row for _, row in edited_df.iterrows()
+                        if _cell_text(row.get("Raw material"))
+                    ]
+                    unknown_materials = sorted({
+                        _cell_text(r["Raw material"]) for r in clean_rows
+                        if _lookup_raw_material(r["Raw material"]) is None
+                    })
+                    if not clean_rows:
+                        st.error("At least one ingredient is required.")
+                    elif unknown_materials:
+                        st.error(
+                            "Not in the raw material database: "
+                            + ", ".join(unknown_materials)
+                            + ". Add it on the Raw Materials page first, then pick it here."
+                        )
+                    else:
+                        new_label = suggested_label
+                        new_change_note = summarize_recipe_component_changes(
+                            active_version.components, clean_rows
+                        )
+                        new_created_by = user["display_name"] or user["username"] or ""
+                        new_version = RecipeVersion(
+                            foam_grade_id=edit_grade.id,
+                            version_label=new_label,
+                            effective_date=new_effective,
+                            change_note=new_change_note,
+                            approval_status=new_status,
+                            created_by=new_created_by,
+                            ratio_index=new_ratio_index or None,
+                            # See the identical note in the Create tab above:
+                            # must not flush as active while this grade's
+                            # current version still is - the DB now enforces
+                            # at most one active version per grade.
+                            is_active=False,
+                        )
+                        session.add(new_version)
+                        session.flush()
+                        for row in clean_rows:
+                            name = _cell_text(row["Raw material"])
+                            supplier = _cell_text(row.get("Supplier"))
+                            # Lookup only - see _lookup_raw_material. Validated above,
+                            # so this cannot be None here.
+                            rm = _lookup_raw_material(name)
+                            session.add(
+                                RecipeComponent(
+                                    recipe_version_id=new_version.id,
+                                    raw_material_id=rm.id if rm else None,
+                                    raw_material_name=name,
+                                    supplier=supplier,
+                                    php=row.get("php") if pd.notna(row.get("php")) else None,
+                                    role_in_formulation=_cell_text(row.get("Role")),
+                                    notes=_cell_text(row.get("Notes")),
                                 )
-                            activate_recipe_version(session, edit_grade.id, new_version)
-                            session.commit()
-                            st.success(
-                                f"'{new_label}' saved and is now the active recipe for {edit_grade.grade_name}."
                             )
-                            st.rerun()
+                        activate_recipe_version(session, edit_grade.id, new_version)
+                        session.commit()
+                        st.success(
+                            f"'{new_label}' saved and is now the active recipe for {edit_grade.grade_name}."
+                        )
+                        st.rerun()
 
 with tab_import:
     if not page_usable:
