@@ -259,10 +259,62 @@ with tab_edit:
             edit_grade = next((g for g in grades_with_active if g.id == selected_grade_id), None)
 
             if edit_grade is None:
-                st.caption("Select a foam grade above to edit its recipe.")
+                st.caption("Select a recipe above to edit it.")
             else:
                 active_version = _active_version(edit_grade)
+                st.markdown(
+                    f"**{edit_grade.grade_name} — {active_version.version_label}** "
+                    f"({active_version.approval_status})"
+                )
 
+                # --- recipe-level fields, directly under the recipe table -------
+                ef1, ef2, ef3 = st.columns(3)
+                new_effective = ef1.date_input(
+                    "Effective date", value=dt.date.today(),
+                    key=f"edit_recipe_effective_{edit_grade.id}",
+                )
+                new_status = ef2.selectbox(
+                    "Approval status", APPROVAL_STATUSES, index=0,
+                    key=f"edit_recipe_status_{edit_grade.id}",
+                )
+                new_ratio_index = ef3.number_input(
+                    "Ratio / index", min_value=0.0, step=0.01, format="%.3f",
+                    value=float(active_version.ratio_index or 0.0),
+                    key=f"edit_recipe_ratio_{edit_grade.id}",
+                    help="Stoichiometric ratio/index for this formulation - determines the "
+                    "isocyanate php. Carried over from the version being replaced; adjust if "
+                    "this revision changes it.",
+                )
+
+                # --- delete, only once a recipe is actually selected ------------
+                # Deliberately inside the `edit_grade is not None` branch: with
+                # nothing selected there is no recipe for a delete control to act
+                # on, and showing one would invite deleting the wrong thing.
+                with st.expander(f"Delete recipe '{active_version.version_label}'"):
+                    _counts = recipe_version_dependency_counts(session, active_version.id)
+                    _total_related = sum(_counts.values())
+                    if _total_related:
+                        _detail = ", ".join(f"{n} {k}" for k, n in _counts.items() if n)
+                        _warning = (
+                            f"Deleting this recipe version will also permanently delete "
+                            f"{_total_related} related record(s): {_detail}."
+                        )
+                    else:
+                        _warning = "This recipe version has no related records — deleting it is safe."
+
+                    def _do_delete_active_version(_session=session, _id=active_version.id):
+                        delete_recipe_version_cascade(_session, _id)
+                        _session.commit()
+                        st.session_state.pop("edit_recipe_grade_id", None)
+
+                    delete_with_confirm(
+                        f"recipe version '{active_version.version_label}' for {edit_grade.grade_name}",
+                        _do_delete_active_version,
+                        key_prefix=f"edit_tab_version_{active_version.id}",
+                        extra_warning=_warning,
+                    )
+
+                # --- ingredients ------------------------------------------------
                 ordered_components = sorted(
                     active_version.components,
                     key=lambda c: recipe_component_sort_index(c.role_in_formulation, c.raw_material_name),
@@ -285,11 +337,9 @@ with tab_edit:
                 )
 
                 # Raw material is a dropdown onto the raw-material master, so an
-                # ingredient is added by picking something the plant actually has
-                # rather than retyping a name and risking a near-duplicate record.
-                # Names already used by this recipe are unioned in, so a component
-                # whose material predates the master (or belongs to another
-                # company's scope) still renders instead of showing as invalid.
+                # ingredient is added by picking something the plant actually holds
+                # rather than retyping a name. Names already used by this recipe are
+                # unioned in so a legacy component still renders.
                 _rm_q = session.query(RawMaterial).filter(RawMaterial.active.is_(True))
                 if active_company_id is not None:
                     _rm_q = _rm_q.filter(RawMaterial.company_id == active_company_id)
@@ -299,25 +349,17 @@ with tab_edit:
                 )
                 raw_material_choices = sorted(raw_material_names, key=str.lower)
 
-                # No st.form here, and none around the editor - deliberately.
-                #
-                # st.data_editor hands its edits back on the NEXT rerun. Inside a
-                # form nothing reruns until submit, so on the run that handles the
-                # submit the editor still returns the frame it was given and every
-                # edit, added row and deleted row is lost. That is why edits to this
-                # table never took: the grid accepted them on screen, then "Save as
-                # new version" wrote the original ingredients straight back.
-                #
-                # The pattern below - data_editor, then a plain st.button - is the
-                # one already used by the target-properties grid on
-                # 2_Product_Family_Foam_Grade.py, which works. Each keystroke reruns
-                # the script, the editor returns the edited frame, and the button
-                # reads whatever is current at the moment it is pressed.
+                # No st.form around any of this - deliberately. st.data_editor hands
+                # its edits back on the NEXT rerun, and a form suppresses reruns
+                # until submit, so the submit handler would still see the original
+                # frame and write the original ingredients straight back. That was
+                # the reason edits to this table never took. data_editor followed by
+                # a plain st.button is the pattern the target-properties grid on
+                # 2_Product_Family_Foam_Grade.py already uses.
                 st.markdown(
-                    "**Ingredients** — edit any value in place. Add an ingredient in the blank "
-                    "row at the bottom by picking a raw material from the dropdown, or select a "
-                    "row and use the grid's delete control to remove one. Press **Save as new "
-                    "version** to commit."
+                    "**Ingredients** — change a raw material or its php in place, add an "
+                    "ingredient in the blank row at the bottom, or select a row and use the "
+                    "grid's delete control to remove it."
                 )
                 edited_df = st.data_editor(
                     components_df,
@@ -342,21 +384,6 @@ with tab_edit:
 
                 suggested_label = next_version_label(active_version.version_label, len(edit_grade.recipe_versions))
                 st.caption(f"Saving creates version **{suggested_label}** and retires the current one.")
-                new_effective = st.date_input(
-                    "Effective date", value=dt.date.today(),
-                    key=f"edit_recipe_effective_{edit_grade.id}",
-                )
-                new_status = st.selectbox(
-                    "Approval status", APPROVAL_STATUSES, index=0,
-                    key=f"edit_recipe_status_{edit_grade.id}",
-                )
-                new_ratio_index = st.number_input(
-                    "Ratio / index", min_value=0.0, step=0.01, format="%.3f",
-                    value=float(active_version.ratio_index or 0.0),
-                    key=f"edit_recipe_ratio_{edit_grade.id}",
-                    help="Stoichiometric ratio/index for this formulation - determines the isocyanate "
-                    "php. Carried over from the version being replaced; adjust if this revision changes it.",
-                )
                 save_edit = st.button("Save as new version", key=f"save_recipe_{edit_grade.id}")
                 if save_edit:
                     clean_rows = [
@@ -390,9 +417,9 @@ with tab_edit:
                             created_by=new_created_by,
                             ratio_index=new_ratio_index or None,
                             # See the identical note in the Create tab above:
-                            # must not flush as active while this grade's
-                            # current version still is - the DB now enforces
-                            # at most one active version per grade.
+                            # must not flush as active while this grade's current
+                            # version still is - the DB now enforces at most one
+                            # active version per grade.
                             is_active=False,
                         )
                         session.add(new_version)
@@ -420,6 +447,7 @@ with tab_edit:
                             f"'{new_label}' saved and is now the active recipe for {edit_grade.grade_name}."
                         )
                         st.rerun()
+
 
 with tab_import:
     if not page_usable:
