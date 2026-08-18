@@ -118,8 +118,9 @@ render_function_action_intro(
         "from TDS' to prefill its fields instead of retyping them - an SDS is optional and only "
         "adds handling/hazard notes. Use CSV/Excel import to bulk-load a material list from an "
         "ERP or supplier export. Set cost per kg on each material so Recipe Optimization can "
-        "price formulations completely, and keep the Suppliers tab curated so the same supplier "
-        "doesn't end up entered twice under slightly different spellings."
+        "price formulations completely. The 'Default supplier' dropdown is maintained on the "
+        "Suppliers page - keep that list curated so the same supplier doesn't end up entered "
+        "twice under slightly different spellings."
     ),
 )
 session = get_session()
@@ -151,8 +152,8 @@ def _target_company(key):
     return st.selectbox("Company *", all_companies, format_func=lambda c: c.name, key=key)
 
 
-tab_manual, tab_tds, tab_import, tab_suppliers = st.tabs(
-    ["Manual entry", "Add from TDS", "CSV / Excel import", "Suppliers"]
+tab_manual, tab_tds, tab_import = st.tabs(
+    ["Manual entry", "Add from TDS", "CSV / Excel import"]
 )
 
 with tab_manual:
@@ -333,139 +334,6 @@ with tab_import:
                     )
                 session.commit()
                 set_pending_banner("rawmat_import_msg", f"Imported {len(good_rows)} raw material(s) from {filename}.")
-                st.rerun()
-
-with tab_suppliers:
-    st.caption(
-        "Master list of suppliers offered in the 'Default supplier' dropdown above. Keeping this list "
-        "curated avoids near-duplicate entries (e.g. 'Jiahua' vs a mistyped 'Yiahua') across raw materials."
-    )
-    if not page_usable:
-        st.caption("View-only access - adding a supplier is restricted for your role.")
-    else:
-        supplier_target_company = _target_company("add_supplier_company")
-        with st.form("add_supplier"):
-            new_supplier_name = st.text_input("Supplier name *")
-            new_supplier_notes = st.text_area("Notes", help="Optional - e.g. the actual distributor purchases go through.")
-            if st.form_submit_button("Add supplier"):
-                if not new_supplier_name.strip():
-                    st.error("Supplier name is required.")
-                elif not supplier_target_company:
-                    st.error("Pick a company for this supplier.")
-                elif (
-                    session.query(Supplier)
-                    .filter(Supplier.name == new_supplier_name.strip(), Supplier.company_id == supplier_target_company.id)
-                    .first()
-                ):
-                    st.error(f"'{new_supplier_name.strip()}' is already in the list.")
-                else:
-                    session.add(
-                        Supplier(
-                            company_id=supplier_target_company.id,
-                            name=new_supplier_name.strip(),
-                            notes=new_supplier_notes,
-                        )
-                    )
-                    session.commit()
-                    st.success(f"Supplier '{new_supplier_name}' added.")
-                    st.rerun()
-
-    st.divider()
-    suppliers_query = session.query(Supplier)
-    if company_filter is not None:
-        suppliers_query = suppliers_query.filter(Supplier.company_id == company_filter.id)
-    suppliers = suppliers_query.order_by(Supplier.name).all()
-    if not suppliers:
-        st.info("No suppliers recorded yet.")
-    else:
-        supplier_df = pd.DataFrame(
-            [
-                {
-                    **({"Company": s.company.name if s.company else "—"} if is_platform_owner else {}),
-                    "Name": s.name,
-                    "Notes": s.notes or "",
-                    "Active": s.active,
-                }
-                for s in suppliers
-            ]
-        )
-        st.caption(f"{len(suppliers)} supplier(s). Click a row to edit or delete.")
-        sidx = clickable_table(supplier_df.to_dict("records"), key="supplier_table")
-        if sidx is not None and sidx < len(suppliers):
-            st.session_state["supplier_selected_id"] = suppliers[sidx].id
-        else:
-            st.session_state.pop("supplier_selected_id", None)
-
-        sel_supplier_id = st.session_state.get("supplier_selected_id")
-        sel_supplier = next((s for s in suppliers if s.id == sel_supplier_id), None)
-
-        if sel_supplier:
-            st.subheader(f"Edit: {sel_supplier.name}")
-            if not page_usable:
-                st.caption("View-only access - editing and deleting is restricted for your role.")
-            else:
-                with st.form(f"edit_supplier_{sel_supplier.id}"):
-                    if is_platform_owner:
-                        es_company = st.selectbox(
-                            "Company *", all_companies,
-                            index=next((i for i, c in enumerate(all_companies) if c.id == sel_supplier.company_id), 0),
-                            format_func=lambda c: c.name, key=f"edit_supplier_company_{sel_supplier.id}",
-                        )
-                    else:
-                        es_company = company_filter
-                    es_name = st.text_input("Supplier name *", value=sel_supplier.name, key=f"edit_supplier_name_{sel_supplier.id}")
-                    es_notes = st.text_area("Notes", value=sel_supplier.notes or "", key=f"edit_supplier_notes_{sel_supplier.id}")
-                    es_active = st.checkbox("Active", value=sel_supplier.active, key=f"edit_supplier_active_{sel_supplier.id}")
-                    if st.form_submit_button("Save changes"):
-                        if not es_name.strip():
-                            st.error("Supplier name is required.")
-                        else:
-                            old_name = sel_supplier.name
-                            old_company_id = sel_supplier.company_id
-                            sel_supplier.company_id = es_company.id if es_company else sel_supplier.company_id
-                            sel_supplier.name = es_name.strip()
-                            sel_supplier.notes = es_notes
-                            sel_supplier.active = es_active
-                            if old_name != sel_supplier.name:
-                                # Keep existing raw materials (same company) pointed
-                                # at this supplier consistent with the rename, since
-                                # default_supplier is a text snapshot, not an FK.
-                                session.query(RawMaterial).filter(
-                                    RawMaterial.default_supplier == old_name,
-                                    RawMaterial.company_id == old_company_id,
-                                ).update({"default_supplier": sel_supplier.name}, synchronize_session="fetch")
-                            session.commit()
-                            st.success("Supplier updated.")
-                            st.rerun()
-
-                linked_rawmats = (
-                    session.query(RawMaterial)
-                    .filter(
-                        RawMaterial.default_supplier == sel_supplier.name,
-                        RawMaterial.company_id == sel_supplier.company_id,
-                    )
-                    .count()
-                )
-                if linked_rawmats:
-                    warning = (
-                        f"{linked_rawmats} raw material(s) currently list this as their default supplier. "
-                        "Deleting it only removes it from the dropdown - those raw materials keep the supplier "
-                        "name as free text."
-                    )
-                else:
-                    warning = "No raw materials currently use this supplier - deleting it is safe."
-
-                def _do_delete_supplier(_session=session, _id=sel_supplier.id):
-                    _session.query(Supplier).filter(Supplier.id == _id).delete(synchronize_session=False)
-                    _session.commit()
-                    st.session_state.pop("supplier_selected_id", None)
-
-                delete_with_confirm(
-                    sel_supplier.name, _do_delete_supplier, key_prefix=f"supplier_{sel_supplier.id}", extra_warning=warning
-                )
-
-            if st.button("Clear selection", key="clear_supplier_selection"):
-                st.session_state.pop("supplier_selected_id", None)
                 st.rerun()
 
 st.divider()

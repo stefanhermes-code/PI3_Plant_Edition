@@ -144,6 +144,11 @@ PAGE_CATALOG = {
     "plant_overview": "Plant & Foam Equipment Overview",
     "product_family_foam_grade": "Product Family & Foam Grade",
     "raw_materials": "Raw Materials",
+    # Its own key, not folded into raw_materials. Until 18 Aug 2026 supplier
+    # management was a tab inside the Raw Materials page and shared its key,
+    # so a role could not be given one without the other. See
+    # pages/30_Suppliers.py.
+    "suppliers": "Suppliers",
     "recipes": "Recipes",
     "production_run": "Production Run",
     "quality_test_result": "Quality Test Result",

@@ -277,6 +277,11 @@ setup_pages = [
     ("plant_overview", st.Page("pages/1_Plant_Installation_Overview.py", title="Plant & Foam Equipment Overview", icon="🏭")),
     ("product_family_foam_grade", st.Page("pages/2_Product_Family_Foam_Grade.py", title="Product Family & Foam Grade", icon="🧬")),
     ("raw_materials", st.Page("pages/14_Raw_Materials.py", title="Raw Materials", icon="🧴")),
+    # Immediately after Raw Materials, mirroring Rigid Foam CR-13, where
+    # Suppliers sits directly after Raw Materials in that edition's
+    # "Formulations" section. Ported here 18 Aug 2026 out of the nested tab it
+    # used to be - see pages/30_Suppliers.py.
+    ("suppliers", st.Page("pages/30_Suppliers.py", title="Suppliers", icon="🚚")),
     ("recipes", st.Page("pages/3_Recipe_Version_Record.py", title="Recipes", icon="📋")),
 ]
 
