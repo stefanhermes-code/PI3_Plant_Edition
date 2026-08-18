@@ -16,6 +16,7 @@ from analytics import (
     PHASE_SETTING_LABELS,
     format_setting_range,
     merged_run_property_dataframe,
+    grade_ids_with_results,
     property_results_dataframe,
     rank_setting_optimization,
 )
@@ -74,9 +75,15 @@ scoped_grade_ids = grade_ids_for_company(session, active_company_id)
 # Only offer a grade here if it actually has quality test results to rank
 # settings against - otherwise picking it just leads to a dead-end message
 # (see Recipe Optimization's identical filter).
+# Grades are filtered on whether they have any quality results at all. That
+# question is answered by one grouped id query (see
+# analytics.grade_ids_with_results); building a full dataframe per grade to
+# test .empty cost ~850ms each, so this alone was ~13s before the page drew
+# anything, growing with every grade added.
+_grades_with_results = grade_ids_with_results(session)
 grades = [
     g for g in apply_scope(session.query(FoamGrade), FoamGrade.id, scoped_grade_ids).all()
-    if not property_results_dataframe(session, foam_grade_id=g.id).empty
+    if g.id in _grades_with_results
 ]
 if not grades:
     st.warning(

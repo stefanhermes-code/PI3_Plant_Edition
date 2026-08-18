@@ -23,6 +23,7 @@ import ai_assistant
 from access_control import can_use_page
 from analytics import (
     pass_rate,
+    grade_ids_with_results,
     property_results_dataframe,
     rank_component_actual_correlations,
     recipe_version_cost,
@@ -94,9 +95,15 @@ scoped_grade_ids = grade_ids_for_company(session, active_company_id)
 # it - a recipe version (for cost/diff) and at least one quality test result
 # (for the property-outcomes table and correlations) - rather than letting
 # the reviewer pick a grade and then hit a dead end on every section.
+# Grades are filtered on whether they have any quality results at all. That
+# question is answered by one grouped id query (see
+# analytics.grade_ids_with_results); building a full dataframe per grade to
+# test .empty cost ~850ms each, so this alone was ~13s before the page drew
+# anything, growing with every grade added.
+_grades_with_results = grade_ids_with_results(session, include_trials=True)
 grades = [
     g for g in apply_scope(session.query(FoamGrade), FoamGrade.id, scoped_grade_ids).all()
-    if g.recipe_versions and not property_results_dataframe(session, foam_grade_id=g.id, include_trials=True).empty
+    if g.recipe_versions and g.id in _grades_with_results
 ]
 if not grades:
     st.warning(

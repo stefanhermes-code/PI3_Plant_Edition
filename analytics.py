@@ -327,6 +327,63 @@ def run_settings_dataframe(_session, foam_grade_id=None):
 
 
 @st.cache_data(ttl=_DATA_CACHE_TTL, show_spinner=False)
+def grade_ids_with_results(_session, include_trials=False):
+    """Set of foam_grade_ids that have at least one physical property result.
+
+    Exists so a page can filter its grade picker down to grades worth
+    offering WITHOUT materialising a dataframe per grade. Trend Analysis,
+    Machine Settings Optimization and Recipe Optimization each used to build
+    the picker like this:
+
+        [g for g in grades if not property_results_dataframe(
+             session, foam_grade_id=g.id).empty]
+
+    which ran the full result-joining query, row-loop and live Pass/Fail
+    recomputation once per grade - roughly 850ms each against this dataset -
+    purely to ask a yes/no question. With 15 grades that is ~13 seconds spent
+    before the page renders anything, and it grows linearly with the grade
+    catalogue. It was also the single largest cost in the app by total time:
+    1,189 calls totalling 1,014 seconds in PerformanceLog, against an average
+    of 112 rows returned.
+
+    This replaces all of that with one grouped id query. Each call is cached
+    on include_trials alone, so the whole picker costs one round trip.
+    """
+    _t0 = time.perf_counter()
+
+    ids = {
+        row[0]
+        for row in _session.query(ProductionRun.foam_grade_id)
+        .join(PhysicalPropertyResult,
+              PhysicalPropertyResult.production_run_id == ProductionRun.id)
+        .filter(ProductionRun.foam_grade_id.isnot(None))
+        .distinct()
+        .all()
+    }
+
+    if include_trials:
+        # Mirrors property_results_dataframe's include_trials union: results
+        # can also hang off a Customer or Optimization Trial, which carry
+        # their own foam_grade_id and no production run at all.
+        for trial_model, fk_col in (
+            (CustomerTrial, PhysicalPropertyResult.customer_trial_id),
+            (OptimizationTrial, PhysicalPropertyResult.optimization_trial_id),
+        ):
+            ids.update(
+                row[0]
+                for row in _session.query(trial_model.foam_grade_id)
+                .join(PhysicalPropertyResult, fk_col == trial_model.id)
+                .filter(trial_model.foam_grade_id.isnot(None))
+                .distinct()
+                .all()
+            )
+
+    _log_performance(_session, "grade_ids_with_results", None, None,
+                     (time.perf_counter() - _t0) * 1000, len(ids))
+    return ids
+
+
+@st.cache_data(ttl=_DATA_CACHE_TTL, show_spinner=False)
 def property_results_dataframe(_session, foam_grade_id=None, property_name=None, include_trials=False):
     """One row per physical property result, joined with the run's grade,
     recipe version, and machine - the base table for trend/correlation
