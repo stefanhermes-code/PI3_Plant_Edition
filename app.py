@@ -284,16 +284,31 @@ production_pages = [
     ("production_run", st.Page("pages/4_Production_Run_Trial_Record.py", title="Production Run", icon="⚙️")),
 ]
 
+# Customers gets its own section rather than sitting inside Samples & Trials,
+# matching Rigid Foam CR-14 ("Create Customers Section and Lightweight Customer
+# Master", 2026-08-12) exactly - same dedicated section, same position between
+# Production and Samples & Trials, same 🧾 icon, and the same single page in it.
+# The page landed in v2.4.0 under Samples & Trials only because it was being
+# kept out of sight of the 18 Aug demo; this is where it was always meant to
+# go. The 🤝 it used there was also the icon Customer Trials & Samples already
+# uses, which made the master read as a sub-item of the trials page.
+#
+# SHOW_CUSTOMERS_PAGE still gates it: with the flag off the section has no
+# pages, and app.py drops empty sections from the sidebar entirely (see the
+# nav_sections filter below), so the section label cannot appear on its own.
+customer_pages = (
+    [("customers", st.Page("pages/29_Customers.py", title="Customers", icon="🧾"))]
+    if SHOW_CUSTOMERS_PAGE
+    else []
+)
+
+# Customer Trials & Samples deliberately stays HERE and does not move into the
+# Customers section below. Rigid Foam tried that (CR-14, 2026-08-12) and
+# reversed it a day later in CR-17 per Stefan's direction: a customer trial is
+# a trial first, and belongs with the other trial and sample pages. The
+# Customers section holds the master record only.
 experiment_pages = [
     ("samples_conditioning", st.Page("pages/9_Samples_Conditioning.py", title="Production Samples", icon="🧊")),
-    # Customers master, ported from Rigid Foam CR-14. Behind SHOW_CUSTOMERS_PAGE
-    # (below) so the schema, model and page can land and be exercised without
-    # changing the sidebar mid-demo. Flip that flag to True to surface it.
-    *(
-        [("customers", st.Page("pages/29_Customers.py", title="Customers", icon="🤝"))]
-        if SHOW_CUSTOMERS_PAGE
-        else []
-    ),
     ("customer_trials", st.Page("pages/11_Customer_Trials.py", title="Customer Trials & Samples", icon="🤝")),
     ("optimization_trials", st.Page("pages/12_Optimization_Trials.py", title="Optimization Trials & Samples", icon="🚀")),
 ]
@@ -345,6 +360,7 @@ platform_admin_pages = [
 nav_sections_with_keys = {
     "Setup": setup_pages,
     "Production": production_pages,
+    "Customers": customer_pages,
     "Samples & Trials": experiment_pages,
     "Quality": quality_pages,
     "Industrial Intelligence": industrial_intelligence_pages,
