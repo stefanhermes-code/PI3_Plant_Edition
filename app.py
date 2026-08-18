@@ -37,6 +37,7 @@ from db import (
     close_out_session,
     get_session,
     init_db,
+    session_lock,
 )
 from helpers import page_setup, render_function_action_intro
 from quality_standards import compute_pass_fail
@@ -399,6 +400,20 @@ with st.sidebar:
         for page in pages:
             st.page_link(page)
 
+# Serialise this rerun against any earlier one still running on this browser
+# session. Streamlit cancels a superseded script run by setting a stop flag,
+# but that thread keeps going until it next calls into the Streamlit API - on
+# a page that spends 20-60s inside analytics before its next st.* call, the
+# old and new threads genuinely overlap. Both then share the one cached
+# Session, which is not thread-safe: that is the root of the InvalidRequestError
+# the except branch below recovers from. Holding the lock across pg.run() and
+# the close-out in `finally` (an RLock, so close_out_session's own acquire is
+# re-entrant in this thread) means the second thread waits for the first to
+# finish rather than corrupting the Session underneath it - turning a crash
+# plus a forced rerun into a short wait. Recovery below is left in place as a
+# backstop for any path that reaches the Session without this lock.
+_page_lock = session_lock()
+_page_lock.acquire()
 _page_load_t0 = time.perf_counter()
 try:
     pg.run()
@@ -461,3 +476,4 @@ finally:
         # blocking a schema migration). The try/finally ensures this still
         # runs even if the routed page's script raised an exception.
         close_out_session()
+    _page_lock.release()

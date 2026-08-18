@@ -14,6 +14,7 @@ Connection:
 
 import datetime as dt
 import os
+import threading
 
 import streamlit as st
 from sqlalchemy import (
@@ -729,6 +730,20 @@ class ComponentStreamReading(Base):
     id = Column(Integer, primary_key=True)
     production_phase_id = Column(Integer, ForeignKey("production_phases.id"), nullable=False)
     stream_name = Column(String(200), nullable=False)  # e.g. Polyol A, TDI 80/20, Water blend, Catalyst
+    # The material this line actually meters, resolved against the raw-material
+    # master (added 2026-08-18). stream_name is whatever the line controller
+    # exports and is not a reliable identifier: the same material appears as
+    # "Polyol" on one import and "Caradol SC65-18S" on another, while a label
+    # like "AMINE 1" does not name a product at all. Without this link a recipe
+    # line and the stream that metered it cannot be reconciled on screen, which
+    # is exactly what a foam technologist tries to do first.
+    #
+    # Nullable by design: a new import can carry a label nobody has mapped yet,
+    # and NULL ("not yet mapped") is a better state than a wrong link. Existing
+    # rows were backfilled by matching each stream's flow, as a percentage of
+    # total polyol flow, against the php of the run's own recipe components -
+    # see migration backfill_ambiguous_streams_by_recipe_dosage.
+    raw_material_id = Column(Integer, ForeignKey("raw_materials.id", ondelete="SET NULL"))
     flow_unit = Column(String(20), default="kg/min")
     flow = Column(Float)
     pump_speed = Column(Float)  # metering pump setting for this stream (RPM/Hz/% depending on OEM) - the
@@ -743,6 +758,7 @@ class ComponentStreamReading(Base):
     source_file_reference = Column(String(300))
 
     phase = relationship("ProductionPhase")
+    raw_material = relationship("RawMaterial")
 
 
 # ---------------------------------------------------------------------------
@@ -1538,6 +1554,33 @@ def get_session():
     return st.session_state["_sa_session"]
 
 
+def session_lock():
+    """Re-entrant lock guarding the one Session this browser tab shares.
+
+    A SQLAlchemy Session is not thread-safe, and Streamlit does not
+    guarantee that only one script thread touches a browser session at a
+    time: when a rerun is triggered while a slow page is still running,
+    Streamlit sets a stop flag on the old run but that thread keeps
+    executing until it next calls into the Streamlit API. On a page that
+    spends 20-60s in analytics before its next st.* call - Performance,
+    Recipe Optimization, Trend Analysis, Machine Settings Optimization -
+    that leaves a wide window in which the old thread is still mid-query
+    while the new thread starts issuing its own.
+
+    Both threads then operate on the same Session, which surfaces as
+    'This session is provisioning a new connection; concurrent operations
+    are not permitted' - the error logged twice against Performance and
+    Default User Roles on 2026-08-05, and the reason a third was logged as
+    'inactive state, due to the SQL transaction being rolled back' after
+    one thread's failure left the shared transaction dead for the other.
+
+    The lock is stored per browser session, alongside the Session it
+    guards, so tabs never block each other."""
+    if "_sa_session_lock" not in st.session_state:
+        st.session_state["_sa_session_lock"] = threading.RLock()
+    return st.session_state["_sa_session_lock"]
+
+
 def close_out_session():
     """Commit (or roll back, on failure) whatever transaction the page that
     just ran opened, so no Streamlit rerun ever ends with an open, idle
@@ -1575,7 +1618,27 @@ def close_out_session():
     session = st.session_state.get("_sa_session")
     if session is None:
         return
+
+    # Do not touch the Session while another script thread still holds it -
+    # see session_lock(). A superseded rerun that is still mid-query owns
+    # the lock; forcing a commit underneath it is what produced the
+    # 'concurrent operations are not permitted' failures. That thread runs
+    # its own close_out_session() when it finishes, so skipping here loses
+    # nothing. The timeout keeps this from ever becoming a hang: if the
+    # holder is genuinely stuck we fall through and leave the transaction
+    # for the next rerun rather than blocking this one indefinitely.
+    lock = session_lock()
+    if not lock.acquire(timeout=5):
+        return
+
     try:
+        # After a failed statement SQLAlchemy marks the transaction
+        # inactive; commit() on an inactive Session raises rather than
+        # doing anything useful, so roll back to clear the state instead.
+        # This is the second of the two 2026-08-05 error signatures.
+        if not session.is_active:
+            session.rollback()
+            return
         session.commit()
     except Exception as commit_exc:
         # If the underlying connection itself has gone bad (e.g. the server
@@ -1623,3 +1686,7 @@ def close_out_session():
             log_session.commit()
         except Exception:
             pass
+    finally:
+        # Always hand the lock back, including on the early `return` in the
+        # inactive-session branch above.
+        lock.release()
