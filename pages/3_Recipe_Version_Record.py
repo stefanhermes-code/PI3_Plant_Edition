@@ -385,43 +385,143 @@ with tab_edit:
                 # the reason edits to this table never took. data_editor followed by
                 # a plain st.button is the pattern the target-properties grid on
                 # 2_Product_Family_Foam_Grade.py already uses.
-                st.markdown(
-                    "**Ingredients** — change a raw material or its php in place, add an "
-                    "ingredient in the blank row at the bottom, or select a row and use the "
-                    "grid's delete control to remove it."
+                # A selectable table, not a free-form grid.
+                #
+                # st.data_editor only exposes add and delete on hover - a row
+                # gutter checkbox plus a toolbar trash icon - which is not
+                # discoverable, and gives no confirmation before a line
+                # disappears. Recipe lines are not spreadsheet cells: changing a
+                # catalyst by one line is a formulation change.
+                #
+                # This is the clickable_table + edit form + delete_with_confirm
+                # pattern helpers.clickable_table documents as being used "across
+                # every list + edit + delete page so row-selection works
+                # identically everywhere". Edits here apply to the active version
+                # in place; "Save as new version" below still creates a new
+                # version from the recipe-level fields when that is what is wanted.
+                st.markdown("**Ingredients** — click a line to change or delete it.")
+                comp_rows = [
+                    {
+                        "Raw material": c.raw_material_name,
+                        "Supplier": _cell_text(c.supplier) or "—",
+                        "php": c.php,
+                        "Role": _cell_text(c.role_in_formulation) or "—",
+                        "Notes": _cell_text(c.notes) or "—",
+                    }
+                    for c in ordered_components
+                ]
+                if comp_rows:
+                    comp_idx = clickable_table(comp_rows, key=f"ingredient_table_{active_version.id}")
+                    if comp_idx is not None and comp_idx < len(ordered_components):
+                        st.session_state["selected_ingredient_id"] = ordered_components[comp_idx].id
+                    elif st.session_state.get("selected_ingredient_id") not in {c.id for c in ordered_components}:
+                        st.session_state.pop("selected_ingredient_id", None)
+                else:
+                    st.info("This recipe has no ingredients yet - add the first one below.")
+                    st.session_state.pop("selected_ingredient_id", None)
+
+                sel_comp = next(
+                    (c for c in ordered_components
+                     if c.id == st.session_state.get("selected_ingredient_id")),
+                    None,
                 )
-                edited_df = st.data_editor(
-                    components_df,
-                    num_rows="dynamic",
-                    use_container_width=True,
-                    key=f"edit_recipe_components_{edit_grade.id}_{active_version.id}",
-                    column_config={
-                        "Raw material": st.column_config.SelectboxColumn(
-                            "Raw material", options=raw_material_choices, required=True,
-                            help="Pick from the raw materials held for this company.",
-                        ),
-                        # step is 0.001, not 0.1: catalysts are dosed well below 0.1 php
-                        # (Dabco BL11 at 0.03, 33LV at 0.09, Kosmos T9 at 0.19 on
-                        # STD 25170). A 0.1 step rounded those to 0.00 / 0.00 / 0.10 on
-                        # display and rejected anything finer as invalid on entry.
-                        "php": st.column_config.NumberColumn(
+
+                if sel_comp is not None:
+                    st.markdown(f"**Selected ingredient:** {sel_comp.raw_material_name}")
+                    with st.form(f"edit_ingredient_{sel_comp.id}"):
+                        ic1, ic2 = st.columns(2)
+                        _cur = sel_comp.raw_material_name
+                        _opts = raw_material_choices or ([_cur] if _cur else [])
+                        i_name = ic1.selectbox(
+                            "Raw material", _opts,
+                            index=_opts.index(_cur) if _cur in _opts else 0,
+                            help="Only materials held in the raw-material master.",
+                        )
+                        i_php = ic2.number_input(
                             "php", min_value=0.0, step=0.001, format="%.3f",
+                            value=float(sel_comp.php or 0.0),
                             help="Parts per hundred polyol. Catalysts are typically 0.01-0.30.",
-                        ),
-                    },
-                )
+                        )
+                        if st.form_submit_button("Save ingredient"):
+                            rm = _lookup_raw_material(i_name)
+                            if rm is None:
+                                st.error(
+                                    f"'{i_name}' is not in the raw material database. "
+                                    "Add it on the Raw Materials page first."
+                                )
+                            else:
+                                sel_comp.raw_material_id = rm.id
+                                sel_comp.raw_material_name = rm.name
+                                sel_comp.supplier = rm.default_supplier or sel_comp.supplier
+                                sel_comp.php = i_php or None
+                                session.commit()
+                                st.success(f"'{rm.name}' updated.")
+                                st.rerun()
+
+                    def _do_delete_ingredient(_session=session, _id=sel_comp.id):
+                        _session.query(RecipeComponent).filter(RecipeComponent.id == _id).delete(
+                            synchronize_session=False
+                        )
+                        _session.commit()
+                        st.session_state.pop("selected_ingredient_id", None)
+
+                    delete_with_confirm(
+                        f"ingredient '{sel_comp.raw_material_name}'",
+                        _do_delete_ingredient,
+                        key_prefix=f"ingredient_{sel_comp.id}",
+                        extra_warning="This is a leaf record — removing it changes this recipe only.",
+                    )
+
+                with st.form(f"add_ingredient_{active_version.id}"):
+                    st.markdown("**Add an ingredient**")
+                    ac1, ac2, ac3 = st.columns(3)
+                    a_name = ac1.selectbox(
+                        "Raw material", raw_material_choices,
+                        key=f"add_ing_name_{active_version.id}",
+                        help="Only materials held in the raw-material master.",
+                    ) if raw_material_choices else None
+                    a_php = ac2.number_input(
+                        "php", min_value=0.0, step=0.001, format="%.3f",
+                        key=f"add_ing_php_{active_version.id}",
+                    )
+                    a_role = ac3.text_input(
+                        "Role in formulation", key=f"add_ing_role_{active_version.id}"
+                    )
+                    if st.form_submit_button("Add ingredient"):
+                        rm = _lookup_raw_material(a_name) if a_name else None
+                        if rm is None:
+                            st.error("Pick a raw material from the list.")
+                        elif any(c.raw_material_id == rm.id for c in ordered_components):
+                            st.error(f"'{rm.name}' is already an ingredient in this recipe.")
+                        else:
+                            session.add(
+                                RecipeComponent(
+                                    recipe_version_id=active_version.id,
+                                    raw_material_id=rm.id,
+                                    raw_material_name=rm.name,
+                                    supplier=rm.default_supplier or "",
+                                    php=a_php or None,
+                                    role_in_formulation=_cell_text(a_role),
+                                    notes="",
+                                )
+                            )
+                            session.commit()
+                            st.success(f"'{rm.name}' added.")
+                            st.rerun()
+
+                st.divider()
 
                 suggested_label = next_version_label(active_version.version_label, len(edit_grade.recipe_versions))
                 st.caption(f"Saving creates version **{suggested_label}** and retires the current one.")
                 save_edit = st.button("Save as new version", key=f"save_recipe_{edit_grade.id}")
                 if save_edit:
-                    clean_rows = [
-                        row for _, row in edited_df.iterrows()
-                        if _cell_text(row.get("Raw material"))
-                    ]
+                    # Ingredients are edited in place above, so the new version is
+                    # a snapshot of the active version's components as they stand
+                    # now, plus whatever recipe-level fields were changed.
+                    clean_rows = list(ordered_components)
                     unknown_materials = sorted({
-                        _cell_text(r["Raw material"]) for r in clean_rows
-                        if _lookup_raw_material(r["Raw material"]) is None
+                        c.raw_material_name for c in clean_rows
+                        if _lookup_raw_material(c.raw_material_name) is None
                     })
                     if not clean_rows:
                         st.error("At least one ingredient is required.")
@@ -453,21 +553,16 @@ with tab_edit:
                         )
                         session.add(new_version)
                         session.flush()
-                        for row in clean_rows:
-                            name = _cell_text(row["Raw material"])
-                            supplier = _cell_text(row.get("Supplier"))
-                            # Lookup only - see _lookup_raw_material. Validated above,
-                            # so this cannot be None here.
-                            rm = _lookup_raw_material(name)
+                        for c in clean_rows:
                             session.add(
                                 RecipeComponent(
                                     recipe_version_id=new_version.id,
-                                    raw_material_id=rm.id if rm else None,
-                                    raw_material_name=name,
-                                    supplier=supplier,
-                                    php=row.get("php") if pd.notna(row.get("php")) else None,
-                                    role_in_formulation=_cell_text(row.get("Role")),
-                                    notes=_cell_text(row.get("Notes")),
+                                    raw_material_id=c.raw_material_id,
+                                    raw_material_name=c.raw_material_name,
+                                    supplier=_cell_text(c.supplier),
+                                    php=c.php,
+                                    role_in_formulation=_cell_text(c.role_in_formulation),
+                                    notes=_cell_text(c.notes),
                                 )
                             )
                         activate_recipe_version(session, edit_grade.id, new_version)
@@ -553,85 +648,6 @@ with tab_import:
                     msg += f" Skipped {len(dup_rows)} row(s) already recorded for their foam grade + version label (likely a repeat click)."
                 set_pending_banner("recipe_version_import_msg", msg)
                 st.rerun()
-
-# Queried once here (rather than inside the "Recipe versions" section below)
-# because "Bulk import recipe components" also needs it for valid_version_ids
-# - and that section now renders first, with "Recipe versions" moved to the
-# bottom of the page.
-versions = (
-    apply_scope(session.query(RecipeVersion), RecipeVersion.foam_grade_id, grade_ids)
-    .order_by(RecipeVersion.created_at.desc())
-    .all()
-)
-version_ids = [v.id for v in versions]
-
-# ---------------------------------------------------------------------------
-# Bulk import recipe components (ingredients)
-# ---------------------------------------------------------------------------
-st.divider()
-st.subheader("🧪 Bulk import recipe components (ingredients)")
-if not page_usable:
-    st.caption("View-only access - importing recipe components is restricted for your role.")
-else:
-    st.caption(
-        "A separate import from 'CSV / Excel import' above - that one creates recipe version "
-        "headers, this one fills in the raw materials/php/role inside a version that already "
-        "exists. Each row needs the recipe_version_id it belongs to (see the recipe version list "
-        "at the bottom of this page for IDs) and a raw material name — unmatched raw material "
-        "names are automatically added to the Raw Materials master list."
-    )
-    show_pending_banner("recipe_component_import_msg")
-    comp_df, comp_filename = csv_excel_uploader(
-        COMPONENT_REQUIRED_COLUMNS, COMPONENT_OPTIONAL_COLUMNS, key="component_upload"
-    )
-    if comp_df is not None:
-        valid_version_ids = {v.id for v in versions}
-        good_rows, bad_rows = [], []
-        for _, row in comp_df.iterrows():
-            if row.get("recipe_version_id") in valid_version_ids and str(row.get("raw_material_name", "")).strip():
-                good_rows.append(row)
-            else:
-                bad_rows.append(row)
-
-        st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
-        if bad_rows:
-            st.warning("Flagged rows reference an unknown recipe_version_id or have no raw_material_name.")
-            render_data_table(pd.DataFrame(bad_rows), max_height="300px")
-
-        if good_rows and st.button("Confirm import (recipe components)", key="confirm_component_import"):
-            existing_keys = {
-                (c.recipe_version_id, c.raw_material_name.strip().lower())
-                for c in apply_scope(
-                    session.query(RecipeComponent), RecipeComponent.recipe_version_id, version_ids
-                ).all()
-            }
-            new_rows, dup_rows = dedupe_import_rows(
-                good_rows,
-                existing_keys,
-                key_func=lambda row: (int(row["recipe_version_id"]), str(row["raw_material_name"]).strip().lower()),
-            )
-            for row in new_rows:
-                name_val = str(row["raw_material_name"]).strip()
-                supplier_val = _cell_text(row.get("supplier"))
-                rm = _match_or_create_raw_material(name_val, supplier_val)
-                session.add(
-                    RecipeComponent(
-                        recipe_version_id=int(row["recipe_version_id"]),
-                        raw_material_id=rm.id if rm else None,
-                        raw_material_name=name_val,
-                        supplier=supplier_val,
-                        php=row.get("php") if not pd.isna(row.get("php")) else None,
-                        role_in_formulation=_cell_text(row.get("role_in_formulation")),
-                        notes=_cell_text(row.get("notes")),
-                    )
-                )
-            session.commit()
-            msg = f"Imported {len(new_rows)} recipe component(s) from {comp_filename}."
-            if dup_rows:
-                msg += f" Skipped {len(dup_rows)} row(s) already recorded for their recipe version (likely a repeat click)."
-            set_pending_banner("recipe_component_import_msg", msg)
-            st.rerun()
-
 
 # ---------------------------------------------------------------------------
 # Where Used Report - reverse lookup: which recipes use a given raw material.

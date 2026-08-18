@@ -349,13 +349,6 @@ with tab_sample:
         if data["sample_notes"]:
             st.write(f"**Sample notes:** {data['sample_notes']}")
 
-        st.write(
-            f"**Recipe used:** {data['recipe_version_label']} · **Approval status:** "
-            f"{data['recipe_approval_status']} · **Effective:** {data['recipe_effective_date']}"
-        )
-        st.write("**Formulation** (internal use only)")
-        render_data_table(pd.DataFrame(data["recipe_components"] or [{"—": "No data recorded"}]))
-
         st.write(f"**Quality test results** — Pass: {data['pass_count']} · Fail: {data['fail_count']}")
         render_data_table(pd.DataFrame(data["quality_results"] or [{"—": "No data recorded"}]))
 

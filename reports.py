@@ -1314,11 +1314,6 @@ def build_batch_release_record_data(session, run_id):
         "block_reference": run.block_reference or "—",
         "operator": run.operator_or_team_reference or "—",
         "notes": run.notes or "",
-        "recipe_version_label": recipe.version_label if recipe else "—",
-        "recipe_approval_status": recipe.approval_status if recipe else "—",
-        "recipe_effective_date": recipe.effective_date if recipe else None,
-        "recipe_ratio_index": recipe.ratio_index if recipe else None,
-        "recipe_components": recipe_components,
         "quality_results": quality_results,
         "quality_verdict": quality_verdict,
         "quality_issues": quality_issues,
@@ -1394,13 +1389,6 @@ def render_batch_release_record_docx(data):
     if data["notes"]:
         doc.add_paragraph(f"Notes: {data['notes']}")
 
-    _docx_heading(doc, "Recipe used", size=12, color=_HTC_GREY, space_before=10)
-    _docx_kv_table(doc, [
-        ("Recipe version", data["recipe_version_label"]), ("Approval status", data["recipe_approval_status"]),
-        ("Effective date", data["recipe_effective_date"]),
-        ("Ratio / index", f"{data['recipe_ratio_index']:.3f}" if data["recipe_ratio_index"] is not None else "—"),
-    ])
-    _docx_section(doc, "Formulation", data["recipe_components"])
     _docx_section(doc, "Quality test results", data["quality_results"])
     _docx_section(doc, "Quality issues", data["quality_issues"])
 
@@ -1427,14 +1415,20 @@ def render_batch_release_record_docx(data):
 # rather than on pages 9/11/12 themselves (which already have the
 # aggregate, multi-field-selection Sample Report).
 #
-# "What is this sample, what recipe made it, what did testing find, and
+# "What is this sample, where did it come from, what did testing find, and
 # did it pass" in one document - works across all three sample sources
 # (Production Run / Customer Trial / Optimization Trial - see
-# db.SAMPLE_SOURCE_TYPES). Includes the full recipe formulation (materials/
-# php/supplier/role), same as Batch Release Record and Recipe Formulation
-# Record - per that same precedent, this makes the report NOT customer-
-# facing as-is; a customer-facing version would need to omit section C
-# (the formulation table).
+# db.SAMPLE_SOURCE_TYPES).
+#
+# Deliberately contains NO recipe: not the formulation table, not the recipe
+# version, approval status or ratio/index (removed 2026-08-18). A Certificate
+# of Analysis states what was measured and whether it conforms - it is a
+# customer-facing document, and a formulation is proprietary. Traceability
+# comes from the sample source block (batch and block reference, run date),
+# which is what a customer needs to tie the certificate to their delivery.
+#
+# The Batch Release Record and Recipe Formulation Record are the internal
+# documents that DO carry the formulation; leave those as they are.
 # ---------------------------------------------------------------------------
 
 def _sample_source(session, sample):
@@ -1485,18 +1479,10 @@ def build_sample_certificate_data(session, sample_id):
     else:
         header_fields = [("Source", "—")]
 
-    ordered_components = (
-        sorted(recipe.components, key=lambda c: (c.role_in_formulation or "", c.raw_material_name or ""))
-        if recipe else []
-    )
-    recipe_components = [
-        {
-            "Material": c.raw_material_name, "Supplier": c.supplier or "—",
-            "PHP": c.php, "Role": c.role_in_formulation or "—", "Notes": c.notes or "—",
-        }
-        for c in ordered_components
-    ]
-
+    # No recipe data is assembled here on purpose - see the section note above.
+    # Nothing about the formulation belongs on a Certificate of Analysis, and
+    # not carrying it in the payload means no renderer can put it back by
+    # accident.
     results = (
         session.query(PhysicalPropertyResult)
         .filter(PhysicalPropertyResult.sample_id == sample.id).all()
@@ -1563,15 +1549,6 @@ def render_sample_certificate_pdf(data):
         ]))
         if data["sample_notes"]:
             story.append(_p(f"Notes: {data['sample_notes']}"))
-
-        story.append(Spacer(1, 8))
-        story.append(Paragraph("Recipe used", STYLES["Heading3"]))
-        story.append(_key_value_table([
-            ("Recipe version", data["recipe_version_label"]), ("Approval status", data["recipe_approval_status"]),
-            ("Effective date", data["recipe_effective_date"]),
-            ("Ratio / index", f"{data['recipe_ratio_index']:.3f}" if data["recipe_ratio_index"] is not None else "—"),
-        ]))
-        _section(story, "Formulation", data["recipe_components"])
 
         story.append(Spacer(1, 8))
         story.append(Paragraph("Quality test results", STYLES["Heading3"]))
