@@ -233,6 +233,23 @@ def recipe_version_dependency_counts(session, recipe_version_id):
 
 
 def delete_recipe_version_cascade(session, recipe_version_id):
+    """Delete a recipe version and everything hanging off it.
+
+    If the version being deleted is the grade's ACTIVE one, the most recent
+    remaining version is promoted to active in its place. Without that, a grade
+    can end up with recipe versions but none of them active - which happened to
+    STD 28170 LG: saving a new version deactivated its predecessor, then
+    deleting the new version removed the only active one. The grade keeps its
+    production history and its recipe, but every screen that works from "the
+    grade's active recipe" (the Edit Recipe tab's grade list, among others)
+    filters it out, so it silently disappears from the UI.
+
+    Deleting the last remaining version leaves the grade with none, which is
+    correct - there is nothing to promote.
+    """
+    doomed = session.query(RecipeVersion).filter(RecipeVersion.id == recipe_version_id).first()
+    orphaned_grade_id = doomed.foam_grade_id if doomed is not None and doomed.is_active else None
+
     for run_id in _run_ids_for_recipe_version(session, recipe_version_id):
         delete_production_run_cascade(session, run_id)
     session.query(CustomerTrial).filter(CustomerTrial.recipe_version_id == recipe_version_id).update(
@@ -245,6 +262,18 @@ def delete_recipe_version_cascade(session, recipe_version_id):
         RecipeComponent.recipe_version_id == recipe_version_id
     ).delete(synchronize_session=False)
     session.query(RecipeVersion).filter(RecipeVersion.id == recipe_version_id).delete(synchronize_session=False)
+
+    if orphaned_grade_id is not None:
+        # Newest by effective date, then by id so the choice is deterministic
+        # when several share a date (or have none).
+        successor = (
+            session.query(RecipeVersion)
+            .filter(RecipeVersion.foam_grade_id == orphaned_grade_id)
+            .order_by(RecipeVersion.effective_date.desc().nullslast(), RecipeVersion.id.desc())
+            .first()
+        )
+        if successor is not None:
+            successor.is_active = True
 
 
 # ---------------------------------------------------------------------------
