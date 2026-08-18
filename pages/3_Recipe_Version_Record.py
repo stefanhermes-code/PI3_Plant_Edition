@@ -96,6 +96,29 @@ if not grades:
     st.stop()
 
 
+def _cell_text(value):
+    """Free-text cell value as a clean string.
+
+    `str(x or "")` is not safe here. A pandas NaN - which is what an empty
+    cell in an uploaded spreadsheet or an untouched st.data_editor cell
+    becomes - is truthy, so `str(nan or "")` evaluates to the three-character
+    string "nan", and that is what gets written to the database. Every recipe
+    component imported so far carries notes="nan" for exactly this reason.
+
+    Also treats a literal "nan"/"none" that a previous import already stored
+    as empty, so those rows read back blank instead of showing the artefact.
+    """
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    return "" if text.lower() in {"nan", "none", "<na>"} else text
+
+
 def _match_or_create_raw_material(name, supplier=None):
     """Look up a RawMaterial by name (case-insensitive); create one if it
     doesn't exist yet, so anything typed as a "new" material during recipe
@@ -228,10 +251,10 @@ with tab_edit:
                         [
                             {
                                 "Raw material": c.raw_material_name,
-                                "Supplier": c.supplier or "",
+                                "Supplier": _cell_text(c.supplier),
                                 "php": c.php,
-                                "Role": c.role_in_formulation or "",
-                                "Notes": c.notes or "",
+                                "Role": _cell_text(c.role_in_formulation),
+                                "Notes": _cell_text(c.notes),
                             }
                             for c in ordered_components
                         ]
@@ -247,7 +270,16 @@ with tab_edit:
                     use_container_width=True,
                     key=f"edit_recipe_components_{edit_grade.id}_{active_version.id}",
                     column_config={
-                        "php": st.column_config.NumberColumn("php", min_value=0.0, step=0.1, format="%.2f"),
+                        # step is 0.001, not 0.1: catalysts are dosed well below 0.1 php
+                        # (Dabco BL11 at 0.03, 33LV at 0.09, Kosmos T9 at 0.19 on
+                        # STD 25170). A 0.1 step made the grid round those to 0.00 /
+                        # 0.00 / 0.10 on display and reject anything finer as invalid
+                        # on entry, so a catalyst level could not be edited at all.
+                        # format follows at 3dp so the stored value is what is shown.
+                        "php": st.column_config.NumberColumn(
+                            "php", min_value=0.0, step=0.001, format="%.3f",
+                            help="Parts per hundred polyol. Catalysts are typically 0.01-0.30.",
+                        ),
                     },
                 )
 
@@ -293,7 +325,7 @@ with tab_edit:
                             session.flush()
                             for row in clean_rows:
                                 name = str(row["Raw material"]).strip()
-                                supplier = str(row.get("Supplier") or "")
+                                supplier = _cell_text(row.get("Supplier"))
                                 rm = _match_or_create_raw_material(name, supplier)
                                 session.add(
                                     RecipeComponent(
@@ -302,8 +334,8 @@ with tab_edit:
                                         raw_material_name=name,
                                         supplier=supplier,
                                         php=row.get("php") if pd.notna(row.get("php")) else None,
-                                        role_in_formulation=str(row.get("Role") or ""),
-                                        notes=str(row.get("Notes") or ""),
+                                        role_in_formulation=_cell_text(row.get("Role")),
+                                        notes=_cell_text(row.get("Notes")),
                                     )
                                 )
                             activate_recipe_version(session, edit_grade.id, new_version)
@@ -447,7 +479,7 @@ else:
             )
             for row in new_rows:
                 name_val = str(row["raw_material_name"]).strip()
-                supplier_val = str(row.get("supplier", "") or "")
+                supplier_val = _cell_text(row.get("supplier"))
                 rm = _match_or_create_raw_material(name_val, supplier_val)
                 session.add(
                     RecipeComponent(
@@ -456,8 +488,8 @@ else:
                         raw_material_name=name_val,
                         supplier=supplier_val,
                         php=row.get("php") if not pd.isna(row.get("php")) else None,
-                        role_in_formulation=str(row.get("role_in_formulation", "") or ""),
-                        notes=str(row.get("notes", "") or ""),
+                        role_in_formulation=_cell_text(row.get("role_in_formulation")),
+                        notes=_cell_text(row.get("notes")),
                     )
                 )
             session.commit()
@@ -664,7 +696,7 @@ else:
                                 "Supplier", value=selected_comp.supplier or "", key=f"edit_comp_sup_{selected_comp.id}"
                             )
                             e_php = ec3.number_input(
-                                "php", min_value=0.0, step=0.1, format="%.2f",
+                                "php", min_value=0.0, step=0.001, format="%.3f",
                                 value=float(selected_comp.php or 0.0), key=f"edit_comp_php_{selected_comp.id}",
                             )
                             e_role = st.text_input(
@@ -729,7 +761,7 @@ else:
                     )
                     supplier_default = raw_material_choice.default_supplier if raw_material_choice else ""
                     supplier = c2.text_input("Supplier", value=supplier_default or "", key=f"sup_{v.id}")
-                    php = c3.number_input("php", min_value=0.0, step=0.1, format="%.2f", key=f"php_{v.id}")
+                    php = c3.number_input("php", min_value=0.0, step=0.001, format="%.3f", key=f"php_{v.id}")
                     role = st.text_input(
                         "Role in formulation (e.g. polyol, TDI, catalyst, surfactant)", key=f"role_{v.id}"
                     )
