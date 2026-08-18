@@ -263,6 +263,12 @@ def render_overview():
     t3.metric("Optimization trials", optimization_trials_count)
     t4.metric("Open customer/optimization trials", active_trials)
 
+# Customers master (ported from Rigid Foam CR-14) is built and deployed but not
+# yet shown in the navigation. Set to True to add it to the sidebar under Setup;
+# nothing else needs to change. Kept False for now so the page can be verified
+# without altering the sidebar during a demo.
+SHOW_CUSTOMERS_PAGE = False
+
 overview_page = st.Page(render_overview, title="Overview", icon="🏠", default=True)
 report_page = st.Page("pages/21_Report.py", title="Report", icon="🖨️")
 
@@ -279,6 +285,14 @@ production_pages = [
 
 experiment_pages = [
     ("samples_conditioning", st.Page("pages/9_Samples_Conditioning.py", title="Production Samples", icon="🧊")),
+    # Customers master, ported from Rigid Foam CR-14. Behind SHOW_CUSTOMERS_PAGE
+    # (below) so the schema, model and page can land and be exercised without
+    # changing the sidebar mid-demo. Flip that flag to True to surface it.
+    *(
+        [("customers", st.Page("pages/29_Customers.py", title="Customers", icon="🤝"))]
+        if SHOW_CUSTOMERS_PAGE
+        else []
+    ),
     ("customer_trials", st.Page("pages/11_Customer_Trials.py", title="Customer Trials & Samples", icon="🤝")),
     ("optimization_trials", st.Page("pages/12_Optimization_Trials.py", title="Optimization Trials & Samples", icon="🚀")),
 ]

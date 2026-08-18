@@ -149,6 +149,7 @@ PAGE_CATALOG = {
     "quality_test_result": "Quality Test Result",
     "quality_issue": "Quality Issue",
     "samples_conditioning": "Production Samples",
+    "customers": "Customers",
     "customer_trials": "Customer Trials & Samples",
     "optimization_trials": "Optimization Trials & Samples",
     "recipe_optimization": "Recipe Optimization",

@@ -965,6 +965,38 @@ class RuntimeDataRecord(Base):
 # PhysicalPropertyResult, QualityObservation below) - never via
 # production_run_id, which stays NULL for every row tied to a trial.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 8b. customers (lightweight customer master)
+#
+# Ported from PI3 Rigid Foam Edition's CR-14 (12 Aug 2026) so the two editions
+# model customer identity the same way. Deliberately lightweight - "a practical
+# application reference rather than a full CRM": company name, a contact person
+# and email, and an optional free-text type. Sales pipeline, multiple contacts
+# and commercial history are out of scope.
+#
+# Before this, a customer existed only as free text on CustomerTrial.
+# customer_name, which drifts the same way every other free-text reference in
+# this app has: two trials for the same customer entered by different people
+# under slightly different names, with nothing tying them together.
+#
+# Uniqueness is scoped per company, matching Supplier above - two tenant
+# companies can each have their own "King Furniture" without colliding.
+# ---------------------------------------------------------------------------
+class Customer(Base):
+    __tablename__ = "customers"
+    __table_args__ = (UniqueConstraint("company_id", "company_name", name="uq_customer_company_name"),)
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    company_name = Column(String(200), nullable=False)
+    contact_person = Column(String(200))
+    contact_email = Column(String(200))
+    customer_type = Column(String(100))
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    company = relationship("Company")
+
+
 class CustomerTrial(Base):
     __tablename__ = "customer_trials"
 
@@ -972,7 +1004,17 @@ class CustomerTrial(Base):
     plant_id = Column(Integer, ForeignKey("plants.id"), nullable=False)
     foam_grade_id = Column(Integer, ForeignKey("foam_grades.id"), nullable=False)
     recipe_version_id = Column(Integer, ForeignKey("recipe_versions.id"))
+    # Nullable on purpose: every row that predates the customer master, and any
+    # import that cannot be confidently auto-matched, keeps working untouched.
+    customer_id = Column(Integer, ForeignKey("customers.id"))
 
+    # customer_name is DELIBERATELY KEPT alongside customer_id rather than
+    # replaced by it. It is still what reports.py and the trial pages read for
+    # display, and keeping it means no historical row loses information. It is
+    # maintained as a synced text snapshot of Customer.company_name - the same
+    # "text snapshot, not a live-only reference" pattern RawMaterial.
+    # default_supplier already uses for Supplier. The Customers page re-syncs it
+    # on rename; cascades.backfill_trial_customers() maps existing rows.
     customer_name = Column(String(200), nullable=False)
     sales_opportunity_reference = Column(String(200))
     requested_by = Column(String(200))

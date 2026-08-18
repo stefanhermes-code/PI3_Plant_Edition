@@ -15,8 +15,13 @@ calling them (possibly several times, e.g. once per run under a foam
 grade) so a whole master-data delete is one all-or-nothing transaction.
 """
 
+import difflib
+
+from sqlalchemy import func
+
 from db import (
     ComponentStreamReading,
+    Customer,
     CustomerTrial,
     FallplateSectionPosition,
     FoamGrade,
@@ -475,3 +480,68 @@ def delete_plant_cascade(session, plant_id):
     session.query(Machine).filter(Machine.plant_id == plant_id).delete(synchronize_session=False)
     session.query(PI3AIConnectionSetting).filter(PI3AIConnectionSetting.plant_id == plant_id).delete(synchronize_session=False)
     session.query(Plant).filter(Plant.id == plant_id).delete(synchronize_session=False)
+
+
+# ---------------------------------------------------------------------------
+# Customer master backfill (ported from Rigid Foam CR-14)
+# ---------------------------------------------------------------------------
+
+def backfill_trial_customers(session):
+    """Link every CustomerTrial that has no customer_id to a Customer master
+    row, creating one where needed, and report names that look like the same
+    customer entered twice.
+
+    Matching is EXACT, case- and whitespace-normalised, and nothing else. Two
+    different-looking customer_name values are never merged into one Customer,
+    however similar they look - an ambiguous historical value is surfaced for a
+    human to decide rather than silently collapsed. After linking, a second pass
+    compares the resulting names per company and flags pairs above a similarity
+    ratio of 0.82, which catches "Acme Corp" against "Acme Corp." or a plain
+    typo without flagging genuinely unrelated names.
+
+    Commits once at the end. Safe to run repeatedly, and safe on a database with
+    nothing to backfill - it returns zeros and an empty list.
+
+    Returns {"linked": int, "created": int, "possible_duplicates":
+    [(company_id, name_a, name_b, ratio), ...]}.
+    """
+    trials = session.query(CustomerTrial).filter(CustomerTrial.customer_id.is_(None)).all()
+    linked = 0
+    created = 0
+    for trial in trials:
+        company_id = trial.plant.company_id if trial.plant else None
+        name = (trial.customer_name or "").strip()
+        if company_id is None or not name:
+            continue
+        existing = (
+            session.query(Customer)
+            .filter(Customer.company_id == company_id)
+            .filter(func.lower(Customer.company_name) == name.lower())
+            .first()
+        )
+        if existing is None:
+            existing = Customer(company_id=company_id, company_name=name)
+            session.add(existing)
+            session.flush()
+            created += 1
+        trial.customer_id = existing.id
+        linked += 1
+    session.commit()
+
+    possible_duplicates = []
+    by_company = {}
+    for c in session.query(Customer).all():
+        by_company.setdefault(c.company_id, []).append(c)
+    for company_id, company_customers in by_company.items():
+        for i in range(len(company_customers)):
+            for j in range(i + 1, len(company_customers)):
+                a, b = company_customers[i], company_customers[j]
+                name_a = (a.company_name or "").strip().lower()
+                name_b = (b.company_name or "").strip().lower()
+                if not name_a or not name_b or name_a == name_b:
+                    continue
+                ratio = difflib.SequenceMatcher(None, name_a, name_b).ratio()
+                if ratio >= 0.82:
+                    possible_duplicates.append((company_id, a.company_name, b.company_name, round(ratio, 2)))
+
+    return {"linked": linked, "created": created, "possible_duplicates": possible_duplicates}
