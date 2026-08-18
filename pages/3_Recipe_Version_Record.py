@@ -273,8 +273,19 @@ with tab_edit:
                     "Effective date", value=dt.date.today(),
                     key=f"edit_recipe_effective_{edit_grade.id}",
                 )
+                # Default to the status the selected recipe actually has, not
+                # index=0 ("Draft"). Showing Draft against an Approved recipe
+                # misreports the record on screen, and silently demotes it to
+                # Draft on save if the operator does not notice and change it
+                # back. Falls back to the first status only if the stored value
+                # is not one of APPROVAL_STATUSES.
+                _status_index = (
+                    APPROVAL_STATUSES.index(active_version.approval_status)
+                    if active_version.approval_status in APPROVAL_STATUSES
+                    else 0
+                )
                 new_status = ef2.selectbox(
-                    "Approval status", APPROVAL_STATUSES, index=0,
+                    "Approval status", APPROVAL_STATUSES, index=_status_index,
                     key=f"edit_recipe_status_{edit_grade.id}",
                 )
                 new_ratio_index = ef3.number_input(
