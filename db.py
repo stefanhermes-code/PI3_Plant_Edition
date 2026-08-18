@@ -1647,6 +1647,18 @@ def close_out_session():
     hours, holding locks that blocked an unrelated schema migration until
     the stale connection was manually terminated.
 
+    Second incident, 2026-08-18: the same leak has a faster, louder failure
+    mode. Supabase sets idle_in_transaction_session_timeout to 5 minutes,
+    so a transaction left open across reruns gets its connection killed
+    server-side; the next query that browser tab issues then dies with
+    OperationalError on a socket that is already gone. The Postgres log
+    showed 16 such terminations between 2026-08-17 22:00 and 2026-08-18
+    08:00. Note that pool_pre_ping cannot prevent this: pre-ping validates
+    a connection at pool CHECKOUT, and a Session sitting on an open
+    transaction never returns its connection to the pool. app.py now
+    recovers from it (see _is_dead_connection there), but recovery costs a
+    rerun - closing the transaction out here is what stops it happening.
+
     Safe to call unconditionally after every rerun: every place in this app
     that adds/edits/deletes already calls session.commit() itself within
     the same rerun the change happens in (see cascades.py's docstring - a

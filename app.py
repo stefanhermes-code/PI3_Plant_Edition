@@ -359,16 +359,112 @@ nav_sections_with_keys = {
 # Once logged in, narrow by the user's role (page_key deny-list) and their
 # company's subscription (feature flags) - see access_control.py.
 init_db()
-_nav_session = get_session()
+
+
+def _is_dead_connection(exc):
+    """True when a DBAPI error means the connection underneath the Session was
+    killed server-side, rather than the statement itself being wrong.
+
+    Production incident, 2026-08-18: the Overview page crashed with
+    sqlalchemy.exc.OperationalError on its very first query
+    (session.query(Plant).all()). The database was healthy - 19 of 60
+    connections in use, none idle-in-transaction at the time. What the
+    Postgres log showed was 16 "terminating connection due to
+    idle-in-transaction timeout" events (Supabase sets
+    idle_in_transaction_session_timeout to 300000ms = 5 minutes), spread
+    from 2026-08-17 22:00 through 2026-08-18 08:00.
+
+    That is the whole mechanism: if a rerun ever ends with a transaction
+    still open (see db.close_out_session for the paths that can happen on),
+    the Session keeps that connection checked out. Five idle minutes later
+    the server kills it, and the next query this browser tab issues runs
+    straight into a socket that is already gone.
+
+    pool_pre_ping does NOT cover this case, which is worth being explicit
+    about: pre-ping validates a connection at the moment it is checked OUT
+    of the pool. A Session sitting on an open transaction never returns its
+    connection to the pool, so there is no checkout to ping - the dead
+    connection is handed to the next query directly.
+
+    SQLAlchemy sets connection_invalidated on the error in most of these
+    cases; the message check is a fallback for the ones it does not."""
+    if getattr(exc, "connection_invalidated", False):
+        return True
+    text = str(getattr(exc, "orig", exc)).lower()
+    return any(
+        marker in text
+        for marker in (
+            "server closed the connection unexpectedly",
+            "terminating connection due to idle-in-transaction",
+            "terminating connection due to administrator command",
+            "connection already closed",
+            "ssl connection has been closed unexpectedly",
+            "consuming input failed",
+            "no connection to the server",
+            "connection is closed",
+        )
+    )
+
+
+def _discard_session():
+    """Throw away this tab's cached Session so the next get_session() builds a
+    fresh one against a pool_pre_ping-verified connection.
+
+    close() first, then pop: popping alone leaves the old Session holding an
+    open transaction until Python happens to garbage-collect it, which is
+    exactly the state that produced the idle-in-transaction terminations in
+    the first place. close() rolls back and returns (or invalidates) the
+    connection immediately."""
+    dead = st.session_state.pop("_sa_session", None)
+    if dead is not None:
+        try:
+            dead.close()
+        except Exception:
+            pass
+
+
+def _recover_session():
+    """Discard the broken Session, once per browser tab. False if a recovery
+    was already attempted and has not been cleared by a clean run since - so a
+    genuine, repeatable bug surfaces as a crash instead of rerunning forever."""
+    if st.session_state.get("_sa_session_recovery_attempted"):
+        return False
+    st.session_state["_sa_session_recovery_attempted"] = True
+    _discard_session()
+    return True
+
+
+def _nav_context():
+    """The three things nav visibility needs from the database."""
+    session = get_session()
+    is_auth = bool(st.session_state.get("authenticated"))
+    denied = denied_page_keys(session, st.session_state.get("role_id")) if is_auth else set()
+    company_id = st.session_state.get("company_id") if is_auth else None
+    subscription = None
+    if company_id:
+        company = session.get(Company, company_id)
+        subscription = company.subscription_type if company else None
+    return session, denied, subscription
+
+
 _is_authenticated = bool(st.session_state.get("authenticated"))
 _is_platform_owner = bool(st.session_state.get("is_platform_owner", False)) if _is_authenticated else True
 _is_super_admin = bool(st.session_state.get("is_super_admin", False)) if _is_authenticated else True
-_denied_keys = denied_page_keys(_nav_session, st.session_state.get("role_id")) if _is_authenticated else set()
-_company_id = st.session_state.get("company_id") if _is_authenticated else None
-_subscription = None
-if _company_id:
-    _company = _nav_session.get(Company, _company_id)
-    _subscription = _company.subscription_type if _company else None
+# Retried inline rather than via st.rerun(): this runs before st.navigation(),
+# so nothing has been drawn yet and a second attempt on a fresh connection is
+# invisible to the user. Note that neither of these calls reliably touches the
+# database - denied_page_keys is st.cache_data-cached, and session.get(Company)
+# is answered from the Session identity map - which is precisely why the
+# 2026-08-18 crash surfaced further in, on the Overview page's first real
+# query, rather than here.
+try:
+    _nav_session, _denied_keys, _subscription = _nav_context()
+except sa_exc.DBAPIError as _boot_exc:
+    if not _is_dead_connection(_boot_exc):
+        raise
+    _discard_session()
+    _nav_session, _denied_keys, _subscription = _nav_context()
+
 
 def _visible(key):
     return page_visible(
@@ -459,9 +555,24 @@ except sa_exc.InvalidRequestError:
     # different, page-code-level bug that happens to also raise
     # InvalidRequestError can't silently rerun forever instead of
     # surfacing normally.
-    if not st.session_state.get("_sa_session_recovery_attempted"):
-        st.session_state["_sa_session_recovery_attempted"] = True
-        st.session_state.pop("_sa_session", None)
+    if _recover_session():
+        st.rerun()
+    raise
+except sa_exc.DBAPIError as db_exc:
+    # Production incident, 2026-08-18 - see _is_dead_connection() above for
+    # the full mechanism. Short version: a transaction left open across
+    # reruns keeps its connection checked out, Postgres kills it after five
+    # idle minutes, and the next query this tab runs hits a dead socket.
+    # pool_pre_ping cannot catch it, because a connection that never goes
+    # back to the pool is never checked out again to be pinged.
+    #
+    # Nothing is wrong with the page or the data, so crashing at the user is
+    # the wrong answer: discard the Session (which invalidates the dead
+    # connection) and rerun once, exactly as the InvalidRequestError branch
+    # above does. Only genuine dead-connection errors are swallowed this way
+    # - a real SQL error (bad column, constraint violation, timeout) is also
+    # a DBAPIError and must keep surfacing normally.
+    if _is_dead_connection(db_exc) and _recover_session():
         st.rerun()
     raise
 finally:
