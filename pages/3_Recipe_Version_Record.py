@@ -301,7 +301,23 @@ with tab_edit:
                 # Deliberately inside the `edit_grade is not None` branch: with
                 # nothing selected there is no recipe for a delete control to act
                 # on, and showing one would invite deleting the wrong thing.
-                with st.expander(f"Delete recipe '{active_version.version_label}'"):
+                # Gated behind a checkbox, and deliberately NOT an st.expander:
+                # an expander still executes its body when collapsed, and this
+                # body is expensive. recipe_version_dependency_counts() walks
+                # every production run on the version and fires roughly eight
+                # COUNT queries per run - on STD 30170 that is 38 runs, ~300
+                # round trips to the database. Running that on every rerun made
+                # the page take many seconds to reach the ingredients table, and
+                # made the grid feel dead: each keystroke in the editor triggers
+                # a rerun, so every character paid the same cost before the edit
+                # came back.
+                #
+                # Nothing here runs until the operator actually intends to delete.
+                if st.checkbox(
+                    f"Delete recipe '{active_version.version_label}'",
+                    key=f"show_delete_recipe_{active_version.id}",
+                    help="Shows what would be removed, then asks you to confirm.",
+                ):
                     _counts = recipe_version_dependency_counts(session, active_version.id)
                     _total_related = sum(_counts.values())
                     if _total_related:
@@ -748,23 +764,34 @@ else:
                             st.success("Recipe version updated.")
                             st.rerun()
 
-                counts = recipe_version_dependency_counts(session, v.id)
-                total_related = sum(counts.values())
-                if total_related:
-                    detail = ", ".join(f"{n} {k}" for k, n in counts.items() if n)
-                    warning = f"Deleting this recipe version will also permanently delete {total_related} related record(s): {detail}."
-                else:
-                    warning = "This recipe version has no related records — deleting it is safe."
+                # Same gate as the Edit Recipe tab: recipe_version_dependency_counts()
+                # costs roughly eight COUNT queries per production run on the
+                # version, so it is only paid when a delete is actually intended.
+                if st.checkbox(
+                    "Show delete option", key=f"show_delete_version_{v.id}",
+                    help="Shows what would be removed, then asks you to confirm.",
+                ):
+                    counts = recipe_version_dependency_counts(session, v.id)
+                    total_related = sum(counts.values())
+                    if total_related:
+                        detail = ", ".join(f"{n} {k}" for k, n in counts.items() if n)
+                        warning = (
+                            f"Deleting this recipe version will also permanently delete "
+                            f"{total_related} related record(s): {detail}."
+                        )
+                    else:
+                        warning = "This recipe version has no related records — deleting it is safe."
 
-                def _do_delete_version(_session=session, _id=v.id):
-                    delete_recipe_version_cascade(_session, _id)
-                    _session.commit()
-                    st.session_state.pop("rv_selected_id", None)
+                    def _do_delete_version(_session=session, _id=v.id):
+                        delete_recipe_version_cascade(_session, _id)
+                        _session.commit()
+                        st.session_state.pop("rv_selected_id", None)
 
-                delete_with_confirm(
-                    f"Recipe version '{v.version_label}'", _do_delete_version, key_prefix=f"version_{v.id}",
-                    extra_warning=warning,
-                )
+                    delete_with_confirm(
+                        f"Recipe version '{v.version_label}'", _do_delete_version,
+                        key_prefix=f"version_{v.id}", extra_warning=warning,
+                    )
+
 
         with st.expander(f"Recipe components ({len(v.components)})"):
             if v.components:
