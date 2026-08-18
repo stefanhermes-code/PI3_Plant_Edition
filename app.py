@@ -263,11 +263,12 @@ def render_overview():
     t3.metric("Optimization trials", optimization_trials_count)
     t4.metric("Open customer/optimization trials", active_trials)
 
-# Customers master (ported from Rigid Foam CR-14) is built and deployed but not
-# yet shown in the navigation. Set to True to add it to the sidebar under Setup;
-# nothing else needs to change. Kept False for now so the page can be verified
-# without altering the sidebar during a demo.
-SHOW_CUSTOMERS_PAGE = False
+# Customers master (ported from Rigid Foam CR-14). Held out of the navigation
+# until the 18 Aug 2026 demo was over so the sidebar could not change mid-demo;
+# switched on immediately afterwards. Kept as a named constant rather than
+# deleted, so the same page can be hidden again for a future demo by flipping
+# one value.
+SHOW_CUSTOMERS_PAGE = True
 
 overview_page = st.Page(render_overview, title="Overview", icon="🏠", default=True)
 report_page = st.Page("pages/21_Report.py", title="Report", icon="🖨️")
