@@ -175,7 +175,9 @@ def _active_version(grade):
 # ---------------------------------------------------------------------------
 # Recipe versions (header record)
 # ---------------------------------------------------------------------------
-tab_create, tab_edit, tab_import = st.tabs(["Create Recipe", "Edit Recipe", "CSV / Excel import"])
+tab_create, tab_edit, tab_import, tab_where_used = st.tabs(
+    ["Create Recipe", "Edit Recipe", "CSV / Excel import", "Where Used"]
+)
 
 with tab_create:
     if not page_usable:
@@ -630,355 +632,51 @@ else:
             set_pending_banner("recipe_component_import_msg", msg)
             st.rerun()
 
-# ---------------------------------------------------------------------------
-# Recipe versions (full history + detail/edit/delete) - kept at the bottom of
-# the page on purpose: Create/Edit Recipe above cover the day-to-day flow,
-# this is the audit trail underneath it.
-# ---------------------------------------------------------------------------
-st.divider()
-st.subheader("Recipe versions")
-st.caption(
-    "Full formulation history across every foam grade. Click a row to view or manage that "
-    "version's details, ingredients, or delete it."
-)
-
-if not versions:
-    st.info("No recipe versions recorded yet.")
-else:
-    version_rows = [
-        {
-            "Version": v.version_label,
-            "Foam grade": v.foam_grade.grade_name if v.foam_grade else "—",
-            "Active": "Yes" if v.is_active else "No",
-            "Status": v.approval_status,
-            "Effective date": v.effective_date,
-            "Created by": v.created_by,
-        }
-        for v in versions
-    ]
-    idx = clickable_table(version_rows, key="recipe_versions_table")
-    if idx is not None and idx < len(versions):
-        st.session_state["rv_selected_id"] = versions[idx].id
-    elif st.session_state.get("rv_selected_id") not in {v.id for v in versions}:
-        st.session_state.pop("rv_selected_id", None)
-
-    selected_id = st.session_state.get("rv_selected_id")
-    v = next((x for x in versions if x.id == selected_id), None)
-
-    if v is None:
-        st.caption("Select a row above to view or manage that recipe version.")
-    else:
-        st.markdown(
-            f"### {v.version_label} — {v.foam_grade.grade_name if v.foam_grade else '—'} "
-            + ("🟢 Active" if v.is_active else "")
-        )
-        st.caption(f"Effective {v.effective_date or '—'} | Created by {v.created_by or '—'} | Status `{v.approval_status}`")
-        st.caption(
-            f"Ratio / index: **{v.ratio_index:.3f}**" if v.ratio_index is not None else "Ratio / index: not set"
-        )
-        st.write(v.change_note)
-
-        if not v.is_active and page_usable:
-            if st.button("Set as active recipe", key=f"activate_{v.id}"):
-                activate_recipe_version(session, v.foam_grade_id, v)
-                session.commit()
-                st.success(f"'{v.version_label}' is now the active recipe for {v.foam_grade.grade_name}.")
-                st.rerun()
-
-        with st.expander("📄 Recipe / Formulation Record report"):
-            st.caption(
-                "Internal-use record for this recipe version - the formulation itself, quality specs "
-                "vs. actual results over a date range you choose, and cost per kg. Not for external/"
-                "customer use, since it includes the formulation."
-            )
-            frc1, frc2 = st.columns(2)
-            report_date_from = frc1.date_input(
-                "Quality results from", value=dt.date.today() - dt.timedelta(days=180), key=f"formrec_from_{v.id}"
-            )
-            report_date_to = frc2.date_input("to", value=dt.date.today(), key=f"formrec_to_{v.id}")
-            report_data = reports.build_recipe_formulation_record_data(
-                session, v.id, date_from=report_date_from, date_to=report_date_to
-            )
-
-            st.write("**Formulation**")
-            render_data_table(pd.DataFrame(report_data["components"] or [{"—": "No data recorded"}]))
-            st.write("**Quality specs vs. results**")
-            render_data_table(pd.DataFrame(report_data["quality_rows"] or [{"—": "No data recorded"}]))
-            if report_data["cost_per_kg"] is not None:
-                st.metric("Cost per kg", report_data["cost_per_kg"])
-            else:
-                st.caption("No priced components yet - cost per kg cannot be calculated.")
-
-            st.download_button(
-                "Download Word", data=reports.render_recipe_formulation_record_docx(report_data),
-                file_name=f"recipe_{v.id}_formulation_record.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key=f"formrec_docx_{v.id}",
-                on_click=log_export_click, args=("recipe_formulation_record_docx",),
-                kwargs={"description": f"Recipe version #{v.id} ({v.version_label})"},
-            )
-
-        with st.expander("Edit details / delete this recipe version"):
-            if not page_usable:
-                st.caption("View-only access - editing and deleting is restricted for your role.")
-            else:
-                st.caption(
-                    "This edits this version's own header details in place (for example, fixing a typo "
-                    "or updating its approval status) - it does not create a new version. To revise the "
-                    "actual formulation, use the 'Edit Recipe' tab above instead."
-                )
-                with st.form(f"edit_version_{v.id}"):
-                    e_grade = st.selectbox(
-                        "Foam grade *", grades,
-                        index=next((i for i, g in enumerate(grades) if g.id == v.foam_grade_id), 0),
-                        format_func=lambda g: g.grade_name, key=f"edit_version_grade_{v.id}",
-                    )
-                    e_label = st.text_input("Version label *", value=v.version_label, key=f"edit_version_label_{v.id}")
-                    e_effective = st.date_input(
-                        "Effective date", value=v.effective_date or dt.date.today(), key=f"edit_version_eff_{v.id}"
-                    )
-                    e_change_note = st.text_area("Change note *", value=v.change_note or "", key=f"edit_version_note_{v.id}")
-                    e_status = st.selectbox(
-                        "Approval status", APPROVAL_STATUSES,
-                        index=APPROVAL_STATUSES.index(v.approval_status) if v.approval_status in APPROVAL_STATUSES else 0,
-                        key=f"edit_version_status_{v.id}",
-                    )
-                    e_created_by = st.text_input("Created by", value=v.created_by or "", key=f"edit_version_by_{v.id}")
-                    e_ratio_index = st.number_input(
-                        "Ratio / index", min_value=0.0, step=0.01, format="%.3f",
-                        value=float(v.ratio_index or 0.0), key=f"edit_version_ratio_{v.id}",
-                        help="Stoichiometric ratio/index for this formulation - determines the isocyanate php.",
-                    )
-                    if st.form_submit_button("Save changes"):
-                        if not e_label.strip() or not e_change_note.strip():
-                            st.error("Version label and change note are required.")
-                        else:
-                            v.foam_grade_id = e_grade.id
-                            v.version_label = e_label.strip()
-                            v.effective_date = e_effective
-                            v.change_note = e_change_note
-                            v.approval_status = e_status
-                            v.created_by = e_created_by
-                            v.ratio_index = e_ratio_index or None
-                            session.commit()
-                            st.success("Recipe version updated.")
-                            st.rerun()
-
-                # Same gate as the Edit Recipe tab: recipe_version_dependency_counts()
-                # costs roughly eight COUNT queries per production run on the
-                # version, so it is only paid when a delete is actually intended.
-                if st.checkbox(
-                    "Show delete option", key=f"show_delete_version_{v.id}",
-                    help="Shows what would be removed, then asks you to confirm.",
-                ):
-                    counts = recipe_version_dependency_counts(session, v.id)
-                    total_related = sum(counts.values())
-                    if total_related:
-                        detail = ", ".join(f"{n} {k}" for k, n in counts.items() if n)
-                        warning = (
-                            f"Deleting this recipe version will also permanently delete "
-                            f"{total_related} related record(s): {detail}."
-                        )
-                    else:
-                        warning = "This recipe version has no related records — deleting it is safe."
-
-                    def _do_delete_version(_session=session, _id=v.id):
-                        delete_recipe_version_cascade(_session, _id)
-                        _session.commit()
-                        st.session_state.pop("rv_selected_id", None)
-
-                    delete_with_confirm(
-                        f"Recipe version '{v.version_label}'", _do_delete_version,
-                        key_prefix=f"version_{v.id}", extra_warning=warning,
-                    )
-
-
-        with st.expander(f"Recipe components ({len(v.components)})"):
-            if v.components:
-                ordered_version_components = sorted(
-                    v.components,
-                    key=lambda c: recipe_component_sort_index(c.role_in_formulation, c.raw_material_name),
-                )
-                comp_rows = [
-                    {
-                        "Raw material": c.raw_material_name,
-                        "Supplier": c.supplier,
-                        "php": f"{c.php:.2f}" if c.php is not None else "",
-                        "Role": c.role_in_formulation,
-                        "Notes": c.notes,
-                    }
-                    for c in ordered_version_components
-                ]
-                st.caption("Click a row to edit (and optionally delete) that component.")
-                comp_idx = clickable_table(comp_rows, key=f"components_table_{v.id}")
-                if comp_idx is not None and comp_idx < len(ordered_version_components):
-                    st.session_state["comp_selected_id"] = ordered_version_components[comp_idx].id
-                elif st.session_state.get("comp_selected_id") in {c.id for c in v.components}:
-                    # a component belonging to THIS version was selected before, but the
-                    # table no longer reports a selection - clear the stale reference
-                    # rather than leaving a phantom edit form. Scoped to this version's
-                    # own component ids so it doesn't clobber a different version's
-                    # live selection elsewhere in this same loop.
-                    st.session_state.pop("comp_selected_id", None)
-
-                selected_comp_id = st.session_state.get("comp_selected_id")
-                selected_comp = next((c for c in v.components if c.id == selected_comp_id), None)
-
-                if selected_comp:
-                    st.markdown(f"**Edit component: {selected_comp.raw_material_name}**")
-                    if not page_usable:
-                        st.caption("View-only access - editing and deleting is restricted for your role.")
-                    else:
-                        with st.form(f"edit_component_{selected_comp.id}"):
-                            ec1, ec2, ec3 = st.columns(3)
-                            e_name = ec1.text_input(
-                                "Raw material name", value=selected_comp.raw_material_name, key=f"edit_comp_name_{selected_comp.id}"
-                            )
-                            e_supplier = ec2.text_input(
-                                "Supplier", value=selected_comp.supplier or "", key=f"edit_comp_sup_{selected_comp.id}"
-                            )
-                            e_php = ec3.number_input(
-                                "php", min_value=0.0, step=0.001, format="%.3f",
-                                value=float(selected_comp.php or 0.0), key=f"edit_comp_php_{selected_comp.id}",
-                            )
-                            e_role = st.text_input(
-                                "Role in formulation", value=selected_comp.role_in_formulation or "", key=f"edit_comp_role_{selected_comp.id}"
-                            )
-                            e_notes = st.text_input("Notes", value=selected_comp.notes or "", key=f"edit_comp_notes_{selected_comp.id}")
-                            if st.form_submit_button("Save changes"):
-                                if not e_name.strip():
-                                    st.error("Raw material name is required.")
-                                else:
-                                    if e_name.strip() != selected_comp.raw_material_name:
-                                        rm = _match_or_create_raw_material(e_name, e_supplier)
-                                        selected_comp.raw_material_id = rm.id if rm else None
-                                    selected_comp.raw_material_name = e_name.strip()
-                                    selected_comp.supplier = e_supplier
-                                    selected_comp.php = e_php or None
-                                    selected_comp.role_in_formulation = e_role
-                                    selected_comp.notes = e_notes
-                                    session.commit()
-                                    st.success("Component updated.")
-                                    st.rerun()
-
-                        def _do_delete_comp(_session=session, _id=selected_comp.id):
-                            _session.query(RecipeComponent).filter(RecipeComponent.id == _id).delete(synchronize_session=False)
-                            _session.commit()
-                            st.session_state.pop("comp_selected_id", None)
-
-                        delete_with_confirm(
-                            f"component '{selected_comp.raw_material_name}'", _do_delete_comp,
-                            key_prefix=f"comp_{selected_comp.id}",
-                            extra_warning="This is a leaf record — deleting it has no other effects.",
-                        )
-
-                    if st.button("Clear selection", key=f"clear_comp_selection_{v.id}"):
-                        st.session_state.pop("comp_selected_id", None)
-                        st.rerun()
-
-            if not page_usable:
-                st.caption("View-only access - adding a component is restricted for your role.")
-            else:
-                rm_query = session.query(RawMaterial)
-                if active_company_id is not None:
-                    rm_query = rm_query.filter(RawMaterial.company_id == active_company_id)
-                active_raw_materials = (
-                    rm_query
-                    .filter(RawMaterial.active.is_(True))
-                    .order_by(RawMaterial.name)
-                    .all()
-                )
-                raw_material_choice = st.selectbox(
-                    "Raw material",
-                    [None] + active_raw_materials,
-                    format_func=lambda m: "— type a new one below —"
-                    if m is None
-                    else (f"{m.name} ({m.category})" if m.category else m.name),
-                    key=f"rm_select_{v.id}",
-                )
-                with st.form(f"add_component_{v.id}"):
-                    c1, c2, c3 = st.columns(3)
-                    raw_material_other = c1.text_input(
-                        "Or a new raw material not in the list above", key=f"rm_other_{v.id}"
-                    )
-                    supplier_default = raw_material_choice.default_supplier if raw_material_choice else ""
-                    supplier = c2.text_input("Supplier", value=supplier_default or "", key=f"sup_{v.id}")
-                    php = c3.number_input("php", min_value=0.0, step=0.001, format="%.3f", key=f"php_{v.id}")
-                    role = st.text_input(
-                        "Role in formulation (e.g. polyol, TDI, catalyst, surfactant)", key=f"role_{v.id}"
-                    )
-                    notes = st.text_input("Notes", key=f"notes_{v.id}")
-                    add_component = st.form_submit_button("Add component")
-                    if add_component:
-                        final_name = raw_material_other.strip() or (
-                            raw_material_choice.name if raw_material_choice else ""
-                        )
-                        if not final_name:
-                            st.error("Pick a raw material from the list, or type a new one.")
-                        else:
-                            if raw_material_other.strip():
-                                rm = _match_or_create_raw_material(final_name, supplier)
-                            else:
-                                rm = raw_material_choice
-                            session.add(
-                                RecipeComponent(
-                                    recipe_version_id=v.id,
-                                    raw_material_id=rm.id if rm else None,
-                                    raw_material_name=final_name,
-                                    supplier=supplier,
-                                    php=php or None,
-                                    role_in_formulation=role,
-                                    notes=notes,
-                                )
-                            )
-                            session.commit()
-                            st.success("Component added.")
-                            st.rerun()
 
 # ---------------------------------------------------------------------------
 # Where Used Report - reverse lookup: which recipes use a given raw material.
-# Kept at the very bottom since it's scoped by raw material, not by any
-# recipe version selected above.
+# Its own tab: it is scoped by raw material rather than by a recipe version,
+# so it never belonged under Edit Recipe.
 # ---------------------------------------------------------------------------
-st.divider()
-st.subheader("📄 Where Used Report")
-st.caption(
-    "Pick a raw material to see every recipe version - active and retired - that uses it, the "
-    "target properties of the foam grades affected, and any Customer/Optimization Trial precedent "
-    "tied to those recipes. Useful before considering a material substitution."
-)
-wu_rm_query = session.query(RawMaterial)
-if active_company_id is not None:
-    wu_rm_query = wu_rm_query.filter(RawMaterial.company_id == active_company_id)
-wu_materials = wu_rm_query.order_by(RawMaterial.name).all()
-
-if not wu_materials:
-    st.info("No raw materials recorded yet.")
-else:
-    wu_material = st.selectbox(
-        "Raw material", wu_materials,
-        format_func=lambda m: f"{m.name} ({m.category})" if m.category else m.name,
-        key="where_used_material_select",
+with tab_where_used:
+    st.subheader("📄 Where Used Report")
+    st.caption(
+        "Pick a raw material to see every recipe version - active and retired - that uses it, the "
+        "target properties of the foam grades affected, and any Customer/Optimization Trial precedent "
+        "tied to those recipes. Useful before considering a material substitution."
     )
-    wu_data = reports.build_where_used_report_data(session, wu_material.id)
+    wu_rm_query = session.query(RawMaterial)
+    if active_company_id is not None:
+        wu_rm_query = wu_rm_query.filter(RawMaterial.company_id == active_company_id)
+    wu_materials = wu_rm_query.order_by(RawMaterial.name).all()
 
-    wc1, wc2, wc3 = st.columns(3)
-    wc1.metric("Recipe versions using it", wu_data["recipe_version_count"])
-    wc2.metric("Foam grades affected", wu_data["foam_grade_count"])
-    wc3.metric("Product families affected", wu_data["product_family_count"])
+    if not wu_materials:
+        st.info("No raw materials recorded yet.")
+    else:
+        wu_material = st.selectbox(
+            "Raw material", wu_materials,
+            format_func=lambda m: f"{m.name} ({m.category})" if m.category else m.name,
+            key="where_used_material_select",
+        )
+        wu_data = reports.build_where_used_report_data(session, wu_material.id)
 
-    st.write("**Recipes using this material**")
-    render_data_table(pd.DataFrame(wu_data["usage_rows"] or [{"—": "No data recorded"}]))
-    st.write("**Target properties of affected foam grades**")
-    render_data_table(pd.DataFrame(wu_data["target_rows"] or [{"—": "No data recorded"}]))
-    st.write("**Trial precedent**")
-    render_data_table(pd.DataFrame(wu_data["trial_rows"] or [{"—": "No data recorded"}]))
+        wc1, wc2, wc3 = st.columns(3)
+        wc1.metric("Recipe versions using it", wu_data["recipe_version_count"])
+        wc2.metric("Foam grades affected", wu_data["foam_grade_count"])
+        wc3.metric("Product families affected", wu_data["product_family_count"])
 
-    st.download_button(
-        "Download Word", data=reports.render_where_used_report_docx(wu_data),
-        file_name=f"where_used_{wu_data['raw_material_id']}_report.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        key="where_used_docx",
-        on_click=log_export_click, args=("where_used_report_docx",),
-        kwargs={"description": wu_data["raw_material_name"]},
-    )
+        st.write("**Recipes using this material**")
+        render_data_table(pd.DataFrame(wu_data["usage_rows"] or [{"—": "No data recorded"}]))
+        st.write("**Target properties of affected foam grades**")
+        render_data_table(pd.DataFrame(wu_data["target_rows"] or [{"—": "No data recorded"}]))
+        st.write("**Trial precedent**")
+        render_data_table(pd.DataFrame(wu_data["trial_rows"] or [{"—": "No data recorded"}]))
+
+        st.download_button(
+            "Download Word", data=reports.render_where_used_report_docx(wu_data),
+            file_name=f"where_used_{wu_data['raw_material_id']}_report.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="where_used_docx",
+            on_click=log_export_click, args=("where_used_report_docx",),
+            kwargs={"description": wu_data["raw_material_name"]},
+        )
