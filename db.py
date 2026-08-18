@@ -133,6 +133,76 @@ RAW_MATERIAL_CATEGORIES = [
     "Other",
 ]
 
+# Flexible-foam customer types - the controlled vocabulary behind the Customer
+# Type dropdown on pages/29_Customers.py.
+#
+# Source: PI3_Flexible_Foam_Customer_Types_Master.csv, supplied by Charlie on
+# 18 Aug 2026 at Stefan's request. Held as a constant here rather than a
+# database table, the same as RAW_MATERIAL_CATEGORIES above: it is a stable
+# industry vocabulary, not tenant data, so every company sees the same list and
+# nobody has to seed it per company.
+#
+# Order is the master's sort_order, which groups the types - the list is not
+# alphabetical on purpose, so related types sit together in the dropdown.
+#
+# The master also carries customer_type_id and active_flag. The ids are kept
+# below so a future revision can be diffed against the source file; active_flag
+# is not, because every row in the delivered master is active - if a type ever
+# needs retiring, drop it from this list and decide then what to do with the
+# customers already carrying it (see _CUSTOMER_TYPE_UNKNOWN_SUFFIX handling on
+# the Customers page, which already tolerates a stored value that is no longer
+# offered).
+CUSTOMER_TYPES = [
+    # (master id, name, group)
+    ("FFCT001", "Mattress and Bedding Manufacturer", "Comfort and Furniture"),
+    ("FFCT002", "Upholstered Furniture Manufacturer", "Comfort and Furniture"),
+    ("FFCT003", "Office Furniture and Seating Manufacturer", "Comfort and Furniture"),
+    ("FFCT004", "Furniture Component Manufacturer", "Comfort and Furniture"),
+    ("FFCT005", "Contract and Hospitality Furniture Manufacturer", "Comfort and Furniture"),
+    ("FFCT006", "Automotive Seating Supplier", "Transportation"),
+    ("FFCT007", "Automotive Interior and NVH Supplier", "Transportation"),
+    ("FFCT008", "Commercial Vehicle Seating Manufacturer", "Transportation"),
+    ("FFCT009", "Railway Seating and Interior Manufacturer", "Transportation"),
+    ("FFCT010", "Aircraft Seating and Interior Manufacturer", "Transportation"),
+    ("FFCT011", "Marine Seating and Interior Manufacturer", "Transportation"),
+    ("FFCT012", "Healthcare Mattress and Support Surface Manufacturer", "Healthcare and Care"),
+    ("FFCT013", "Medical Cushioning and Positioning Product Manufacturer", "Healthcare and Care"),
+    ("FFCT014", "Wheelchair and Pressure Care Product Manufacturer", "Healthcare and Care"),
+    ("FFCT015", "Baby and Childcare Product Manufacturer", "Healthcare and Care"),
+    ("FFCT016", "Acoustic and Sound Absorption Product Manufacturer", "Technical and Industrial"),
+    ("FFCT017", "Air and Liquid Filtration Product Manufacturer", "Technical and Industrial"),
+    ("FFCT018", "Gasket Sealing and Technical Component Manufacturer", "Technical and Industrial"),
+    ("FFCT019", "Industrial Cushioning and Vibration Control Manufacturer", "Technical and Industrial"),
+    ("FFCT020", "Protective Packaging Manufacturer", "Technical and Industrial"),
+    ("FFCT021", "Electronics and Electrical Cushioning Manufacturer", "Technical and Industrial"),
+    ("FFCT022", "Appliance Component Manufacturer", "Technical and Industrial"),
+    ("FFCT023", "Textile Lamination and Composite Manufacturer", "Technical and Industrial"),
+    ("FFCT024", "Building Acoustic and Interior Product Manufacturer", "Construction and Flooring"),
+    ("FFCT025", "Carpet Underlay and Flooring Manufacturer", "Construction and Flooring"),
+    ("FFCT026", "Rebond Foam Manufacturer", "Construction and Flooring"),
+    ("FFCT027", "Cleaning Sponge Manufacturer", "Consumer Products"),
+    ("FFCT028", "Industrial and Janitorial Cleaning Product Manufacturer", "Consumer Products"),
+    ("FFCT029", "Personal Care and Cosmetic Sponge Manufacturer", "Consumer Products"),
+    ("FFCT030", "Footwear and Insole Manufacturer", "Consumer Products"),
+    ("FFCT031", "Sports Leisure and Protective Padding Manufacturer", "Consumer Products"),
+    ("FFCT032", "Apparel and Garment Padding Manufacturer", "Consumer Products"),
+    ("FFCT033", "Pet Bedding and Cushion Product Manufacturer", "Consumer Products"),
+    ("FFCT034", "Foam Converter and Fabricator", "Conversion and Distribution"),
+    ("FFCT035", "Foam Distributor and Wholesaler", "Conversion and Distribution"),
+    ("FFCT036", "Private Label and Retail Product Brand", "Conversion and Distribution"),
+    ("FFCT999", "Other Flexible Foam Customer", "Other"),
+]
+
+# What the dropdown offers, and what is stored on Customer.customer_type. The
+# NAME is stored, not the id - same "text snapshot" convention the rest of this
+# schema uses (RawMaterial.default_supplier, CustomerTrial.customer_name), so a
+# customer row stays readable without a join and survives this list changing.
+CUSTOMER_TYPE_NAMES = [name for _id, name, _group in CUSTOMER_TYPES]
+
+# name -> group, for grouping/segmentation in reporting later. Nothing reads it
+# yet; it is here so the group column from the master is not thrown away.
+CUSTOMER_TYPE_GROUP = {name: group for _id, name, group in CUSTOMER_TYPES}
+
 ZONE_LABELS = ["Top", "Middle", "Bottom", "Whole sample / N/A"]
 
 # A sample/result/issue belongs to exactly one of these three parents -
@@ -1000,11 +1070,11 @@ class Customer(Base):
     company_name = Column(String(200), nullable=False)
     contact_person = Column(String(200))
     contact_email = Column(String(200))
-    # Free text for now. Stefan asked for a controlled dropdown on 18 Aug 2026;
-    # Charlie is drawing up the list of valid customer types, and this becomes a
-    # constrained field (constant + selectbox, the RAW_MATERIAL_CATEGORIES
-    # pattern) once that list exists. Left as text deliberately rather than
-    # guessing a vocabulary that would then have to be migrated.
+    # Constrained to CUSTOMER_TYPES above (18 Aug 2026). Still a plain String
+    # rather than an FK or an Enum: the NAME is stored, so a row stays readable
+    # without a join, and a later revision of the vocabulary cannot orphan a
+    # customer or require a migration. String(100) is comfortably above the
+    # longest name in the master, which is 56 characters.
     customer_type = Column(String(100))
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 

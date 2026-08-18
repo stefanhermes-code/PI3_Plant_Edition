@@ -4,8 +4,9 @@ Ported from PI3 Rigid Foam Edition's CR-14 (12 Aug 2026) so both editions model
 customer identity the same way.
 
 Deliberately lightweight - a practical application reference rather than a full
-CRM: Customer Name, Contact Person, Contact Email, and an optional free-text
-Customer Type.
+CRM: Customer Name, Contact Person, Contact Email, and an optional Customer
+Type chosen from a fixed list (db.CUSTOMER_TYPES, 18 Aug 2026 - free text until
+then, and the drift that invited is exactly what the list is for).
 
 The field is labelled "Customer Name" everywhere in the UI, but the column
 behind it is Customer.company_name. That mismatch is deliberate (18 Aug 2026,
@@ -34,7 +35,14 @@ import streamlit as st
 from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from cascades import backfill_trial_customers
-from db import Customer, CustomerTrial, get_session, init_db
+from db import (
+    CUSTOMER_TYPE_GROUP,
+    CUSTOMER_TYPE_NAMES,
+    Customer,
+    CustomerTrial,
+    get_session,
+    init_db,
+)
 from helpers import (
     clickable_table,
     csv_excel_uploader,
@@ -59,6 +67,36 @@ CUSTOMER_OPTIONAL_COLUMNS = ["contact_person", "contact_email", "customer_type"]
 # email, and a shared helper would be a wider change than this page warrants.
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# Customer Type is optional, so the dropdown needs a "nothing chosen" entry.
+# Blank rather than a word like "None", so an unset type reads as unset in the
+# widget instead of looking like a deliberate category.
+_TYPE_BLANK = ""
+
+
+def _type_options(current=None):
+    """Options for the Customer Type dropdown.
+
+    Normally just blank + the master list (db.CUSTOMER_TYPES). If a customer
+    already carries a value that is NOT in the master - which can only happen
+    if the vocabulary is revised later, or a CSV predating validation was
+    imported - that value is appended rather than dropped, so opening the edit
+    form on such a customer cannot silently retype them. It is marked so the
+    reason it is there is obvious."""
+    options = [_TYPE_BLANK] + CUSTOMER_TYPE_NAMES
+    if current and current not in CUSTOMER_TYPE_NAMES:
+        options.append(current)
+    return options
+
+
+def _type_label(value):
+    """Dropdown label: the type, with its group, so the 37 entries read as
+    seven runs rather than one long alphabetical-looking wall. Grouping is what
+    the master's sort_order encodes, and the options are kept in that order."""
+    if not value:
+        return "— none —"
+    group = CUSTOMER_TYPE_GROUP.get(value)
+    return f"{value}  ·  {group}" if group else f"{value}  ·  (not in the current list)"
+
 
 def _valid_email(value):
     """Empty is valid - Contact Email is optional."""
@@ -75,8 +113,9 @@ st.title("Customers")
 render_function_action_intro(
     function_text=(
         "Maintains a lightweight master list of customers - Customer Name, Contact Person, Contact "
-        "Email and an optional Customer Type - so customer identity has one home instead of living "
-        "only as free text on Customer Trials & Samples. A practical reference, not a CRM: no sales "
+        "Email and an optional Customer Type picked from a fixed list - so customer identity has "
+        "one home instead of living only as free text on Customer Trials & Samples. A practical "
+        "reference, not a CRM: no sales "
         "pipeline, multiple contacts or commercial history."
     ),
     action_text=(
@@ -125,8 +164,12 @@ with tab_create:
             new_name = st.text_input("Customer Name *")
             new_contact = st.text_input("Contact Person")
             new_email = st.text_input("Contact Email")
-            new_type = st.text_input(
-                "Customer Type", help="Optional free text - there is no fixed category list."
+            new_type = st.selectbox(
+                "Customer Type",
+                _type_options(),
+                format_func=_type_label,
+                help="Optional. Picked from the flexible-foam customer type master - "
+                     "start typing to filter the list.",
             )
             if st.form_submit_button("Add customer"):
                 name = new_name.strip()
@@ -149,7 +192,7 @@ with tab_create:
                             company_name=name,
                             contact_person=new_contact.strip(),
                             contact_email=new_email.strip(),
-                            customer_type=new_type.strip(),
+                            customer_type=new_type,
                         )
                     )
                     session.commit()
@@ -172,6 +215,7 @@ with tab_manage:
                 "Contact Person": c.contact_person or "—",
                 "Contact Email": c.contact_email or "—",
                 "Customer Type": c.customer_type or "—",
+                "Group": CUSTOMER_TYPE_GROUP.get(c.customer_type, "—"),
                 "Linked trials": session.query(CustomerTrial)
                 .filter(CustomerTrial.customer_id == c.id)
                 .count(),
@@ -218,8 +262,12 @@ with tab_manage:
                         "Contact Email", value=selected.contact_email or "",
                         key=f"edit_customer_email_{selected.id}",
                     )
-                    e_type = st.text_input(
-                        "Customer Type", value=selected.customer_type or "",
+                    _type_opts = _type_options(selected.customer_type)
+                    e_type = st.selectbox(
+                        "Customer Type",
+                        _type_opts,
+                        index=_type_opts.index(selected.customer_type or _TYPE_BLANK),
+                        format_func=_type_label,
                         key=f"edit_customer_type_{selected.id}",
                     )
                     if st.form_submit_button("Save changes"):
@@ -234,7 +282,7 @@ with tab_manage:
                             selected.company_name = name
                             selected.contact_person = e_contact.strip()
                             selected.contact_email = e_email.strip()
-                            selected.customer_type = e_type.strip()
+                            selected.customer_type = e_type
                             if renamed:
                                 # customer_id is the live link, but customer_name
                                 # is still the display snapshot every trial and
@@ -325,33 +373,58 @@ with tab_import:
                 .filter(Customer.company_id == import_company.id)
                 .all()
             }
-            good_rows, dup_rows = [], []
-            for _, row in df.iterrows():
+            # customer_type is validated against the master, not accepted as
+            # typed. A dropdown on the forms and free text on the importer
+            # would put the drift straight back - which is the whole reason
+            # the vocabulary exists. Matching is case-insensitive and the
+            # canonical spelling is what gets stored, so a spreadsheet with
+            # "mattress and bedding manufacturer" imports cleanly.
+            canonical_type = {t.lower(): t for t in CUSTOMER_TYPE_NAMES}
+            good_rows, dup_rows, bad_type_rows = [], [], []
+            resolved_types = {}
+            for i, (_, row) in enumerate(df.iterrows()):
                 name_val = str(row.get("customer_name", "") or "").strip()
                 if not name_val:
                     continue
                 if name_val.lower() in existing_names:
                     dup_rows.append(row)
-                else:
-                    good_rows.append(row)
-                    existing_names.add(name_val.lower())
+                    continue
+                type_val = str(row.get("customer_type", "") or "").strip()
+                if type_val and type_val.lower() not in canonical_type:
+                    bad_type_rows.append(row)
+                    continue
+                resolved_types[i] = canonical_type.get(type_val.lower(), "")
+                good_rows.append((i, row))
+                existing_names.add(name_val.lower())
 
             st.write(
-                f"Rows ready to import: **{len(good_rows)}** | Rows flagged as duplicates: **{len(dup_rows)}**"
+                f"Rows ready to import: **{len(good_rows)}** | "
+                f"Rows flagged as duplicates: **{len(dup_rows)}** | "
+                f"Rows with an unrecognised Customer Type: **{len(bad_type_rows)}**"
             )
+            if bad_type_rows:
+                st.warning(
+                    "These rows were skipped because their customer_type is not in the customer "
+                    "type master. Correct the spelling in your file, or leave the column empty "
+                    "and set the type in the app afterwards - the valid values are the ones in "
+                    "the Customer Type dropdown on the 'Add customer' tab."
+                )
+                render_data_table(pd.DataFrame(bad_type_rows), max_height="400px")
             if dup_rows:
                 st.warning("These rows match a customer already in the list and were skipped.")
                 render_data_table(pd.DataFrame(dup_rows), max_height="400px")
 
             if good_rows and st.button("Confirm import", key="confirm_customer_import"):
-                for row in good_rows:
+                for i, row in good_rows:
                     session.add(
                         Customer(
                             company_id=import_company.id,
                             company_name=str(row["customer_name"]).strip(),
                             contact_person=str(row.get("contact_person", "") or "").strip(),
                             contact_email=str(row.get("contact_email", "") or "").strip(),
-                            customer_type=str(row.get("customer_type", "") or "").strip(),
+                            # canonical spelling from the master, not the
+                            # file's casing - see the validation above
+                            customer_type=resolved_types.get(i, ""),
                         )
                     )
                 session.commit()
