@@ -72,11 +72,11 @@ render_function_action_intro(
     ),
     action_text="Set the reporting period and filters, then open an interaction to read its full record.",
     action_steps=[
-        "**Step 1.** Set the reporting period at the top - every figure and list below follows it.",
-        "**Step 2.** Narrow with the filters: company, plant, user, call site, classification, "
-        "review status, model or prompt version.",
-        "**Step 3.** Click an interaction in the list to open its full evidence record.",
-        "**Step 4.** Record a review decision on the interaction where one is required.",
+        "Set the reporting period at the top - every figure and list below follows it.",
+        "Narrow with the filters: company, plant, user, call site, classification, review status, "
+        "model or prompt version.",
+        "Click an interaction in the list to open its full evidence record.",
+        "Record a review decision on the interaction where one is required.",
     ],
     action_note=(
         "Interactions recorded before the governance fields existed show them as "
