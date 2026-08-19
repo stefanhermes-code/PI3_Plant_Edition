@@ -319,6 +319,32 @@ class Company(Base):
     # assigned to - see SubscriptionType.billing_frequency. One field to
     # pick instead of two that could disagree.
     active = Column(Boolean, default=True)
+
+    # --- Licence and maintenance contract (added 2026-08-19) -------------
+    # These live on the company because a licence is signed with a company,
+    # not with a plant. They replace the maintenance_and_license_records
+    # table, which existed in Postgres without ever having a model, was read
+    # by nothing, and was keyed to plant_id - the wrong grain, since a
+    # multi-plant customer would have carried the same renewal date several
+    # times over and they would have drifted apart.
+    #
+    # SubscriptionType.price is the LIST price of a tier, shared by every
+    # company assigned to it. license_value here is what this particular
+    # customer actually signed, which is a different number and belongs per
+    # company.
+    installation_type = Column(String(100))
+    deployment_type = Column(String(100))
+    license_value = Column(Float)
+    annual_maintenance_percentage = Column(Float)
+    maintenance_start_date = Column(Date)
+    renewal_date = Column(Date)
+    # annual_maintenance_value is deliberately NOT stored, though the old
+    # table had a column for it. It is license_value x
+    # annual_maintenance_percentage, and this codebase has already been bitten
+    # once by a stored derived value drifting from its source:
+    # PhysicalPropertyResult.pass_fail held verdicts from a retired tolerance
+    # rule and disagreed with what every screen computed live. The Companies
+    # screen calculates and shows it instead.
     notes = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 

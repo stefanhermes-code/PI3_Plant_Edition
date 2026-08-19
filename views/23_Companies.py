@@ -31,6 +31,28 @@ from helpers import clickable_table, delete_with_confirm, page_setup, render_fun
 from tenant_scope import clear_scope_cache
 from role_provisioning import clone_builtin_roles_for_company
 
+# The licence/maintenance contract fields (added 2026-08-19) replace the
+# maintenance_and_license_records table - see the Company model in db.py for
+# why they live on the company rather than the plant.
+#
+# installation_type and deployment_type are free text on purpose. The old
+# table held zero rows, so there is no vocabulary to inherit and no way to
+# know what the real values are without guessing. They become dropdowns the
+# moment someone can say what the options are - the same call made for
+# Customer Type, which waited for the master list rather than shipping an
+# invented one.
+
+
+def _annual_maintenance_value(license_value, percentage):
+    """license_value x percentage. Calculated, never stored: the old table had
+    a column for it, and a stored derived value is how
+    PhysicalPropertyResult.pass_fail ended up disagreeing with every screen
+    that computed the same thing live."""
+    if not license_value or not percentage:
+        return None
+    return license_value * percentage / 100.0
+
+
 page_setup("Companies")
 init_db()
 require_login()
@@ -109,6 +131,35 @@ with st.expander("Add company", expanded=False):
             contact_email = st.text_input("Contact email")
         with c_col3:
             contact_phone = st.text_input("Contact phone")
+        st.markdown("**Licence and maintenance contract**")
+        l_col1, l_col2 = st.columns(2)
+        with l_col1:
+            installation_type = st.text_input(
+                "Installation type",
+                help="Free text for now - becomes a dropdown once the valid options are agreed.",
+            )
+            license_value = st.number_input(
+                "Licence value", min_value=0.0, step=100.0, value=None,
+                placeholder="Not recorded",
+                help="What this customer actually signed. The subscription type carries the list "
+                     "price of the tier, which is a different number.",
+            )
+            maintenance_start_date = st.date_input(
+                "Maintenance start date", value=None, format="YYYY-MM-DD",
+            )
+        with l_col2:
+            deployment_type = st.text_input("Deployment type")
+            annual_maintenance_percentage = st.number_input(
+                "Annual maintenance %", min_value=0.0, max_value=100.0, step=0.5, value=None,
+                placeholder="Not recorded",
+            )
+            renewal_date = st.date_input("Renewal date", value=None, format="YYYY-MM-DD")
+        _amv = _annual_maintenance_value(license_value, annual_maintenance_percentage)
+        st.caption(
+            f"Annual maintenance value: **{_amv:,.2f}**" if _amv is not None
+            else "Annual maintenance value is calculated from licence value x annual maintenance %."
+        )
+
         notes = st.text_area("Notes")
         submitted = st.form_submit_button("Save company")
         if submitted:
@@ -127,6 +178,12 @@ with st.expander("Add company", expanded=False):
                     contact_name=contact_name,
                     contact_email=contact_email,
                     contact_phone=contact_phone.strip() or None,
+                    installation_type=installation_type.strip() or None,
+                    deployment_type=deployment_type.strip() or None,
+                    license_value=license_value,
+                    annual_maintenance_percentage=annual_maintenance_percentage,
+                    maintenance_start_date=maintenance_start_date,
+                    renewal_date=renewal_date,
                     notes=notes,
                     active=True,
                 )
@@ -150,6 +207,7 @@ else:
             "Billing": (c.subscription_type.billing_frequency or "Annual") if c.subscription_type else "—",
             "Fee": _effective_fee(c),
             "Country": c.country or "—",
+            "Renewal": c.renewal_date.isoformat() if c.renewal_date else "—",
             "Platform owner": "Yes" if c.is_platform_owner else "",
             "Users": session.query(User).filter(User.company_id == c.id).count(),
             "Plants": session.query(Plant).filter(Plant.company_id == c.id).count(),
@@ -221,6 +279,44 @@ else:
                 e_contact_phone = st.text_input(
                     "Contact phone", value=selected.contact_phone or "", key=f"edit_co_cphone_{selected.id}"
                 )
+            st.markdown("**Licence and maintenance contract**")
+            e_l1, e_l2 = st.columns(2)
+            with e_l1:
+                e_install = st.text_input(
+                    "Installation type", value=selected.installation_type or "",
+                    key=f"edit_co_install_{selected.id}",
+                )
+                e_license_value = st.number_input(
+                    "Licence value", min_value=0.0, step=100.0,
+                    value=selected.license_value, placeholder="Not recorded",
+                    key=f"edit_co_licval_{selected.id}",
+                    help="What this customer actually signed, as distinct from the subscription "
+                         "type's list price.",
+                )
+                e_maint_start = st.date_input(
+                    "Maintenance start date", value=selected.maintenance_start_date,
+                    format="YYYY-MM-DD", key=f"edit_co_maintstart_{selected.id}",
+                )
+            with e_l2:
+                e_deploy = st.text_input(
+                    "Deployment type", value=selected.deployment_type or "",
+                    key=f"edit_co_deploy_{selected.id}",
+                )
+                e_maint_pct = st.number_input(
+                    "Annual maintenance %", min_value=0.0, max_value=100.0, step=0.5,
+                    value=selected.annual_maintenance_percentage, placeholder="Not recorded",
+                    key=f"edit_co_maintpct_{selected.id}",
+                )
+                e_renewal = st.date_input(
+                    "Renewal date", value=selected.renewal_date, format="YYYY-MM-DD",
+                    key=f"edit_co_renewal_{selected.id}",
+                )
+            _e_amv = _annual_maintenance_value(e_license_value, e_maint_pct)
+            st.caption(
+                f"Annual maintenance value: **{_e_amv:,.2f}**" if _e_amv is not None
+                else "Annual maintenance value is calculated from licence value x annual maintenance %."
+            )
+
             e_active = st.checkbox("Active", value=selected.active, key=f"edit_co_active_{selected.id}")
             e_notes = st.text_area("Notes", value=selected.notes or "", key=f"edit_co_notes_{selected.id}")
             if selected.is_platform_owner:
@@ -240,6 +336,12 @@ else:
                     selected.contact_name = e_contact_name
                     selected.contact_email = e_contact_email
                     selected.contact_phone = e_contact_phone.strip() or None
+                    selected.installation_type = e_install.strip() or None
+                    selected.deployment_type = e_deploy.strip() or None
+                    selected.license_value = e_license_value
+                    selected.annual_maintenance_percentage = e_maint_pct
+                    selected.maintenance_start_date = e_maint_start
+                    selected.renewal_date = e_renewal
                     selected.active = e_active or selected.is_platform_owner
                     selected.notes = e_notes
                     session.commit()
