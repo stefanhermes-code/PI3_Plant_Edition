@@ -820,45 +820,67 @@ def render_pi3_verification_panel(session, interaction_log_id, key_prefix):
             if latest.customer_final_action:
                 st.caption(f"Action taken: {latest.customer_final_action}")
 
-        label = "Record a decision" if latest is None else "Record a further decision"
-        with st.expander(label, expanded=False):
+        # WHO MAY QUALIFY AN ANSWER - Stefan's ruling, 19 Aug 2026.
+        #
+        # Only the company that generated the answer can record a decision on
+        # it. HTC, as the platform owner, must never be able to qualify a
+        # customer's PI3 output: doing so would make HTC a party to accepting
+        # the recommendation, which is precisely the responsibility this whole
+        # CR exists to place with the customer. A customer that chooses not to
+        # qualify an answer has made its own decision, and the audit trail
+        # records that it was left Pending.
+        #
+        # The check is on company, not on role or on platform-owner status, so
+        # a platform-owner user reviewing an answer their OWN company generated
+        # still can - they own that one.
+        viewer_company_id = current_user().get("company_id")
+        may_record = viewer_company_id is not None and viewer_company_id == row.company_id
+
+        if not may_record:
             st.caption(
-                "The decision is added to this answer's history. Previous decisions stay on "
-                "record, and the answer above is unchanged by it."
+                "The decision on this answer belongs to the company that generated it. "
+                "This view is read-only."
             )
-            with st.form(f"{key_prefix}_verification_form"):
-                decision = st.selectbox(
-                    "Decision *",
-                    [x for x in ai_governance.REVIEW_STATUSES if x != ai_governance.REVIEW_PENDING],
-                    key=f"{key_prefix}_verification_decision",
+        if may_record:
+            label = "Record a decision" if latest is None else "Record a further decision"
+            with st.expander(label, expanded=False):
+                st.caption(
+                    "The decision is added to this answer's history. Previous decisions stay on "
+                    "record, and the answer above is unchanged by it."
                 )
-                comment = st.text_area(
-                    "Reviewer comment",
-                    help="What was checked, and against what.",
-                    key=f"{key_prefix}_verification_comment",
-                )
-                action = st.text_area(
-                    "Customer action taken",
-                    help="What was actually done, where that differs from the recommendation.",
-                    key=f"{key_prefix}_verification_action",
-                )
-                if st.form_submit_button("Record decision"):
-                    written = audit_log.log_pi3_review(
-                        session,
-                        pi3_interaction_log_id=interaction_log_id,
-                        review_status=decision,
-                        reviewer_user_id=current_user().get("id"),
-                        review_comment=(comment or "").strip() or None,
-                        customer_final_action=(action or "").strip() or None,
+                with st.form(f"{key_prefix}_verification_form"):
+                    decision = st.selectbox(
+                        "Decision *",
+                        [x for x in ai_governance.REVIEW_STATUSES if x != ai_governance.REVIEW_PENDING],
+                        key=f"{key_prefix}_verification_decision",
                     )
-                    if written is None:
-                        st.error(
-                            "The decision was not recorded. Try again, or ask your administrator "
-                            "to check the error log."
+                    comment = st.text_area(
+                        "Reviewer comment",
+                        help="What was checked, and against what.",
+                        key=f"{key_prefix}_verification_comment",
+                    )
+                    action = st.text_area(
+                        "Customer action taken",
+                        help="What was actually done, where that differs from the recommendation.",
+                        key=f"{key_prefix}_verification_action",
+                    )
+                    if st.form_submit_button("Record decision"):
+                        written = audit_log.log_pi3_review(
+                            session,
+                            pi3_interaction_log_id=interaction_log_id,
+                            review_status=decision,
+                            reviewer_user_id=current_user().get("id"),
+                            review_comment=(comment or "").strip() or None,
+                            customer_final_action=(action or "").strip() or None,
                         )
-                    else:
-                        session.commit()
-                        st.rerun()
+                        if written is None:
+                            st.error(
+                                "The decision was not recorded. Try again, or ask your administrator "
+                                "to check the error log."
+                            )
+                        else:
+                            session.commit()
+                            st.rerun()
 
         if len(reviews) > 1:
             with st.expander(f"Earlier decisions ({len(reviews) - 1})", expanded=False):

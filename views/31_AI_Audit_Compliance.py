@@ -20,6 +20,15 @@ Platform-owner-only, like the other Application Admin pages: the point of
 the page is the view ACROSS every customer company, which is exactly the
 scope a customer's own admin must not have. See
 access_control.PLATFORM_ONLY_KEYS.
+
+READ-ONLY BY DESIGN. Stefan's ruling, 19 Aug 2026: this page shows the
+record, it does not create it. Only the company that generated an answer may
+qualify it, and they do that on the answer itself (see
+helpers.render_pi3_verification_panel). HTC recording a decision on a
+customer's PI3 output would make HTC a party to accepting the
+recommendation - the exact responsibility this CR exists to place with the
+customer. A customer that leaves an answer unqualified has made its own
+decision, and Pending on this page is the evidence of that.
 """
 
 import datetime as dt
@@ -29,7 +38,6 @@ import pandas as pd
 import streamlit as st
 
 import ai_governance
-import audit_log
 import reports
 from auth import current_user, logout_button, require_login, require_platform_owner
 from db import (
@@ -69,7 +77,7 @@ render_function_action_intro(
         "how the interaction was classified, and what a human reviewer decided about it. "
         "Interactions classified Process / Safety Relevant are the ones that carry a technical "
         "recommendation into a plant, so those are the ones that require a recorded decision "
-        "before trial or operational use."
+        "by the customer before trial or operational use."
     ),
     action_text="Set the reporting period and filters, then open an interaction to read its full record.",
     action_steps=[
@@ -77,12 +85,14 @@ render_function_action_intro(
         "Narrow with the filters: company, plant, user, call site, classification, review status, "
         "model or prompt version.",
         "Click an interaction in the list to open its full evidence record.",
-        "Record a review decision on the interaction where one is required.",
+        "Export the filtered population when a compliance record is needed.",
     ],
     action_note=(
-        "Interactions recorded before the governance fields existed show them as "
-        f"\"{NOT_RECORDED}\". Those values are left blank deliberately - historical evidence that "
-        "was never captured is not reconstructed."
+        "This page is read-only. Verification is recorded by the company that generated the "
+        "answer, on the answer itself - a decision taken here would place responsibility for "
+        "qualifying it in the wrong hands. Interactions recorded before the governance fields "
+        f"existed show them as \"{NOT_RECORDED}\"; those values are left blank deliberately, "
+        "because historical evidence that was never captured is not reconstructed."
     ),
 )
 
@@ -568,33 +578,9 @@ if page_has_data:
                 st.caption("No review recorded against this interaction yet.")
 
             st.caption(
-                "A review is added, never edited. Recording a new decision leaves the previous one in place, "
-                "and the original PI3 question and answer above stay exactly as generated."
+                "This page does not record decisions. Verification belongs to the company that "
+                "generated the answer, and is recorded by them on the answer itself - see the "
+                "note at the top of this page. Reviews are append-only, so what is shown above "
+                "is the full history, and the original question and answer are never altered by "
+                "one."
             )
-            with st.form(f"ai_audit_review_{selected.id}"):
-                new_status = st.selectbox(
-                    "Decision *",
-                    [s for s in ai_governance.REVIEW_STATUSES if s != ai_governance.REVIEW_PENDING],
-                    key=f"ai_audit_review_status_{selected.id}",
-                )
-                new_comment = st.text_area("Reviewer comment", key=f"ai_audit_review_comment_{selected.id}")
-                new_action = st.text_area(
-                    "Customer action taken",
-                    help="What was actually done, where that differs from the recommendation.",
-                    key=f"ai_audit_review_action_{selected.id}",
-                )
-                if st.form_submit_button("Record decision"):
-                    row = audit_log.log_pi3_review(
-                        session,
-                        pi3_interaction_log_id=selected.id,
-                        review_status=new_status,
-                        reviewer_user_id=user.get("id"),
-                        review_comment=(new_comment or "").strip() or None,
-                        customer_final_action=(new_action or "").strip() or None,
-                    )
-                    if row is None:
-                        st.error("The decision was not recorded. Try again, or check the error log.")
-                    else:
-                        session.commit()
-                        st.success("Decision recorded.")
-                        st.rerun()
