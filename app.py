@@ -558,6 +558,11 @@ with st.sidebar:
     logo_col.image(LOGO_PATH, width=140)
     with version_col:
         st.markdown("**PI3 Plant Edition**")
+        # The edition, between the product name and the version. Both editions
+        # share the "PI3 Plant Edition" product name and a near-identical
+        # sidebar, so with two tabs open there was nothing on screen to say
+        # which one you were looking at.
+        st.markdown("Flexible Foam")
         st.caption(f"v{APP_VERSION}")
     st.divider()
 
