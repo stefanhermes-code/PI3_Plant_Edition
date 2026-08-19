@@ -1724,9 +1724,21 @@ with tab_lots:
                     trace_idx = clickable_table(
                         trace_rows, key=f"lot_trace_table_{chosen_lot}"
                     )
+                    # Act on a NEW click only. st.dataframe keeps its selection
+                    # in widget state, so it is returned again on every rerun -
+                    # calling st.rerun() on the selection itself reruns forever
+                    # (seen live on v2.11.0). Remembering the index that has
+                    # already been handled makes each click fire once, and
+                    # leaves the run selector free to be changed by hand
+                    # afterwards without being pulled back.
+                    handled_key = f"lot_trace_handled_{chosen_lot}"
                     if trace_idx is not None and trace_idx < len(matches):
-                        _focus_run(matches[trace_idx].production_run_id)
-                        st.rerun()
+                        if st.session_state.get(handled_key) != trace_idx:
+                            st.session_state[handled_key] = trace_idx
+                            _focus_run(matches[trace_idx].production_run_id)
+                            st.rerun()
+                    else:
+                        st.session_state.pop(handled_key, None)
 
                     st.caption(
                         "The foam produced on the runs listed above is the material this lot "
