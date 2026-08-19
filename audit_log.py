@@ -12,6 +12,17 @@ the PI3InteractionLog row it's reacting to, and the docx/Expert-Notes flow
 in helpers.py wants the interaction id to show a feedback control next to
 the answer that was just generated.
 
+THE AI AUDIT TRAIL IS INSERT-ONLY. Stefan's ruling, 19 Aug 2026: the
+platform owner must not be able to intervene in the contents of the audit
+trail - only to see whether a record is there or not. There is no function in
+this module, and no screen in this application, that edits or deletes a
+pi3_interaction_logs or pi3_interaction_reviews row. Reviews are appended
+(log_pi3_review), never updated. The single exception is
+pi3_interaction_logs.verification_message_shown, which the application sets
+once when the verification notice is actually rendered - a system fact about
+what was displayed, not content anyone types. Do not add an edit or delete
+path here; if a correction is needed, it is another appended row.
+
 Every function here is deliberately best-effort: a logging failure must
 never break the reviewer's actual task (submitting a recipe, reading a
 report, asking PI3 a question). Each function wraps its own session.add/

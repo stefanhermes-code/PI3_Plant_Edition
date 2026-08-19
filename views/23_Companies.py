@@ -18,15 +18,30 @@ frequency together - there is no separate frequency picker to keep in
 sync.
 
 Company deletion is deliberately not offered once a company has any real
-data under it (users, plants, raw materials, suppliers) - deactivate it
-instead so its history stays intact. A company can only be deleted while
-it's still empty (e.g. created by mistake).
+data under it (users, plants, raw materials, suppliers, or PI3 interactions
+on the AI audit trail) - deactivate it instead so that data's history stays
+intact. A company can only be deleted while it's still empty (e.g. created
+by mistake).
+
+The PI3 interaction count is part of that guard on purpose: the AI audit
+trail is evidence, and no Application Admin screen may be a route to
+removing it.
 """
 
 import streamlit as st
 
 from auth import current_user, logout_button, require_login, require_platform_owner
-from db import Company, RawMaterial, Supplier, SubscriptionType, User, Plant, get_session, init_db
+from db import (
+    Company,
+    PI3InteractionLog,
+    Plant,
+    RawMaterial,
+    SubscriptionType,
+    Supplier,
+    User,
+    get_session,
+    init_db,
+)
 from helpers import clickable_table, delete_with_confirm, page_setup, render_function_action_intro
 from tenant_scope import clear_scope_cache
 from role_provisioning import clone_builtin_roles_for_company
@@ -353,6 +368,16 @@ else:
             "plant(s)": session.query(Plant).filter(Plant.company_id == selected.id).count(),
             "raw material(s)": session.query(RawMaterial).filter(RawMaterial.company_id == selected.id).count(),
             "supplier(s)": session.query(Supplier).filter(Supplier.company_id == selected.id).count(),
+            # Added 19 Aug 2026 per Stefan's ruling that the platform owner
+            # must not be able to intervene in the AI audit trail's contents.
+            # Without this the guard above could pass on a company whose users
+            # and plants had been removed but whose PI3 interactions were still
+            # on record, and deleting it would take that evidence with it (or,
+            # more likely, fail on the foreign key and look like a bug). Either
+            # way the audit trail must not be reachable from a delete button.
+            "PI3 interaction(s) on record": session.query(PI3InteractionLog)
+            .filter(PI3InteractionLog.company_id == selected.id)
+            .count(),
         }
         total_related = sum(related_counts.values())
         if selected.is_platform_owner:
@@ -372,7 +397,7 @@ else:
 
             delete_with_confirm(
                 f"'{selected.name}'", _do_delete_company, key_prefix=f"company_{selected.id}",
-                extra_warning="This company has no users, plants, raw materials, or suppliers yet - deleting it is safe.",
+                extra_warning="This company has no users, plants, raw materials, suppliers or PI3 interactions yet - deleting it is safe.",
             )
 
         if st.button("Clear selection", key="clear_company_selection"):
