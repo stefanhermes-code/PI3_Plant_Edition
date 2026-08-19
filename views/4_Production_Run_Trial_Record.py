@@ -76,7 +76,6 @@ from db import (
     ProductionPhase,
     ProductionRun,
     QualityObservation,
-    RawMaterialLotUse,
     RecipeComponent,
     RecipeVersion,
     Sample,
@@ -1759,15 +1758,29 @@ with tab_runtime:
                     )
 
                     st.markdown("**Ambient conditions**")
+                    # value=None, not 0.0. These are blank on every UAT run, and
+                    # rendering "not recorded" as 0.0 read as an ambient
+                    # temperature of zero degrees - an operator opening the form
+                    # could not tell a missing reading from a real one. Streamlit
+                    # returns None from an untouched empty number_input, so the
+                    # save below writes the distinction back unchanged.
                     c8, c9 = st.columns(2)
                     ambient_temperature_c = c8.number_input(
                         "Ambient temperature (°C)", step=0.1,
-                        value=float(finalized_phase.ambient_temperature_c or 0.0),
+                        value=(
+                            float(finalized_phase.ambient_temperature_c)
+                            if finalized_phase.ambient_temperature_c is not None else None
+                        ),
+                        placeholder="Not recorded",
                         key=f"edit_runtime_ambient_temp_{finalized_phase.id}",
                     )
                     ambient_humidity_pct = c9.number_input(
                         "Ambient humidity (%)", min_value=0.0, max_value=100.0, step=0.5,
-                        value=float(finalized_phase.ambient_humidity_pct or 0.0),
+                        value=(
+                            float(finalized_phase.ambient_humidity_pct)
+                            if finalized_phase.ambient_humidity_pct is not None else None
+                        ),
+                        placeholder="Not recorded",
                         key=f"edit_runtime_ambient_hum_{finalized_phase.id}",
                     )
 
@@ -1778,7 +1791,12 @@ with tab_runtime:
                         help="A result of the foaming process, measured here — not a Setup-tab setting.",
                     )
                     rise_time = st.number_input(
-                        "Rise time (s)", min_value=0.0, step=1.0, value=float(finalized_phase.rise_time or 0.0),
+                        "Rise time (s)", min_value=0.0, step=1.0,
+                        value=(
+                            float(finalized_phase.rise_time)
+                            if finalized_phase.rise_time is not None else None
+                        ),
+                        placeholder="Not recorded",
                         key=f"edit_runtime_rise_{finalized_phase.id}",
                     )
                     meters_produced = st.number_input(
@@ -1806,9 +1824,9 @@ with tab_runtime:
                             finalized_phase.conveyor_speed = conveyor_speed or None
                             finalized_phase.air_injection_rate = air_injection_rate or None
                             finalized_phase.air_pressure_bar = air_pressure_bar or None
-                            finalized_phase.ambient_temperature_c = ambient_temperature_c or None
-                            finalized_phase.ambient_humidity_pct = ambient_humidity_pct or None
-                            finalized_phase.rise_time = rise_time or None
+                            finalized_phase.ambient_temperature_c = ambient_temperature_c
+                            finalized_phase.ambient_humidity_pct = ambient_humidity_pct
+                            finalized_phase.rise_time = rise_time
                             finalized_phase.foaming_mode = foaming_mode
                             finalized_phase.top_flat_system_used = top_flat_system_used
                             finalized_phase.sidewall_width_mm = sidewall_width_mm or None
