@@ -1509,9 +1509,76 @@ class PI3InteractionLog(Base):
     response_time_ms = Column(Float)
     created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
 
+    # --- AI governance / audit traceability (CR of 19 Aug 2026, section 8.1)
+    # Everything below answers "what produced this answer", so a reviewer can
+    # reconstruct an interaction later without relying on Git history or on
+    # anyone's memory of which prompt was live that week.
+    #
+    # These are nullable on purpose. Rows written before this CR do not carry
+    # the information and it must never be estimated or back-filled - a blank
+    # is an honest "not recorded", a guess is a false audit trail.
+    model_name = Column(String(100))
+    application_version = Column(String(20))
+    system_prompt_version = Column(String(50))
+    system_prompt_hash = Column(String(64))
+    call_prompt_version = Column(String(50))
+    call_prompt_hash = Column(String(64))
+    openai_response_id = Column(String(100))
+    # Set only where one question took several Responses API calls - the
+    # tool-calling loop in ask_plant_question() chains them with
+    # previous_response_id, and the chain is what makes that call
+    # reconstructable.
+    openai_response_chain_json = Column(Text)
+    # Tool evidence is now captured HERE at answer time. It used to exist only
+    # if the user happened to save the answer as an Expert Note, which meant
+    # the evidence for everything else was lost.
+    tool_log_json = Column(Text)
+    retrieval_evidence_json = Column(Text)
+    interaction_classification = Column(String(50))
+    classification_source = Column(String(30))
+    verification_required = Column(Boolean, default=False)
+    verification_message_shown = Column(Boolean, default=False)
+
     user = relationship("User")
     company = relationship("Company")
     plant = relationship("Plant")
+    reviews = relationship(
+        "PI3InteractionReview",
+        back_populates="interaction",
+        order_by="PI3InteractionReview.created_at",
+    )
+
+
+class PI3InteractionReview(Base):
+    """A human decision recorded against one PI3 answer (CR of 19 Aug 2026,
+    section 8.2).
+
+    Append-only by design, and deliberately a SEPARATE table rather than
+    columns on PI3InteractionLog. Two reasons, both from the CR: the original
+    question and answer must stay immutable, and one recommendation can go
+    through more than one review event - proposed, modified, then accepted -
+    with the whole sequence preserved. Writing the decision onto the
+    interaction row would destroy both properties.
+
+    There is no update path in the application. A changed mind is a new row."""
+    __tablename__ = "pi3_interaction_reviews"
+
+    id = Column(Integer, primary_key=True)
+    pi3_interaction_log_id = Column(
+        Integer, ForeignKey("pi3_interaction_logs.id"), nullable=False
+    )
+    reviewer_user_id = Column(Integer, ForeignKey("users.id"))
+    # One of ai_governance.REVIEW_STATUSES. Text rather than an enum for the
+    # same reason as the classification above.
+    review_status = Column(String(60), nullable=False)
+    review_comment = Column(Text)
+    # What the customer actually did, where that differs from the
+    # recommendation - the "Modified" case.
+    customer_final_action = Column(Text)
+    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
+
+    interaction = relationship("PI3InteractionLog", back_populates="reviews")
+    reviewer = relationship("User")
 
 
 class PI3Feedback(Base):

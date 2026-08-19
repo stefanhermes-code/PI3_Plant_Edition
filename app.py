@@ -360,6 +360,7 @@ platform_admin_pages = [
     ("pi3_ai_connectivity", st.Page("views/10_PI3_AI_Connectivity.py", title="PI3 Connectivity", icon="🤖")),
     ("performance_admin", st.Page("views/27_Performance.py", title="Performance", icon="⚡")),
     ("pilot_analysis_admin", st.Page("views/28_Pilot_Analysis.py", title="Company Analysis", icon="🔬")),
+    ("ai_audit_compliance", st.Page("views/31_AI_Audit_Compliance.py", title="AI Audit & Compliance", icon="🛡️")),
 ]
 
 nav_sections_with_keys = {

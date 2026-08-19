@@ -72,16 +72,42 @@ import time
 
 import streamlit as st
 
+import ai_governance
 import analytics
 import audit_log
 import pi3_query_tool
 from db import RAW_MATERIAL_CATEGORIES, FoamGrade, PI3AIConnectionSetting, Plant, get_session
+from version import APP_VERSION
 
 # Balances answer quality against cost for a fairly detailed, rule-heavy
 # system prompt (SYSTEM_PROMPT below has many formatting/structure
 # requirements to follow consistently) - overridable per-deployment via
 # the PI3_MODEL secret without touching code.
 DEFAULT_MODEL = "gpt-5.6-terra"
+
+# --- Prompt version identifiers (CR of 19 Aug 2026, section 9) -------------
+# Governance identifiers, recorded on every interaction so a later prompt
+# edit is visible in the audit trail without relying on Git history alone.
+# The hash beside each one is computed from the live prompt text at call
+# time (see _governance_fields), so an edit that someone forgets to
+# re-version still changes the hash and the change stays detectable.
+#
+# PI3-PLANT-SYSTEM-v1.0 is the GOVERNANCE version of SYSTEM_PROMPT, and is
+# not the same numbering as the "Enterprise v9" heading inside the prompt
+# text itself - that heading belongs to the shared PU ExpertCenter prompt
+# this app inherited. Identifiers follow the CR's naming.
+SYSTEM_PROMPT_VERSION = "PI3-PLANT-SYSTEM-v1.0"
+PLANT_QUERY_PROMPT_VERSION = "PI3-APQ-v2.0"
+
+CALL_PROMPT_VERSIONS = {
+    "recipe_optimization": "PI3-RO-v2.0",
+    "root_cause_assistant": "PI3-RCA-v2.0",
+    "machine_settings_optimization": "PI3-MSO-v2.0",
+    "trend_analysis": "PI3-TA-v2.0",
+    "process_property_correlation": "PI3-PPC-v2.0",
+    "ask_assistant": "PI3-ASK-v2.0",
+    "ask_plant_question": "PI3-APQ-v2.0",
+}
 
 # How long a single Responses API call is allowed to take before giving up.
 REQUEST_TIMEOUT_SECONDS = 60
@@ -431,9 +457,66 @@ def _estimate_cost_usd(prompt_tokens, completion_tokens):
         return None
 
 
+def _governance_fields(
+    call_site, model, system_prompt, input_text,
+    response_id=None, response_chain=None, tool_log=None, retrieval_evidence=None,
+):
+    """Builds the AI-governance evidence recorded against one interaction
+    (CR of 19 Aug 2026, section 8.1).
+
+    On call_prompt_hash: the fixed Intelligence pages build their prompt
+    inline from live run data rather than from an isolated template, so a
+    hash of the sent text is not a template fingerprint - it is an
+    integrity fingerprint of the exact input, and it is stored as that.
+    call_prompt_version carries the template identity instead.
+
+    Anything that cannot be determined is left out of the dict, so the
+    column stays NULL. A blank column reads as "not recorded"; a filled-in
+    guess would be a false audit trail.
+    """
+    classification, source = ai_governance.classify(call_site, input_text)
+    fields = {
+        "model_name": model,
+        "application_version": APP_VERSION,
+        "system_prompt_version": SYSTEM_PROMPT_VERSION,
+        "system_prompt_hash": ai_governance.prompt_hash(system_prompt),
+        "call_prompt_version": CALL_PROMPT_VERSIONS.get(call_site),
+        "call_prompt_hash": ai_governance.prompt_hash(input_text),
+        "interaction_classification": classification,
+        "classification_source": source,
+        "verification_required": ai_governance.verification_required(classification),
+        # The verification panel on the answer itself is the next slice of
+        # the CR. Until it ships this stays False rather than claiming a
+        # notice was shown that was not.
+        "verification_message_shown": False,
+    }
+    if response_id:
+        fields["openai_response_id"] = response_id
+    if response_chain and len(response_chain) > 1:
+        fields["openai_response_chain_json"] = _safe_json(response_chain)
+    if tool_log:
+        fields["tool_log_json"] = _safe_json(tool_log)
+    if retrieval_evidence:
+        fields["retrieval_evidence_json"] = _safe_json(retrieval_evidence)
+    return fields
+
+
+def _safe_json(value):
+    """json.dumps that never raises - audit evidence is best-effort and must
+    not be able to break the answer the reviewer is waiting for."""
+    try:
+        return json.dumps(_to_jsonable(value))
+    except Exception:
+        try:
+            return json.dumps({"unserializable": str(value)[:2000]})
+        except Exception:
+            return None
+
+
 def _record_pi3_interaction(
     call_site, question_text, response_text, company_id=None, plant_id=None,
     prompt_tokens=None, completion_tokens=None, total_tokens=None, start_time=None,
+    governance=None,
 ):
     """Items 49-51. Called from both ask_assistant() and
     ask_plant_question() right after a successful call, so every PI3
@@ -463,6 +546,7 @@ def _record_pi3_interaction(
             total_tokens=total_tokens,
             estimated_cost_usd=estimated_cost_usd,
             response_time_ms=response_time_ms,
+            governance=governance,
         )
     except Exception:
         return None
@@ -692,6 +776,22 @@ def ask_assistant(prompt, company_id=None, call_site="ask_assistant"):
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             start_time=start_time,
+            governance=_governance_fields(
+                call_site=call_site,
+                model=model,
+                system_prompt=SYSTEM_PROMPT,
+                input_text=prompt,
+                response_id=getattr(response, "id", None),
+                # Retrieval evidence for this path is which corpus was
+                # searched: the vector store and the company filter applied
+                # to it. That is what determines whether the answer could
+                # have seen a given document.
+                retrieval_evidence={
+                    "tool": "file_search",
+                    "vector_store_id": vector_store_id,
+                    "filters": filters,
+                },
+            ),
         )
         return answer, (log_row.id if log_row is not None else None)
     except Exception as exc:
@@ -1031,6 +1131,10 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
         _accumulate_usage(response)
+        # One question here can take several Responses API calls, chained by
+        # previous_response_id. The chain - not just the last id - is what
+        # makes the interaction reconstructable afterwards.
+        response_chain = [getattr(response, "id", None)]
 
         for _ in range(MAX_TOOL_ITERATIONS):
             function_calls = [item for item in response.output if getattr(item, "type", None) == "function_call"]
@@ -1091,6 +1195,7 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
             _accumulate_usage(response)
+            response_chain.append(getattr(response, "id", None))
 
         answer = response.output_text or None
         log_row = _record_pi3_interaction(
@@ -1103,6 +1208,19 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
             completion_tokens=completion_tokens_sum if usage_seen else None,
             total_tokens=(prompt_tokens_sum + completion_tokens_sum) if usage_seen else None,
             start_time=start_time,
+            governance=_governance_fields(
+                call_site="ask_plant_question",
+                model=model,
+                system_prompt=PLANT_QUERY_SYSTEM_PROMPT,
+                input_text=input_text,
+                response_id=getattr(response, "id", None),
+                response_chain=[r for r in response_chain if r],
+                # Tool evidence is captured HERE, at answer time. It used to
+                # survive only if the user happened to save the answer as an
+                # Expert Note, so the evidence for every other question was
+                # lost (CR section 12).
+                tool_log=tool_log,
+            ),
         )
         return answer, tool_log, (log_row.id if log_row is not None else None)
     except Exception as exc:

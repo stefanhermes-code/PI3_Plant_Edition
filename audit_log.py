@@ -33,6 +33,7 @@ from db import (
     PageViewEvent,
     PI3Feedback,
     PI3InteractionLog,
+    PI3InteractionReview,
     RoleChangeLog,
 )
 
@@ -125,11 +126,38 @@ def log_pi3_interaction(
     total_tokens=None,
     estimated_cost_usd=None,
     response_time_ms=None,
+    governance=None,
 ):
     """Items 49-51. Returns the new PI3InteractionLog row (with .id
     populated via flush) on success, or None on failure - callers that
     want to attach feedback (Item 55) or a docx/Expert-Notes save should
-    hold onto the returned row's id."""
+    hold onto the returned row's id.
+
+    `governance` is the optional AI-governance evidence dict built by
+    ai_assistant._governance_fields() (CR of 19 Aug 2026, section 8.1):
+    model, application version, prompt versions and hashes, OpenAI
+    response id and chain, tool log, retrieval evidence, classification
+    and verification flags. Unknown keys are ignored rather than raising,
+    so a caller that has only part of the picture still logs; a key that
+    is absent stays NULL, which reads as "not recorded" instead of a
+    fabricated value."""
+    allowed = {
+        "model_name",
+        "application_version",
+        "system_prompt_version",
+        "system_prompt_hash",
+        "call_prompt_version",
+        "call_prompt_hash",
+        "openai_response_id",
+        "openai_response_chain_json",
+        "tool_log_json",
+        "retrieval_evidence_json",
+        "interaction_classification",
+        "classification_source",
+        "verification_required",
+        "verification_message_shown",
+    }
+    extra = {k: v for k, v in (governance or {}).items() if k in allowed}
     try:
         row = PI3InteractionLog(
             user_id=user_id,
@@ -143,6 +171,41 @@ def log_pi3_interaction(
             total_tokens=total_tokens,
             estimated_cost_usd=estimated_cost_usd,
             response_time_ms=response_time_ms,
+            **extra,
+        )
+        session.add(row)
+        if _safe_flush(session):
+            return row
+        return None
+    except Exception:
+        return None
+
+
+def log_pi3_review(
+    session,
+    pi3_interaction_log_id,
+    review_status,
+    reviewer_user_id=None,
+    review_comment=None,
+    customer_final_action=None,
+):
+    """Records one human decision against a PI3 answer (CR of 19 Aug 2026,
+    section 7). Append-only: a later decision on the same interaction is
+    another row, and the interaction's own question and answer are never
+    touched. Returns the new row, or None on failure.
+
+    Unlike everything else in this module, a failure here IS worth the
+    caller noticing - a reviewer who believes their decision was recorded
+    when it was not is the one case where a silent audit failure has
+    consequences. The exception is still swallowed, so the return value is
+    what the caller checks."""
+    try:
+        row = PI3InteractionReview(
+            pi3_interaction_log_id=pi3_interaction_log_id,
+            reviewer_user_id=reviewer_user_id,
+            review_status=review_status,
+            review_comment=review_comment,
+            customer_final_action=customer_final_action,
         )
         session.add(row)
         if _safe_flush(session):

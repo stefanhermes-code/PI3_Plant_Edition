@@ -172,6 +172,7 @@ PAGE_CATALOG = {
     "user_accounts_admin": "User Accounts",
     "performance_admin": "Performance",
     "pilot_analysis_admin": "Company Analysis",
+    "ai_audit_compliance": "AI Audit & Compliance",
 }
 
 REPORT_KEYS = frozenset({"report"})
@@ -179,6 +180,9 @@ PLATFORM_ONLY_KEYS = frozenset(
     {
         "companies_admin", "subscription_types_admin", "pi3_ai_connectivity",
         "default_user_roles_admin", "performance_admin", "pilot_analysis_admin",
+        # Cross-customer AI governance evidence - platform owner only, by
+        # definition: the value of the page is the view ACROSS companies.
+        "ai_audit_compliance",
     }
 )
 
