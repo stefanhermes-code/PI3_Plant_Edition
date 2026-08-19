@@ -289,7 +289,9 @@ render_function_action_intro(
     action_note=(
         "Every tab except Production Runs opens with the same run selector - pick the run once, "
         "then step through its tabs in order. Manual entry and CSV/Excel import are both "
-        "available throughout."
+        "available throughout. The one exception is the Raw Material Lots import, which reads "
+        "the batch reference from each row and so loads many runs at once, independently of the "
+        "run selected."
     ),
 )
 session = get_session()
@@ -1486,7 +1488,9 @@ with tab_lots:
                 }
             )
 
-        sub_lots_overview, sub_lots_create = st.tabs(["Overview & Edit", "Create"])
+        sub_lots_overview, sub_lots_create, sub_lots_import = st.tabs(
+            ["Overview & Edit", "Create", "CSV / Excel import"]
+        )
 
         lots_for_run = (
             session.query(RawMaterialLotUse)
@@ -1607,6 +1611,151 @@ with tab_lots:
                             key_prefix=f"lot_use_{sel_lot.id}",
                             extra_warning="Nothing else references a lot use, so deleting it is safe.",
                         )
+
+
+        with sub_lots_import:
+            # Unlike every other tab on this page, this importer is NOT scoped to
+            # the run selected above: a lot-use file names its own runs in the
+            # batch_reference column and normally spans many of them. The run
+            # selector still drives the two tabs beside this one.
+            #
+            # Validation follows the load specification issued to Charlie on
+            # 19 Aug 2026 exactly, including its all-or-nothing rule: a file with
+            # any failing row is reported row by row and nothing is written until
+            # it is corrected. Half-loading a traceability file is worse than
+            # rejecting it - it leaves a partial chain that looks complete.
+            if not page_usable:
+                st.caption("View-only access - importing lot uses is restricted for your role.")
+            else:
+                st.caption(
+                    "Loads supplier lots for many runs at once. Each row names its own run, so "
+                    "this does not use the run selected above."
+                )
+                show_pending_banner("lot_use_import_msg")
+                lot_df, lot_filename = csv_excel_uploader(
+                    ["batch_reference", "component_stream_name", "supplier_lot_no"],
+                    ["notes"],
+                    key="lot_use_upload",
+                )
+                if lot_df is not None:
+                    # Resolve every batch reference and every run's valid stream
+                    # names in two queries rather than per row.
+                    wanted_refs = {
+                        str(r.get("batch_reference", "") or "").strip() for _, r in lot_df.iterrows()
+                    }
+                    runs_by_ref = {
+                        r.batch_reference: r
+                        for r in runs
+                        if r.batch_reference and r.batch_reference in wanted_refs
+                    }
+                    phase_by_run = {
+                        ph.production_run_id: ph
+                        for ph in session.query(ProductionPhase)
+                        .filter(
+                            ProductionPhase.production_run_id.in_([r.id for r in runs_by_ref.values()] or [-1]),
+                            ProductionPhase.phase_name == "Finalized",
+                        )
+                        .all()
+                    }
+                    streams_by_run = {}
+                    if phase_by_run:
+                        for reading in (
+                            session.query(ComponentStreamReading)
+                            .filter(ComponentStreamReading.production_phase_id.in_(list(
+                                ph.id for ph in phase_by_run.values()
+                            )))
+                            .all()
+                        ):
+                            run_id = next(
+                                (rid for rid, ph in phase_by_run.items()
+                                 if ph.id == reading.production_phase_id), None
+                            )
+                            if run_id is not None and reading.stream_name:
+                                streams_by_run.setdefault(run_id, set()).add(reading.stream_name)
+
+                    existing_keys = {
+                        (lu.production_run_id, lu.component_stream_name, lu.supplier_lot_no)
+                        for lu in session.query(RawMaterialLotUse).all()
+                    }
+
+                    good, problems, seen_in_file = [], [], set()
+                    for i, (_, row) in enumerate(lot_df.iterrows(), start=2):  # +2: header is row 1
+                        ref = str(row.get("batch_reference", "") or "").strip()
+                        stream = str(row.get("component_stream_name", "") or "").strip()
+                        lot_no = str(row.get("supplier_lot_no", "") or "").strip()
+                        note = str(row.get("notes", "") or "").strip()
+
+                        run_for_row = runs_by_ref.get(ref)
+                        if not ref:
+                            problems.append((i, ref, stream, "batch_reference is blank"))
+                            continue
+                        if run_for_row is None:
+                            problems.append((i, ref, stream, "No production run with this batch reference"))
+                            continue
+                        if not stream:
+                            problems.append((i, ref, stream, "component_stream_name is blank"))
+                            continue
+                        valid_streams = streams_by_run.get(run_for_row.id, set())
+                        if not valid_streams:
+                            problems.append((i, ref, stream, "This run has no component stream readings, so no stream can be matched"))
+                            continue
+                        if stream not in valid_streams:
+                            problems.append((
+                                i, ref, stream,
+                                "Not a stream on this run. Valid: " + ", ".join(sorted(valid_streams)),
+                            ))
+                            continue
+                        if not lot_no:
+                            problems.append((i, ref, stream, "supplier_lot_no is blank"))
+                            continue
+                        key = (run_for_row.id, stream, lot_no)
+                        if key in existing_keys:
+                            problems.append((i, ref, stream, f"Lot {lot_no} is already recorded against this stream on this run"))
+                            continue
+                        if key in seen_in_file:
+                            problems.append((i, ref, stream, f"Lot {lot_no} appears twice for this stream in this file"))
+                            continue
+                        seen_in_file.add(key)
+                        good.append((run_for_row, stream, lot_no, note))
+
+                    if problems:
+                        st.error(
+                            f"{len(problems)} row(s) failed validation. Nothing was loaded - correct the "
+                            "file and upload it again."
+                        )
+                        render_data_table(
+                            pd.DataFrame(
+                                [
+                                    {"Row": r, "batch_reference": b, "component_stream_name": sname, "Problem": why}
+                                    for r, b, sname, why in problems
+                                ]
+                            ),
+                            max_height="400px",
+                        )
+                        if good:
+                            st.caption(f"{len(good)} row(s) would have loaded cleanly.")
+                    else:
+                        st.success(f"All {len(good)} row(s) passed validation.")
+                        st.caption(
+                            f"Covering {len({r.id for r, _s, _l, _n in good})} production run(s)."
+                        )
+                        if good and st.button("Confirm import", key="confirm_lot_use_import"):
+                            for run_for_row, stream, lot_no, note in good:
+                                session.add(
+                                    RawMaterialLotUse(
+                                        production_run_id=run_for_row.id,
+                                        component_stream_name=stream,
+                                        supplier_lot_no=lot_no,
+                                        notes=note or None,
+                                        source_file_reference=(lot_filename or "")[:300] or None,
+                                    )
+                                )
+                            session.commit()
+                            set_pending_banner(
+                                "lot_use_import_msg",
+                                f"Imported {len(good)} lot use(s) from {lot_filename}.",
+                            )
+                            st.rerun()
 
 
 with tab_events:
