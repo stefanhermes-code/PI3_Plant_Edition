@@ -37,17 +37,21 @@ if you're touching this file:
 
 2. Precedence with this app's own advisory boundary: SYSTEM_PROMPT is a
    general-purpose polyurethane-expert prompt that encourages direct,
-   actionable recommendations (section 15, "Practicality Rule": "what to
-   choose", "what to adjust"). That is in tension with this app's own
-   non-negotiable requirement, baked separately into the callers in
-   views/18_Root_Cause_Assistant.py,
-   that PI3 Plant Edition must never phrase AI output as an instruction -
-   only ever as historical reference for human review. This is resolved
-   the same way it already was under the old Assistants API: every
-   caller's own per-request prompt text explicitly restates that
-   constraint alongside its question, and that per-call instruction is
-   what should take precedence for output used inside this app. Do not
-   remove that framing from the callers when editing this file.
+   actionable recommendations (section 15, "Practicality Rule"). That used
+   to sit in tension with this app's own non-negotiable requirement, baked
+   separately into the callers in views/18_Root_Cause_Assistant.py, that
+   PI3 Plant Edition must never phrase AI output as an instruction - only
+   ever as a candidate recommendation for human evaluation.
+
+   Two things resolve it now. Section 15a, the Plant Edition Technical
+   Validation Rule (added 19 Aug 2026 per Charlie's AI Governance CR,
+   section 4.1), states the boundary inside the shared prompt itself and
+   says explicitly that it takes precedence over the practicality wording.
+   And, as before, every caller's own per-request prompt restates the
+   constraint alongside its question. Do not remove that framing from the
+   callers when editing this file - the two are deliberately belt and
+   braces, because SYSTEM_PROMPT is shared with the wider PU ExpertCenter
+   and can change outside this repository.
 
 Required secrets (see .streamlit/secrets.toml.example):
 - OPENAI_API_KEY
@@ -96,13 +100,21 @@ DEFAULT_MODEL = "gpt-5.6-terra"
 # not the same numbering as the "Enterprise v9" heading inside the prompt
 # text itself - that heading belongs to the shared PU ExpertCenter prompt
 # this app inherited. Identifiers follow the CR's naming.
-SYSTEM_PROMPT_VERSION = "PI3-PLANT-SYSTEM-v1.0"
+# Bump the identifier in the same commit as any edit to the prompt text it
+# names. The hash below it catches an edit that someone forgets to version,
+# but a hash alone does not say WHICH revision an interaction ran under.
+# v1.1 (19 Aug 2026): CR section 4.1 - implementation-authority wording out of
+# the Role and Practicality rules, Plant Edition Technical Validation Rule in.
+SYSTEM_PROMPT_VERSION = "PI3-PLANT-SYSTEM-v1.1"
 PLANT_QUERY_PROMPT_VERSION = "PI3-APQ-v2.0"
 
 CALL_PROMPT_VERSIONS = {
-    "recipe_optimization": "PI3-RO-v2.0",
-    "root_cause_assistant": "PI3-RCA-v2.0",
-    "machine_settings_optimization": "PI3-MSO-v2.0",
+    # v2.1 on these three (19 Aug 2026): CR sections 5.1-5.3 - candidate
+    # framing, plus a verification/checks section tailored to the actual
+    # recommendation rather than a fixed list.
+    "recipe_optimization": "PI3-RO-v2.1",
+    "root_cause_assistant": "PI3-RCA-v2.1",
+    "machine_settings_optimization": "PI3-MSO-v2.1",
     "trend_analysis": "PI3-TA-v2.0",
     "process_property_correlation": "PI3-PPC-v2.0",
     "ask_assistant": "PI3-ASK-v2.0",
@@ -122,7 +134,7 @@ SYSTEM_PROMPT = """PI3 + PU ExpertCenter Assistant — Enterprise v9
 
 1) Role
 
-You are a seasoned polyurethane industry expert. Provide authoritative, practical, implementation-ready answers across the full polyurethane value chain: chemistry and materials, processing and troubleshooting, applications, safety and compliance, markets and marketing, strategy, supply chains, costing and economics, and standards.
+You are a seasoned polyurethane industry expert. Provide authoritative, practical, technically specific answers across the full polyurethane value chain: chemistry and materials, processing and troubleshooting, applications, safety and compliance, markets and marketing, strategy, supply chains, costing and economics, and standards.
 
 PI3 is an answering system first. It must answer the user's question directly, clearly, and usefully. Reasoning is internal. The user should receive conclusions, specifications, guidance, decision points, and actions.
 
@@ -296,14 +308,26 @@ Do not present laboratory-edge values as if they are standard commercial reality
 
 15) Practicality Rule
 
-Every technical answer should help the user act.
+Every technical answer should help the user decide. Provide technically specific analysis, candidate recommendations, specifications, decision points and actions for qualified professional evaluation.
 
 Where relevant, include:
-- what to choose
-- what to adjust
-- what to check
+- candidate selections, with the basis for each
+- candidate adjustments, with the direction and magnitude the evidence supports
+- what to check before acting
 - what to avoid
 - what is most likely to matter first
+
+15a) Plant Edition Technical Validation Rule
+
+This rule takes precedence over the generic practicality wording above.
+
+Where a response could influence formulation composition, raw material selection, chemical substitution, catalyst level, water level, isocyanate level or index, process temperature, process conditions, machine settings, reaction behaviour, plant safety conditions, or any other production parameter with material consequences:
+
+1. Provide technically specific candidate guidance where the available evidence supports it. Formulations, numerical values, ranges, process observations, troubleshooting actions, machine-setting analysis and trial recommendations all remain in scope.
+2. Clearly separate verified facts and calculations from assumptions, interpretation and hypothesis.
+3. Identify the critical checks required before trial or implementation, chosen for the actual recommendation rather than recited as a fixed list.
+4. State that a suitably qualified professional at the customer evaluates the recommendation against the actual raw materials, equipment, process conditions, applicable technical documentation and site safety requirements before operational use.
+5. Where missing information materially affects technical correctness or safety, identify that missing information before presenting a candidate recommendation as ready for evaluation.
 
 16) Safety Rule
 

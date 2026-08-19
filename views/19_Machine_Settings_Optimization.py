@@ -309,7 +309,14 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "connected knowledge base, explain in plain language which setting(s) are most worth "
             "reviewing and why. This is a starting point for the reviewer's own investigation, "
             "not a directive - phrase it as observations and hypotheses, never as an instruction "
-            "to change a setting to a specific value."
+            "to change a setting to a specific value.\n\n"
+            # CR of 19 Aug 2026, section 5.3. The customer-investigation
+            # boundary above is unchanged; this adds the checks that come
+            # before a setting is actually moved on the line.
+            "End with a short section headed 'Checks before changing a setting'. Name only the "
+            "checks that apply to the settings you have just discussed - what to confirm about "
+            "the equipment configuration, the operating conditions, and the runs behind the "
+            "ranking - and say where the recorded data is too thin to support a change at all."
         )
         with st.spinner("Using PI3..."):
             answer, interaction_log_id = ai_assistant.ask_assistant(

@@ -246,7 +246,15 @@ if ai_assistant.is_enabled_for_plant(session, run.plant_id):
             "8. Close with a short, appropriately hedged synthesis: state plainly what is "
             "directly known (the recorded change) versus what is inferred, and avoid "
             "presenting a narrow additive-focused explanation as the most coherent one "
-            "before the failure's timing and morphology are established.\n\n"
+            "before the failure's timing and morphology are established.\n"
+            # CR of 19 Aug 2026, section 5.2. The existing
+            # customer-investigation boundary already stands; what this adds is
+            # the checks that would CONFIRM the hypothesis, so the reviewer has
+            # something to do next rather than a conclusion to accept.
+            "9. Where you point at a corrective direction, add a short section headed "
+            "'Checks before changing the process'. Name the specific checks that would confirm "
+            "or rule out the hypothesis first - the measurement, record or comparison that "
+            "settles it - and keep them to the hypothesis you actually raised.\n\n"
             f"Quality issue: {obs.observation_type} on run #{run.id} ({grade.grade_name}), "
             f"{obs.severity}/{obs.frequency}\n"
             + (f"Logged suspected cause: {obs.suspected_cause}\n" if obs.suspected_cause else "")
