@@ -1800,10 +1800,20 @@ def session_lock():
     return st.session_state["_sa_session_lock"]
 
 
-def close_out_session():
+def close_out_session(session=None, lock=None):
     """Commit (or roll back, on failure) whatever transaction the page that
     just ran opened, so no Streamlit rerun ever ends with an open, idle
     transaction left sitting on the database.
+
+    session/lock may be supplied by a caller that must not touch
+    st.session_state. Reason, found 2026-08-19: any st.* call made while a
+    StopException is still pending re-raises it, because Streamlit re-checks
+    its stop flag inside every enqueue. A page that ends in st.stop()
+    therefore leaves that flag set, and the first st.session_state read in
+    app.py\'s finally block threw StopException again - which skipped this
+    close-out AND, far worse, skipped the page-lock release below it.
+    Passing the session and lock in keeps this function pure SQLAlchemy on
+    that path.
 
     Why this exists: get_session() deliberately reuses ONE session per
     browser tab across every rerun (see its docstring), and every read
@@ -1846,7 +1856,8 @@ def close_out_session():
     consistent state, whether that's a page's own prior commit or just the
     read-only queries a view-only page issued.
     """
-    session = st.session_state.get("_sa_session")
+    if session is None:
+        session = st.session_state.get("_sa_session")
     if session is None:
         return
 
@@ -1858,7 +1869,8 @@ def close_out_session():
     # nothing. The timeout keeps this from ever becoming a hang: if the
     # holder is genuinely stuck we fall through and leave the transaction
     # for the next rerun rather than blocking this one indefinitely.
-    lock = session_lock()
+    if lock is None:
+        lock = session_lock()
     if not lock.acquire(timeout=5):
         return
 
