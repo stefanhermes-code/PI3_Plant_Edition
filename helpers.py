@@ -804,9 +804,38 @@ def render_pi3_verification_panel(session, interaction_log_id, key_prefix):
     status = latest.review_status if latest else ai_governance.REVIEW_PENDING
     display = ai_governance.REVIEW_DISPLAY.get(status, "")
 
+    # WHO MAY QUALIFY AN ANSWER - Stefan's ruling, 19 Aug 2026: HTC must
+    # never be able to qualify a customer's PI3 output, because doing so
+    # would make HTC a party to accepting the recommendation.
+    #
+    # This panel only ever renders on an answer generated in the viewer's
+    # own session, so ownership is normally true by construction, and the
+    # Application Admin audit page carries no decision control at all.
+    # That leaves exactly one case to block: a platform-owner user working
+    # inside a customer's company scope, whose answer is logged against
+    # that customer.
+    #
+    # Deliberately narrow. An earlier version required the viewer's company
+    # to EQUAL the interaction's company, which withheld the control from
+    # an ordinary session whose company is not resolved in session_state -
+    # the notice appeared with no way to act on it.
+    viewer = current_user()
+    viewer_company_id = viewer.get("company_id")
+    may_record = not (
+        viewer.get("is_platform_owner")
+        and row.company_id is not None
+        and viewer_company_id is not None
+        and row.company_id != viewer_company_id
+    )
+
     with st.container(border=True):
         if latest is None:
             st.markdown(f"**Verification required.** {display}")
+            if may_record:
+                st.caption(
+                    "Record the decision below once a qualified reviewer has checked it against "
+                    "your own materials, equipment and process conditions."
+                )
         else:
             reviewer = session.get(User, latest.reviewer_user_id) if latest.reviewer_user_id else None
             who = (reviewer.display_name or reviewer.email) if reviewer is not None else "an unrecorded user"
@@ -820,27 +849,6 @@ def render_pi3_verification_panel(session, interaction_log_id, key_prefix):
             if latest.customer_final_action:
                 st.caption(f"Action taken: {latest.customer_final_action}")
 
-        # WHO MAY QUALIFY AN ANSWER - Stefan's ruling, 19 Aug 2026.
-        #
-        # Only the company that generated the answer can record a decision on
-        # it. HTC, as the platform owner, must never be able to qualify a
-        # customer's PI3 output: doing so would make HTC a party to accepting
-        # the recommendation, which is precisely the responsibility this whole
-        # CR exists to place with the customer. A customer that chooses not to
-        # qualify an answer has made its own decision, and the audit trail
-        # records that it was left Pending.
-        #
-        # The check is on company, not on role or on platform-owner status, so
-        # a platform-owner user reviewing an answer their OWN company generated
-        # still can - they own that one.
-        viewer_company_id = current_user().get("company_id")
-        may_record = viewer_company_id is not None and viewer_company_id == row.company_id
-
-        if not may_record:
-            st.caption(
-                "The decision on this answer belongs to the company that generated it. "
-                "This view is read-only."
-            )
         if may_record:
             label = "Record a decision" if latest is None else "Record a further decision"
             with st.expander(label, expanded=False):
