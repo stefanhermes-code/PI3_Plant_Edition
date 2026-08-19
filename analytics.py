@@ -524,7 +524,17 @@ def property_results_dataframe(_session, foam_grade_id=None, property_name=None,
 
 def pass_rate(series) -> float | None:
     """Share of non-null Pass/Fail values that are 'Pass', or None if there
-    is nothing to compute from."""
+    is nothing to compute from.
+
+    THE DENOMINATOR IS WHATEVER SERIES YOU PASS IN. That is the point, and it
+    is the rule Charlie set on 19 Aug 2026: a property-specific failure rate
+    must use that property's own result count, never the all-properties total.
+    The two are not interchangeable - across the current UAT data the overall
+    rate is 3.8% (56 failures in 1,455 results), while compression set alone is
+    2.9% (7 in 242). Quoting 7 against 1,455 understates it by a factor of six.
+
+    So filter to the property FIRST and hand this the filtered series; do not
+    divide a property's failure count by a total taken from somewhere else."""
     known = series.dropna()
     if known.empty:
         return None
