@@ -240,6 +240,27 @@ def _run_selector(runs, key):
     return run
 
 
+# Every run selector on this page, by widget key. _focus_run() points the whole
+# page at one run: it sets the shared id and then drops the widget keys, so each
+# selectbox re-initialises from that id on the next run. Setting the id alone is
+# not enough - once a selectbox has a key, Streamlit restores the widget's own
+# stored value and ignores the index argument.
+_RUN_SELECTOR_KEYS = (
+    "setup_tab_run_select",
+    "stream_tab_run_select",
+    "dosing_tab_run_select",
+    "lots_tab_run_select",
+    "event_tab_run_select",
+    "runtime_tab_run_select",
+)
+
+
+def _focus_run(run_id):
+    st.session_state["pr_selected_run_id"] = run_id
+    for _key in _RUN_SELECTOR_KEYS:
+        st.session_state.pop(_key, None)
+
+
 # --- Production run cascade delete (a run can have a lot hanging off it) ---
 # Shared with pages 1/2/3, which have to delete every run under a plant/
 # product family/foam grade/recipe version being deleted - see cascades.py.
@@ -1488,8 +1509,8 @@ with tab_lots:
                 }
             )
 
-        sub_lots_overview, sub_lots_create, sub_lots_import = st.tabs(
-            ["Overview & Edit", "Create", "CSV / Excel import"]
+        sub_lots_overview, sub_lots_trace, sub_lots_create, sub_lots_import = st.tabs(
+            ["Overview & Edit", "Lot traceability", "Create", "CSV / Excel import"]
         )
 
         lots_for_run = (
@@ -1612,6 +1633,105 @@ with tab_lots:
                             extra_warning="Nothing else references a lot use, so deleting it is safe.",
                         )
 
+
+        with sub_lots_trace:
+            # The reverse of the tab beside it. Overview & Edit answers "which
+            # lots went into this run"; this answers "which runs did this lot
+            # reach", which is the question asked during a supplier recall.
+            # Built on Charlie's instruction of 19 Aug 2026 with no data-model
+            # change - it reads the same RawMaterialLotUse rows.
+            #
+            # Like the importer it is NOT scoped to the run selected above, but
+            # it IS limited to the runs already in `runs`, so the company filter
+            # at the top of the page still applies and a lot recorded by another
+            # company stays invisible.
+            st.caption(
+                "Recall lookup. Pick a supplier lot to see every production run it was used on "
+                "and the component stream it fed on each."
+            )
+
+            runs_by_id = {r.id: r for r in runs}
+            all_uses = (
+                session.query(RawMaterialLotUse)
+                .filter(RawMaterialLotUse.production_run_id.in_(list(runs_by_id) or [-1]))
+                .all()
+            )
+            lot_numbers = sorted({u.supplier_lot_no for u in all_uses if u.supplier_lot_no})
+
+            if not lot_numbers:
+                st.info(
+                    "Record supplier lots against a run first - use the Create tab or the "
+                    "CSV / Excel import - and they become searchable here."
+                )
+            else:
+                lot_query = st.text_input(
+                    "Find a lot number",
+                    key="lot_trace_filter",
+                    placeholder="Type any part of a supplier lot number",
+                ).strip()
+                shortlist = (
+                    [l for l in lot_numbers if lot_query.lower() in l.lower()]
+                    if lot_query
+                    else lot_numbers
+                )
+
+                if not shortlist:
+                    st.warning(
+                        f"No recorded supplier lot contains \"{lot_query}\". "
+                        f"{len(lot_numbers)} lot(s) are recorded - clear the box to list them all."
+                    )
+                else:
+                    if lot_query:
+                        st.caption(f"{len(shortlist)} of {len(lot_numbers)} recorded lot(s) match.")
+                    else:
+                        st.caption(f"{len(lot_numbers)} lot(s) recorded.")
+                    chosen_lot = st.selectbox(
+                        "Supplier lot number *", shortlist, key="lot_trace_select"
+                    )
+
+                    matches = sorted(
+                        (u for u in all_uses if u.supplier_lot_no == chosen_lot),
+                        key=lambda u: (u.production_run_id, u.component_stream_name or ""),
+                    )
+                    matched_runs = {u.production_run_id for u in matches}
+                    st.markdown(
+                        f"**{chosen_lot}** — used on {len(matched_runs)} production run(s), "
+                        f"{len(matches)} recorded use(s)."
+                    )
+
+                    trace_rows = []
+                    for u in matches:
+                        u_run = runs_by_id.get(u.production_run_id)
+                        trace_rows.append(
+                            {
+                                "Supplier lot no": u.supplier_lot_no,
+                                "Run #": u.production_run_id,
+                                "Batch reference": (u_run.batch_reference if u_run else None) or "—",
+                                "Foam grade": (
+                                    u_run.foam_grade.grade_name
+                                    if u_run is not None and u_run.foam_grade
+                                    else "—"
+                                ),
+                                "Run date": u_run.run_date if u_run is not None else None,
+                                "Component stream": u.component_stream_name or "—",
+                            }
+                        )
+
+                    st.caption(
+                        "Click a row to make that run the selected run on this page - every tab "
+                        "then shows it."
+                    )
+                    trace_idx = clickable_table(
+                        trace_rows, key=f"lot_trace_table_{chosen_lot}"
+                    )
+                    if trace_idx is not None and trace_idx < len(matches):
+                        _focus_run(matches[trace_idx].production_run_id)
+                        st.rerun()
+
+                    st.caption(
+                        "The foam produced on the runs listed above is the material this lot "
+                        "reached."
+                    )
 
         with sub_lots_import:
             # Unlike every other tab on this page, this importer is NOT scoped to
