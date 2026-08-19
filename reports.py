@@ -193,6 +193,7 @@ import math
 import os
 import re
 
+import openpyxl
 import pandas as pd
 from docx import Document
 from docx.shared import Cm, Pt, RGBColor
@@ -3782,3 +3783,125 @@ def render_expert_notes_report_docx(data):
         p = doc.add_paragraph(style="List Bullet")
         p.add_run(line)
     return _docx_bytes(doc)
+
+
+# ---------------------------------------------------------------------------
+# AI Audit & Compliance export (CR of 19 Aug 2026, section 11)
+# ---------------------------------------------------------------------------
+
+# Excel refuses a cell longer than 32,767 characters, and a PI3 answer or a
+# tool log can run past that. Truncated well short of the hard limit, with the
+# cut marked in the cell - a silently clipped audit record is worse than a
+# short one, because nothing on the page says anything is missing.
+_XLSX_CELL_LIMIT = 20000
+
+_AI_AUDIT_SHEET_NOTE = (
+    "Interaction ID is the key across every sheet. Blank governance fields mean the value "
+    "was never recorded, not that it was zero or empty - interactions from before the "
+    "governance fields existed carry the original columns only, and nothing is reconstructed."
+)
+
+
+def _xlsx_cell(value):
+    """Excel-safe cell value. Long text is truncated with the cut marked;
+    everything that is not a number, date or bool becomes text."""
+    if value is None:
+        return ""
+    if isinstance(value, (int, float, bool, dt.date, dt.datetime)):
+        return value
+    text = str(value)
+    if len(text) > _XLSX_CELL_LIMIT:
+        return text[:_XLSX_CELL_LIMIT] + f"\n[truncated - {len(text) - _XLSX_CELL_LIMIT} more characters in the application]"
+    return text
+
+
+def _write_xlsx_sheet(ws, headers, rows, widths=None):
+    """One header row in bold, frozen, with an autofilter, then the data."""
+    header_font = openpyxl.styles.Font(name="Arial", size=10, bold=True, color="FFFFFF")
+    header_fill = openpyxl.styles.PatternFill("solid", fgColor="1F4E79")
+    body_font = openpyxl.styles.Font(name="Arial", size=10)
+
+    ws.append(list(headers))
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = openpyxl.styles.Alignment(vertical="center", wrap_text=True)
+
+    for row in rows:
+        ws.append([_xlsx_cell(row.get(h)) for h in headers])
+
+    for r in ws.iter_rows(min_row=2):
+        for cell in r:
+            cell.font = body_font
+            cell.alignment = openpyxl.styles.Alignment(vertical="top", wrap_text=False)
+
+    ws.freeze_panes = "A2"
+    if rows:
+        ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(len(headers))}{len(rows) + 1}"
+    for i, h in enumerate(headers, start=1):
+        width = (widths or {}).get(h, min(max(len(str(h)) + 4, 14), 40))
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = width
+    ws.row_dimensions[1].height = 28
+
+
+def render_ai_audit_export_xlsx(summary_rows, interaction_rows, review_rows, tool_rows):
+    """The filtered AI governance population as a workbook (CR section 11).
+
+    Four sheets, in the order the CR lists them: Summary, Interactions,
+    Reviews, Tool Evidence. No formulas - this is an evidence extract, and a
+    figure that recalculates against whatever a reader later types into the
+    sheet is not evidence. Every count on Summary is the count of the rows
+    actually exported beside it.
+
+    Each argument is a list of plain dicts, shaped by the caller, so this
+    function stays free of Streamlit and of the ORM."""
+    wb = openpyxl.Workbook()
+
+    ws = wb.active
+    ws.title = "Summary"
+    _write_xlsx_sheet(
+        ws, ["Item", "Value"], summary_rows,
+        widths={"Item": 38, "Value": 60},
+    )
+    note_row = len(summary_rows) + 3
+    ws.cell(row=note_row, column=1, value="Note").font = openpyxl.styles.Font(name="Arial", size=10, bold=True)
+    note_cell = ws.cell(row=note_row, column=2, value=_AI_AUDIT_SHEET_NOTE)
+    note_cell.font = openpyxl.styles.Font(name="Arial", size=10, italic=True)
+    note_cell.alignment = openpyxl.styles.Alignment(wrap_text=True, vertical="top")
+    ws.row_dimensions[note_row].height = 58
+
+    _write_xlsx_sheet(
+        wb.create_sheet("Interactions"),
+        [
+            "Interaction ID", "Recorded (UTC)", "Company", "Plant", "User", "Call site",
+            "Classification", "Classification source", "Verification required",
+            "Notice shown", "Review status", "Model", "Application version",
+            "System prompt version", "System prompt hash", "Call prompt version",
+            "Call prompt hash", "OpenAI response ID", "Total tokens",
+            "Estimated cost (USD)", "Response time (ms)", "Question", "PI3 response",
+        ],
+        interaction_rows,
+        widths={"Question": 70, "PI3 response": 90, "Recorded (UTC)": 20, "Call site": 26,
+                "Classification": 24, "Classification source": 20},
+    )
+
+    _write_xlsx_sheet(
+        wb.create_sheet("Reviews"),
+        [
+            "Interaction ID", "Review ID", "Recorded (UTC)", "Reviewer", "Decision",
+            "Reviewer comment", "Customer action taken",
+        ],
+        review_rows,
+        widths={"Decision": 34, "Reviewer comment": 60, "Customer action taken": 60},
+    )
+
+    _write_xlsx_sheet(
+        wb.create_sheet("Tool Evidence"),
+        ["Interaction ID", "Sequence", "Evidence type", "Tool", "Detail"],
+        tool_rows,
+        widths={"Detail": 110, "Evidence type": 20},
+    )
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
