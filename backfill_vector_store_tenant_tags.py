@@ -16,7 +16,7 @@ script needs to run once, promptly, after this fix is deployed:
 1. This app's own previously-pushed Expert Notes - tagged with plant_id
    only (added 2026-08-01, before company_id was ever set - see git
    history around helpers.render_save_to_expert_notes_button and
-   pages/20_Expert_Notes.py). This script backfills company_id onto each
+   views/20_Expert_Notes.py). This script backfills company_id onto each
    of these by looking up Plant.company_id in this app's own database -
    the exact same lookup company_id_for_plant() in helpers.py now does
    for every new push, applied retroactively here.

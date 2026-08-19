@@ -40,7 +40,7 @@ if you're touching this file:
    actionable recommendations (section 15, "Practicality Rule": "what to
    choose", "what to adjust"). That is in tension with this app's own
    non-negotiable requirement, baked separately into the callers in
-   pages/18_Root_Cause_Assistant.py,
+   views/18_Root_Cause_Assistant.py,
    that PI3 Plant Edition must never phrase AI output as an instruction -
    only ever as historical reference for human review. This is resolved
    the same way it already was under the old Assistants API: every
@@ -511,7 +511,7 @@ def push_document_to_vector_store(title, text, metadata=None):
     formulation science) that also lives in this same shared store. This
     app's own callers should pass {"plant_id": <int>, "company_id": <int>}
     here for anything tied to one specific plant (see the two call sites
-    in pages/20_Expert_Notes.py and helpers.render_save_to_expert_notes_button)
+    in views/20_Expert_Notes.py and helpers.render_save_to_expert_notes_button)
     - documents with no natural plant dimension should keep passing
     metadata=None, which is correct, not an oversight (see the "shared"
     tag note below for how those stay searchable under the filter).
@@ -640,7 +640,7 @@ def ask_assistant(prompt, company_id=None, call_site="ask_assistant"):
     SYSTEM_PROMPT (above) is passed as `instructions` on every call - it
     is the general PI3/PU ExpertCenter behavior. `prompt` is this app's
     own per-request question, which (per the callers in
-    pages/18_Root_Cause_Assistant.py)
+    views/18_Root_Cause_Assistant.py)
     always restates PI3 Plant Edition's own advisory-boundary requirement
     (historical reference only, never an instruction) - see the module
     docstring for why that ordering matters and must not be dropped.
@@ -1114,7 +1114,7 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
 def extract_raw_material_from_tds(tds_text, sds_text=None):
     """Pull a structured raw-material record out of a technical data
     sheet's extracted text, for prefilling the Add Raw Material form (see
-    pages/14_Raw_Materials.py). An SDS's extracted text can optionally be
+    views/14_Raw_Materials.py). An SDS's extracted text can optionally be
     passed alongside for supplementary hazard/handling notes.
 
     Returns a dict with keys name, category, default_supplier, notes (each

@@ -101,7 +101,7 @@ def _check_db_login(session, email, password):
     Looks up by email, not username (2026-08-05, per user direction: the
     login field is now "Email address") - username still exists on the
     User row (mirrored to the same value on every create/edit, see
-    pages/25_User_Accounts.py) but is no longer what a person types in
+    views/25_User_Accounts.py) but is no longer what a person types in
     here."""
     user = session.query(User).filter(User.email == email).first()
     if not user or not verify_password(password, user.password_hash):
@@ -120,8 +120,8 @@ def _find_company_admin_contact(session, email):
     """For the login page's Forgot Password link (2026-08-05): given the
     email a locked-out user typed in, find their company's single
     administrator (the one active user holding the Company Admin/Platform
-    Admin role - see access_control.ADMIN_ROLE_NAMES and pages/
-    25_User_Accounts.py's one-admin-per-company rule) and return
+    Admin role - see access_control.ADMIN_ROLE_NAMES and
+    views/25_User_Accounts.py's one-admin-per-company rule) and return
     (admin_display_name, admin_email), or None if the email isn't
     recognized or that company has no admin account with an email on
     file. Runs before authentication, so it can't use st.session_state for

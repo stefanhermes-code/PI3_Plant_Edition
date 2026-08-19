@@ -92,7 +92,7 @@ bucket_freq = _BUCKET_FREQ.get(window_label, "1D")
 def _timeline_chart(df, value_col, y_title):
     """Average `value_col` per time bucket, plus a dashed overall-average
     reference line, with a non-zero-anchored Y-axis (see
-    helpers.render_scatter_chart_no_zero / pages/16_Trend_Analysis.py for
+    helpers.render_scatter_chart_no_zero / views/16_Trend_Analysis.py for
     the same fix applied elsewhere: these durations cluster in a narrow
     band, so a zero-anchored axis squeezes the real variation into a thin
     sliver at the top). Shared by all three sections below rather than

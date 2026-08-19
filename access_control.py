@@ -104,7 +104,7 @@ ACCESS_STATE_LABELS = {
 
 # Role names required by name-literal checks elsewhere in the app (see
 # auth.require_role("Company Admin", "Platform Admin") on the User Roles
-# and User Accounts pages, and pages/10_PI3_AI_Connectivity.py's role in
+# and User Accounts pages, and views/10_PI3_AI_Connectivity.py's role in
 # ("Company Admin", "Platform Admin") check) - a company with no role by
 # one of these two names could never manage its own users or roles again.
 # "Company Admin" is the one every regular company is seeded with (see
@@ -131,7 +131,7 @@ STRUCTURALLY_REQUIRED_ROLE_NAMES = frozenset({"company admin"})
 
 # Both names that mean "the one administrator of this company" - see
 # STRUCTURALLY_REQUIRED_ROLE_NAMES's docstring above for why there are two.
-# Used by pages/25_User_Accounts.py to enforce a single company-wide rule
+# Used by views/25_User_Accounts.py to enforce a single company-wide rule
 # (2026-08-05, per user direction): a company should never have more than
 # one active user holding either of these role names at once, regardless
 # of which of the two names its own admin role happens to be called.
@@ -147,7 +147,7 @@ PAGE_CATALOG = {
     # Its own key, not folded into raw_materials. Until 18 Aug 2026 supplier
     # management was a tab inside the Raw Materials page and shared its key,
     # so a role could not be given one without the other. See
-    # pages/30_Suppliers.py.
+    # views/30_Suppliers.py.
     "suppliers": "Suppliers",
     "recipes": "Recipes",
     "production_run": "Production Run",

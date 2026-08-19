@@ -5,7 +5,7 @@ parameters, and (elsewhere) the quality results it produced. This is
 routine, everyday data entry - it does NOT require framing a run as an
 experiment. A deliberate trial/change investigation is captured as its own
 independent Customer Trial or Optimization Trial record instead (see
-pages/11_Customer_Trials.py / pages/12_Optimization_Trials.py) - the old
+views/11_Customer_Trials.py / views/12_Optimization_Trials.py) - the old
 "Trial / Experiment" flag on a production run itself, and the standalone
 Trial / Experiment page, were removed along with TrialRecord/
 AdjustmentConclusion/ApprovalRecord (see cascades.py/db.py history).

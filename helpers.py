@@ -18,7 +18,7 @@ from db import ExpertNote, FoamGrade, Plant, ProductFamily, ProductionRun, Recip
 def expert_note_plant_id_for_link(entity_type, entity_id, session):
     """Which plant a given Expert Note "link to" target belongs to, for the
     is_enabled_for_plant() check before pushing to PI3's vector store.
-    Shared by pages/20_Expert_Notes.py and render_save_to_expert_notes_button
+    Shared by views/20_Expert_Notes.py and render_save_to_expert_notes_button
     below, so both resolve a link the same way."""
     if entity_type == "production_run":
         r = session.get(ProductionRun, entity_id)
@@ -630,7 +630,7 @@ MAX_IMPORT_ROWS = 20_000
 
 def upload_within_size_limit(uploaded):
     """The file-size half of the MAX_UPLOAD_SIZE_BYTES/MAX_IMPORT_ROWS pair
-    above, factored out for pages/4_Production_Run_Trial_Record.py's 5 CSV
+    above, factored out for views/4_Production_Run_Trial_Record.py's 5 CSV
     import tabs - these predate csv_excel_uploader() and build their own
     st.file_uploader()/pd.read_csv() inline rather than calling it, so they
     need this check called explicitly right after their own file_uploader

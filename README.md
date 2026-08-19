@@ -14,7 +14,11 @@ autonomous formulation optimization.
 ## Structure
 
 - `app.py` — Dashboard (Screen 1, entry point)
-- `pages/` — the remaining 11 screens (see below)
+- `views/` — the remaining screens (see below). Named `views/`, not
+  `pages/`, on purpose — a directory called `pages/` makes Streamlit fall
+  back to its legacy auto-multipage navigation until `st.navigation()` is
+  reached, which loses the custom sidebar and all access-control
+  filtering. See the block comment above `_is_dead_connection` in app.py.
 - `db.py` — SQLAlchemy models for the 16 v0.1 entities, plus the multi-
   tenant layer (`Company`, `SubscriptionType`, `Role`, `RolePagePermission`,
   `User`)
@@ -65,8 +69,8 @@ not this list's exact count.
 A quality test result or quality issue always belongs to exactly one of
 three parents: a Production Run, a Customer Trial, or an Optimization
 Trial (`db.SAMPLE_SOURCE_TYPES`). Customer Trials and Optimization Trials
-are their own independent lab-trial flows (`pages/11_Customer_Trials.py`,
-`pages/12_Optimization_Trials.py`) — they don't hang off a Production Run.
+are their own independent lab-trial flows (`views/11_Customer_Trials.py`,
+`views/12_Optimization_Trials.py`) — they don't hang off a Production Run.
 
 ## The one rule that can't be bypassed
 
@@ -74,8 +78,8 @@ A Customer Trial cannot be closed unless `outcome`, `reviewed_by`, and
 `date_closed` are all present; an Optimization Trial additionally requires
 `conclusion`, `reuse_recommendation`, and `approved_by`. This is enforced
 in `db.py` (`CustomerTrial.can_close()` / `OptimizationTrial.can_close()`)
-and checked again in `pages/11_Customer_Trials.py` /
-`pages/12_Optimization_Trials.py` before the "Close trial" button is
+and checked again in `views/11_Customer_Trials.py` /
+`views/12_Optimization_Trials.py` before the "Close trial" button is
 enabled.
 
 ## Deploying to Streamlit Community Cloud

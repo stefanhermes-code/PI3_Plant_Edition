@@ -54,7 +54,7 @@ from quality_standards import compute_pass_fail
 
 def compute_runtime_output(phase, foam_grade):
     """Derives the physical output of a production run (added 2026-08-05
-    per user request; moved here from pages/4_Production_Run_Trial_Record.py
+    per user request; moved here from views/4_Production_Run_Trial_Record.py
     on 2026-08-05 so the Overview page's meters/kg-produced KPIs can share
     the exact same math as the Runtime Data tab's own calculated-output
     display, instead of drifting apart as two copies) from whichever of
@@ -208,7 +208,7 @@ def _grade_id_list(foam_grade_id):
 # setting" drill-down dropdowns and the correlation/optimization rankings
 # on pages 17 and 19 as if it were a machine setting - a user correctly
 # flagged this on 2026-08-05. It's still fully available as a recipe
-# property wherever that's the right frame (pages/3_Recipe_Version_
+# property wherever that's the right frame (views/3_Recipe_Version_
 # Record.py, and the Recipe report sections in reports.py) - just not
 # ranked here as a lever an operator can "optimize" on a given run.
 PHASE_SETTING_FIELDS = [
@@ -1326,7 +1326,7 @@ def trend_test(series_df, min_points=5, alpha=0.05):
        curves or changes pace, which the linear test's R² would otherwise
        under-credit and risk being read as noise. mk_significant usually
        agrees with `significant`; when it doesn't, that disagreement
-       itself is the useful signal (see pages/16_Trend_Analysis.py's
+       itself is the useful signal (see views/16_Trend_Analysis.py's
        cross-check message) - it means the drift likely isn't a straight
        line.
 

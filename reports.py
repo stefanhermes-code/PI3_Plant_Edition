@@ -1,7 +1,7 @@
 """Report generation: data assembly + Word (.docx) rendering.
 
 "Report" is one of PI3 Plant Edition's own standard, always-included
-capabilities (see pages/10_PI3_AI_Connectivity.py's docstring: "Standard
+capabilities (see views/10_PI3_AI_Connectivity.py's docstring: "Standard
 version (always included): Search, Compare, Retrieve, Structure, Report,
 Review and Approval.") - this module is what had been missing. It is not
 gated behind PI3 connectivity; every logged-in user can generate reports.
@@ -24,10 +24,10 @@ test) and a Word (.docx) renderer (PDF/Excel renderers were removed
   removed - zero real rows across 244 production runs, fully superseded
   by these two independent, self-contained closeout flows.
 
-pages/21_Report.py wires these to selectors, an in-app preview, and
+views/21_Report.py wires these to selectors, an in-app preview, and
 st.download_button for both file formats.
 
-Two purpose-built reports for the Recipes page (pages/3_Recipe_Version_
+Two purpose-built reports for the Recipes page (views/3_Recipe_Version_
 Record.py), added 2026-08-04 as the first output of the app-wide Reports
 redesign (see PI3_Gaps note: reports must be aggregated/purpose-built
 answers to a specific question, never a raw-data dump or a PI3-narrative
@@ -57,7 +57,7 @@ render_run_report_excel() (removed the same day: a flat header plus four
 raw tables - recipe components, process settings, quality results,
 quality issues - with no synthesis, exactly the "factual but not adding
 value" pattern the whole Reports redesign exists to fix). Lives on the
-Report page (pages/21_Report.py), not the Production Run page itself: per
+Report page (views/21_Report.py), not the Production Run page itself: per
 user direction, a report whose subject is a single simple choice (pick
 one run from a dropdown) belongs on the Report page alongside the other
 selector-driven reports; a report whose subject needs a comprehensive
@@ -86,7 +86,7 @@ A fifth report, added 2026-08-04, lives on its own page rather than the
 Report page - per the same placement principle stated above, this report's
 subject is a comprehensive multi-field selection (Pass/Fail, Property, and
 Foam scope), not a single dropdown choice, so it lives on
-pages/5_Physical_Property_Result.py, right below the filter controls and
+views/5_Physical_Property_Result.py, right below the filter controls and
 the existing on-page Pareto chart it shares its scope with:
 
 - build_quality_test_report_data() / render_quality_test_report_pdf()
@@ -104,7 +104,7 @@ the existing on-page Pareto chart it shares its scope with:
 A sixth report, added 2026-08-04, follows the same placement logic as the
 Quality Test Result report - its subject is a comprehensive multi-field
 selection (Severity, Foam scope, and the breakdown's group-by choice), not
-a single dropdown choice, so it lives on pages/6_Quality_Observation.py
+a single dropdown choice, so it lives on views/6_Quality_Observation.py
 itself, right below that page's own filters and breakdown-by-issue chart:
 
 - build_quality_issue_report_data() / render_quality_issue_report_pdf()
@@ -158,33 +158,33 @@ moment - ranked DataFrame, SPC results, diff list, etc. - and never
 re-derives them, so the report always matches what's on screen:
 
 - build_recipe_optimization_report_data() / render_recipe_optimization_report_pdf()
-  / render_recipe_optimization_report_excel() (pages/15_Recipe_Optimization.py)
+  / render_recipe_optimization_report_excel() (views/15_Recipe_Optimization.py)
   Current formulation cost, whether the current recipe meets target per
   property, and the top ingredient-dosage correlation for the selected
   property.
 - build_trend_analysis_report_data() / render_trend_analysis_report_pdf()
-  / render_trend_analysis_report_excel() (pages/16_Trend_Analysis.py)
+  / render_trend_analysis_report_excel() (views/16_Trend_Analysis.py)
   Control chart, process capability, CUSUM, and trend-test results, plus
   the machine-change/quality-issue timeline - the full SPC toolkit for one
   property.
 - build_correlation_report_data() / render_correlation_report_pdf()
-  / render_correlation_report_excel() (pages/17_Process_Property_Correlation.py)
+  / render_correlation_report_excel() (views/17_Process_Property_Correlation.py)
   The ranked machine-setting-vs-property correlation table.
 - build_root_cause_report_data() / render_root_cause_report_pdf()
-  / render_root_cause_report_excel() (pages/18_Root_Cause_Assistant.py)
+  / render_root_cause_report_excel() (views/18_Root_Cause_Assistant.py)
   The deterministic run-vs-prior-run diff (recipe/machine/process-setting
   shifts) behind a flagged quality issue.
 - build_machine_settings_report_data() / render_machine_settings_report_pdf()
-  / render_machine_settings_report_excel() (pages/19_Machine_Settings_Optimization.py)
+  / render_machine_settings_report_excel() (views/19_Machine_Settings_Optimization.py)
   The ranked setting-optimization table (which range of each setting
   separates good outcomes from bad).
 - build_expert_notes_report_data() / render_expert_notes_report_pdf()
-  / render_expert_notes_report_excel() (pages/20_Expert_Notes.py)
+  / render_expert_notes_report_excel() (views/20_Expert_Notes.py)
   Doesn't fit the pattern above (no PI3 recommendation of its own) - an
   always-visible aggregate breakdown of the notes already shown on the
   page, by confidence level, source (Manual vs. PI3), and linked-entity
   type, distinct from the existing conditional per-note Word re-download
-  (kept as-is - see that button's own comment on pages/20_Expert_Notes.py).
+  (kept as-is - see that button's own comment on views/20_Expert_Notes.py).
 """
 
 import datetime as dt
@@ -765,7 +765,7 @@ def _recipe_version_target_properties(grade):
         targets.append({"property_name": "Density", "target_value": grade.target_density, "unit": "kg/m³"})
     if grade.target_hardness is not None:
         # "40% IFD / hardness" is the canonical property_name used app-wide
-        # (see quality_standards.INDUSTRY_TOLERANCES and pages/15_Recipe_
+        # (see quality_standards.INDUSTRY_TOLERANCES and views/15_Recipe_
         # Optimization.py's own target_by_name dict) - matching it here,
         # rather than a differently-worded label, is what lets this target
         # line up with actual PhysicalPropertyResult rows recorded against
@@ -874,7 +874,7 @@ def build_recipe_formulation_record_data(session, recipe_version_id, date_from=N
         })
 
     cost = recipe_version_cost(session, rv)
-    # Same php-parts-as-kg convention as pages/15_Recipe_Optimization.py's
+    # Same php-parts-as-kg convention as views/15_Recipe_Optimization.py's
     # _cost_per_kg() - a formulation's php total already IS its cost basis
     # (see analytics.recipe_version_cost's own docstring), so cost per kg
     # is simply total cost / total php, once any component is priced.
@@ -1423,7 +1423,7 @@ def render_batch_release_record_docx(data):
 #
 # Placement/mechanism (per user direction 2026-08-04): picking one sample
 # is a single simple choice - same as Batch Release Record and Trial
-# Closeout Report - so this lives on the Report page (pages/21_Report.py)
+# Closeout Report - so this lives on the Report page (views/21_Report.py)
 # rather than on pages 9/11/12 themselves (which already have the
 # aggregate, multi-field-selection Sample Report).
 #
@@ -1597,7 +1597,7 @@ def render_sample_certificate_docx(data):
 # Placement (per user direction 2026-08-04): this report's subject is a
 # comprehensive multi-field selection (Pass/Fail, Property, Foam scope) the
 # reader has to build up first, not a single dropdown choice - so it lives
-# on pages/5_Physical_Property_Result.py itself, right below the same
+# on views/5_Physical_Property_Result.py itself, right below the same
 # filter controls and Pareto chart it shares its scope with, rather than
 # on the Report page. build_quality_test_report_data() never re-derives
 # tenant scope or filters on its own - it purely aggregates the exact
@@ -1611,7 +1611,7 @@ def _qtr_source_and_grade(result):
     for a PhysicalPropertyResult, resolving whichever of the three
     mutually exclusive parents (production run / customer trial /
     optimization trial - see db.SAMPLE_SOURCE_TYPES) it belongs to.
-    Mirrors pages/5_Physical_Property_Result.py's own
+    Mirrors views/5_Physical_Property_Result.py's own
     _result_source_desc()/_result_foam_grade_id() - kept as a local copy
     here since reports.py doesn't import from page modules."""
     if result.production_run_id is not None:
@@ -1807,7 +1807,7 @@ def render_quality_test_report_docx(data):
 # Placement/mechanism (per user direction 2026-08-04): same logic as the
 # Quality Test Result report - this report's subject is a comprehensive
 # multi-field selection (Severity, Foam scope, and the breakdown's
-# group-by choice) built up on pages/6_Quality_Observation.py itself, not
+# group-by choice) built up on views/6_Quality_Observation.py itself, not
 # a single dropdown choice, so it lives there rather than on the Report
 # page, and it is generated from exactly whatever the page's own filters
 # currently have selected.
@@ -1816,7 +1816,7 @@ def render_quality_test_report_docx(data):
 def _qi_source_and_grade(obs):
     """(source label, human-readable parent description, foam grade name)
     for a QualityObservation, resolving whichever of the three mutually
-    exclusive parents it belongs to. Mirrors pages/6_Quality_Observation.
+    exclusive parents it belongs to. Mirrors views/6_Quality_Observation.
     py's own _obs_source_desc()/_obs_foam_grade_id() - kept as a local
     copy here since reports.py doesn't import from page modules."""
     if obs.production_run_id is not None:
@@ -2812,7 +2812,7 @@ def _docx_bytes(doc):
 # render_pi3_docx_download) - this is the page's own deterministic analysis:
 # does the current recipe meet target, and where it doesn't, which raw
 # material's actual dosage is the strongest lead. Lives on
-# pages/15_Recipe_Optimization.py itself (a comprehensive multi-field
+# views/15_Recipe_Optimization.py itself (a comprehensive multi-field
 # selection - foam grade, include-trials toggle, correlation property - not
 # a single dropdown choice), same placement logic as the Quality Test Result
 # Report. build_recipe_optimization_report_data() never re-derives the
@@ -3035,7 +3035,7 @@ def render_recipe_optimization_report_docx(data):
 # 11. Trend Analysis Report (Context / Analysis / Conclusions)
 #
 # Added 2026-08-04, same batch and placement logic as the Recipe
-# Optimization Report above - lives on pages/16_Trend_Analysis.py itself
+# Optimization Report above - lives on views/16_Trend_Analysis.py itself
 # (foam grade/family, property, recipe/machine filters: a comprehensive
 # multi-field selection, not a single dropdown choice). This is the page's
 # own deterministic SPC results (control chart, capability, CUSUM, trend
@@ -3274,7 +3274,7 @@ def render_trend_analysis_report_docx(data):
 # 12. Process-Property Correlation Report (Context / Analysis / Conclusions)
 #
 # Added 2026-08-04, same batch and placement logic as the two reports
-# above - lives on pages/17_Process_Property_Correlation.py itself (foam
+# above - lives on views/17_Process_Property_Correlation.py itself (foam
 # grade/family plus property: a comprehensive multi-field selection). This
 # is the page's own ranked correlation table (analytics.rank_setting_
 # correlations), never the PI3 synthesis further down (which has its own
@@ -3395,7 +3395,7 @@ def render_correlation_report_docx(data):
 # 13. Root-Cause Comparison Report (Context / Analysis / Conclusions)
 #
 # Added 2026-08-04, part of the same Industrial Intelligence reports batch
-# as the three reports above. Lives on pages/18_Root_Cause_Assistant.py
+# as the three reports above. Lives on views/18_Root_Cause_Assistant.py
 # itself, per the user-approved plan grouping all 5 analysis pages (15-19)
 # together as "pages with PI3" that get their deterministic report on the
 # page rather than the Report page. This is the page's own deterministic
@@ -3520,7 +3520,7 @@ def render_root_cause_report_docx(data):
 # Added 2026-08-04, same batch and placement logic as the Process-Property
 # Correlation Report above (structurally the closest sibling - both rank
 # every process setting against a chosen property) - lives on
-# pages/19_Machine_Settings_Optimization.py itself. This is the page's own
+# views/19_Machine_Settings_Optimization.py itself. This is the page's own
 # ranked table (analytics.rank_setting_optimization), never the PI3
 # synthesis further down (which has its own separate Word download).
 # build_machine_settings_report_data() takes the exact `ranked` DataFrame
@@ -3653,7 +3653,7 @@ def render_machine_settings_report_docx(data):
 # standing aggregate over the notes the page is already showing - a
 # breakdown by confidence level, source (Manual vs PI3), and linked-entity
 # type - always visible, not conditional on selecting one note. Lives on
-# pages/20_Expert_Notes.py itself. build_expert_notes_report_data() takes
+# views/20_Expert_Notes.py itself. build_expert_notes_report_data() takes
 # the exact `notes` list the page has already scoped (tenant) and is
 # already showing in its table - never re-derived.
 # ---------------------------------------------------------------------------

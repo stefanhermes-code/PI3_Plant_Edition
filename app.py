@@ -271,22 +271,22 @@ def render_overview():
 SHOW_CUSTOMERS_PAGE = True
 
 overview_page = st.Page(render_overview, title="Overview", icon="🏠", default=True)
-report_page = st.Page("pages/21_Report.py", title="Report", icon="🖨️")
+report_page = st.Page("views/21_Report.py", title="Report", icon="🖨️")
 
 setup_pages = [
-    ("plant_overview", st.Page("pages/1_Plant_Installation_Overview.py", title="Plant & Foam Equipment Overview", icon="🏭")),
-    ("product_family_foam_grade", st.Page("pages/2_Product_Family_Foam_Grade.py", title="Product Family & Foam Grade", icon="🧬")),
-    ("raw_materials", st.Page("pages/14_Raw_Materials.py", title="Raw Materials", icon="🧴")),
+    ("plant_overview", st.Page("views/1_Plant_Installation_Overview.py", title="Plant & Foam Equipment Overview", icon="🏭")),
+    ("product_family_foam_grade", st.Page("views/2_Product_Family_Foam_Grade.py", title="Product Family & Foam Grade", icon="🧬")),
+    ("raw_materials", st.Page("views/14_Raw_Materials.py", title="Raw Materials", icon="🧴")),
     # Immediately after Raw Materials, mirroring Rigid Foam CR-13, where
     # Suppliers sits directly after Raw Materials in that edition's
     # "Formulations" section. Ported here 18 Aug 2026 out of the nested tab it
-    # used to be - see pages/30_Suppliers.py.
-    ("suppliers", st.Page("pages/30_Suppliers.py", title="Suppliers", icon="🚚")),
-    ("recipes", st.Page("pages/3_Recipe_Version_Record.py", title="Recipes", icon="📋")),
+    # used to be - see views/30_Suppliers.py.
+    ("suppliers", st.Page("views/30_Suppliers.py", title="Suppliers", icon="🚚")),
+    ("recipes", st.Page("views/3_Recipe_Version_Record.py", title="Recipes", icon="📋")),
 ]
 
 production_pages = [
-    ("production_run", st.Page("pages/4_Production_Run_Trial_Record.py", title="Production Run", icon="⚙️")),
+    ("production_run", st.Page("views/4_Production_Run_Trial_Record.py", title="Production Run", icon="⚙️")),
 ]
 
 # Customers gets its own section rather than sitting inside Samples & Trials,
@@ -302,7 +302,7 @@ production_pages = [
 # pages, and app.py drops empty sections from the sidebar entirely (see the
 # nav_sections filter below), so the section label cannot appear on its own.
 customer_pages = (
-    [("customers", st.Page("pages/29_Customers.py", title="Customers", icon="🧾"))]
+    [("customers", st.Page("views/29_Customers.py", title="Customers", icon="🧾"))]
     if SHOW_CUSTOMERS_PAGE
     else []
 )
@@ -313,9 +313,9 @@ customer_pages = (
 # a trial first, and belongs with the other trial and sample pages. The
 # Customers section holds the master record only.
 experiment_pages = [
-    ("samples_conditioning", st.Page("pages/9_Samples_Conditioning.py", title="Production Samples", icon="🧊")),
-    ("customer_trials", st.Page("pages/11_Customer_Trials.py", title="Customer Trials & Samples", icon="🤝")),
-    ("optimization_trials", st.Page("pages/12_Optimization_Trials.py", title="Optimization Trials & Samples", icon="🚀")),
+    ("samples_conditioning", st.Page("views/9_Samples_Conditioning.py", title="Production Samples", icon="🧊")),
+    ("customer_trials", st.Page("views/11_Customer_Trials.py", title="Customer Trials & Samples", icon="🤝")),
+    ("optimization_trials", st.Page("views/12_Optimization_Trials.py", title="Optimization Trials & Samples", icon="🚀")),
 ]
 
 # Split out from Production 2026-08-04 per user direction (segregation of
@@ -324,8 +324,8 @@ experiment_pages = [
 # Samples & Trials since a result/issue is always recorded against a
 # sample, and a sample can come from any of the 3 pages in that section.
 quality_pages = [
-    ("quality_test_result", st.Page("pages/5_Physical_Property_Result.py", title="Quality Test Result", icon="📏")),
-    ("quality_issue", st.Page("pages/6_Quality_Observation.py", title="Quality Issue", icon="🔍")),
+    ("quality_test_result", st.Page("views/5_Physical_Property_Result.py", title="Quality Test Result", icon="📏")),
+    ("quality_issue", st.Page("views/6_Quality_Observation.py", title="Quality Issue", icon="🔍")),
 ]
 
 # The value of PI3 Plant Edition is the join that already exists in the
@@ -333,33 +333,33 @@ quality_pages = [
 # results all keyed to the same production run. These pages are that join
 # put to work - named after what they actually do, not branded as "AI".
 industrial_intelligence_pages = [
-    ("recipe_optimization", st.Page("pages/15_Recipe_Optimization.py", title="Recipe Optimization", icon="🧪")),
-    ("trend_analysis", st.Page("pages/16_Trend_Analysis.py", title="Trend Analysis", icon="📈")),
+    ("recipe_optimization", st.Page("views/15_Recipe_Optimization.py", title="Recipe Optimization", icon="🧪")),
+    ("trend_analysis", st.Page("views/16_Trend_Analysis.py", title="Trend Analysis", icon="📈")),
     (
         "machine_settings_correlation",
         st.Page(
-            "pages/17_Process_Property_Correlation.py",
+            "views/17_Process_Property_Correlation.py",
             title="Machine Settings vs Physical Properties Correlation",
             icon="🔗",
         ),
     ),
-    ("root_cause_assistant", st.Page("pages/18_Root_Cause_Assistant.py", title="Root-Cause Assistant", icon="🩺")),
-    ("machine_settings_optimization", st.Page("pages/19_Machine_Settings_Optimization.py", title="Machine Settings Optimization", icon="⚙️")),
-    ("expert_notes", st.Page("pages/20_Expert_Notes.py", title="Expert Notes", icon="🧠")),
+    ("root_cause_assistant", st.Page("views/18_Root_Cause_Assistant.py", title="Root-Cause Assistant", icon="🩺")),
+    ("machine_settings_optimization", st.Page("views/19_Machine_Settings_Optimization.py", title="Machine Settings Optimization", icon="⚙️")),
+    ("expert_notes", st.Page("views/20_Expert_Notes.py", title="Expert Notes", icon="🧠")),
 ]
 
 admin_pages = [
-    ("user_roles_admin", st.Page("pages/24_User_Roles.py", title="User Roles", icon="🔑")),
+    ("user_roles_admin", st.Page("views/24_User_Roles.py", title="User Roles", icon="🔑")),
 ]
 
 platform_admin_pages = [
-    ("companies_admin", st.Page("pages/23_Companies.py", title="Companies", icon="🏢")),
-    ("subscription_types_admin", st.Page("pages/22_Subscription_Types.py", title="Subscription Types", icon="🎟️")),
-    ("default_user_roles_admin", st.Page("pages/26_Default_User_Roles.py", title="Default User Roles", icon="🗝️")),
-    ("user_accounts_admin", st.Page("pages/25_User_Accounts.py", title="User Accounts", icon="👤")),
-    ("pi3_ai_connectivity", st.Page("pages/10_PI3_AI_Connectivity.py", title="PI3 Connectivity", icon="🤖")),
-    ("performance_admin", st.Page("pages/27_Performance.py", title="Performance", icon="⚡")),
-    ("pilot_analysis_admin", st.Page("pages/28_Pilot_Analysis.py", title="Company Analysis", icon="🔬")),
+    ("companies_admin", st.Page("views/23_Companies.py", title="Companies", icon="🏢")),
+    ("subscription_types_admin", st.Page("views/22_Subscription_Types.py", title="Subscription Types", icon="🎟️")),
+    ("default_user_roles_admin", st.Page("views/26_Default_User_Roles.py", title="Default User Roles", icon="🗝️")),
+    ("user_accounts_admin", st.Page("views/25_User_Accounts.py", title="User Accounts", icon="👤")),
+    ("pi3_ai_connectivity", st.Page("views/10_PI3_AI_Connectivity.py", title="PI3 Connectivity", icon="🤖")),
+    ("performance_admin", st.Page("views/27_Performance.py", title="Performance", icon="⚡")),
+    ("pilot_analysis_admin", st.Page("views/28_Pilot_Analysis.py", title="Company Analysis", icon="🔬")),
 ]
 
 nav_sections_with_keys = {
@@ -379,6 +379,42 @@ nav_sections_with_keys = {
 # page still gates its own content behind require_login()/require_role().
 # Once logged in, narrow by the user's role (page_key deny-list) and their
 # company's subscription (feature flags) - see access_control.py.
+# ---------------------------------------------------------------------------
+# The screen files live in views/, NOT pages/. Do not rename that directory
+# back - it is load-bearing, and the reason is not obvious.
+#
+# streamlit/runtime/pages_manager.py sets a PROCESS-WIDE class attribute on
+# the first PagesManager it builds:
+#
+#     if PagesManager.uses_pages_directory is None:
+#         PagesManager.uses_pages_directory = (main_script_parent / "pages").exists()
+#
+# and streamlit/runtime/scriptrunner/script_runner.py then branches on it:
+#
+#     if PagesManager.uses_pages_directory:
+#         _mpa_v1(self._main_script_path)     # legacy auto-discovered pages
+#     else:
+#         exec(code, module.__dict__)         # this file
+#
+# st.navigation() sets that flag to False - but only once it has actually been
+# reached. So while a directory named pages/ existed, every request between
+# process start and the first run that got as far as st.navigation() was served
+# by the LEGACY v1 multipage path: this file never executed, and the user got
+# Streamlit's auto-generated flat list of filenames with no logo, no version,
+# no sections, and none of the access_control filtering below.
+#
+# That was visible in production twice on 18 Aug 2026. Worse than the cold-start
+# race: if anything above st.navigation() raised - a database hiccup in
+# init_db() or _nav_context(), which happened - the flag never flipped at all
+# and the WHOLE app stayed in legacy mode until it was restarted, silently
+# serving every page unfiltered.
+#
+# With no pages/ directory the flag evaluates False at construction and the
+# legacy path can never be taken, on any request, however this file fails.
+# URLs are unaffected: st.Page infers url_path from the FILENAME, not the
+# directory, so /Customers, /Suppliers and the rest are unchanged.
+# ---------------------------------------------------------------------------
+
 init_db()
 
 

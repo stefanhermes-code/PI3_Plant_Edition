@@ -12,7 +12,7 @@ correlation analytics, control-chart trend analysis, CSV import across
 most data-entry pages, and a full audit-and-remediation pass against the
 findings in `PI3_Gaps_and_Ambiguities.docx`.
 
-- App code: `app.py`, `pages/`, `db.py`, `auth.py`, `helpers.py`,
+- App code: `app.py`, `views/`, `db.py`, `auth.py`, `helpers.py`,
   `ai_assistant.py`, `analytics.py`, `access_control.py`,
   `tenant_scope.py`, `demo_data.py`
 - `README.md`: deployment guide (Supabase + Streamlit Community Cloud),

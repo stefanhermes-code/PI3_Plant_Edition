@@ -2,7 +2,7 @@
 Plant in the schema hierarchy.
 
 Plant, RawMaterial, and Supplier already carry their own `company_id`
-(see pages/1_Plant_Installation_Overview.py and pages/14_Raw_Materials.py).
+(see views/1_Plant_Installation_Overview.py and views/14_Raw_Materials.py).
 Everything else - product families, foam grades, recipes, production runs,
 and all the quality/trial data keyed to a production run or a plant - has
 no `company_id` column of its own. It scopes through the plant(s) it

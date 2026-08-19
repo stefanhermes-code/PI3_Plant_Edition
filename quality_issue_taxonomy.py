@@ -36,7 +36,7 @@ String(200) column exactly as before - this module only changes what the
 UI lets a person choose to put into it. Historical rows already in the
 database (demo data, UAT data, or anything imported before this taxonomy
 existed) that don't match any `name` below still display and edit fine -
-see pages/6_Quality_Observation.py's handling of a legacy/unmatched value.
+see views/6_Quality_Observation.py's handling of a legacy/unmatched value.
 """
 
 OTHER_ISSUE_NAME = "Other (not yet in this list)"

@@ -134,7 +134,7 @@ RAW_MATERIAL_CATEGORIES = [
 ]
 
 # Flexible-foam customer types - the controlled vocabulary behind the Customer
-# Type dropdown on pages/29_Customers.py.
+# Type dropdown on views/29_Customers.py.
 #
 # Source: PI3_Flexible_Foam_Customer_Types_Master.csv, supplied by Charlie on
 # 18 Aug 2026 at Stefan's request. Held as a constant here rather than a
@@ -402,7 +402,7 @@ class User(Base):
     # a platform-owner admin could accidentally narrow their OWN role out
     # from under themselves with no separate escape hatch. is_super_admin is
     # that escape hatch: a per-person flag, editable only on a platform-
-    # owner-company user (see pages/25_User_Accounts.py), that always
+    # owner-company user (see views/25_User_Accounts.py), that always
     # resolves to full access everywhere no matter what any role's
     # RolePagePermission rows say. Reserve it for the platform owner's own
     # trusted staff, not customers' admins.
@@ -761,7 +761,7 @@ class ProductionPhase(Base):
     # precedent as foam_height_mm above (a measured outcome, not a Setup
     # setting - never shown on the Setup form). Optional: when left blank,
     # the Runtime Data tab calculates it instead from conveyor_speed x the
-    # phase_start/phase_end duration - see pages/4's _compute_runtime_output().
+    # phase_start/phase_end duration - see views/4's _compute_runtime_output().
     # Combined with sidewall_width_mm and foam_height_mm this gives the
     # produced volume (m3), and with the foam grade's target_density, the
     # produced weight (kg).
@@ -1063,7 +1063,7 @@ class Customer(Base):
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     # Labelled "Customer Name" everywhere in the UI, not "Company Name"
     # (18 Aug 2026, Stefan: the old label sat next to the tenant "Company"
-    # column on pages/29_Customers.py and read as a duplicate of it). The
+    # column on views/29_Customers.py and read as a duplicate of it). The
     # column keeps its ported-from-Rigid-Foam name on purpose - renaming it
     # would mean migrating the uq_customer_company_name constraint plus every
     # read site, for nothing a user would ever see.
@@ -1530,7 +1530,7 @@ class ErrorLog(Base):
 class ExportLog(Base):
     """Item 53 - recipe/report/PI3-answer export and access events.
     Logged via st.download_button's on_click callback (see
-    audit_log.log_export and its call sites in pages/21_Report.py and
+    audit_log.log_export and its call sites in views/21_Report.py and
     helpers.render_pi3_docx_download) - fires exactly when the reviewer
     actually clicks Download, not merely when the button is rendered."""
     __tablename__ = "export_logs"

@@ -5,7 +5,7 @@ Page", 12 Aug 2026) on 18 Aug 2026, so both editions manage suppliers the same
 way.
 
 Supplier management used to live as a nested "Suppliers" tab inside
-pages/14_Raw_Materials.py, gated by the SAME `page_usable` boolean as the raw
+views/14_Raw_Materials.py, gated by the SAME `page_usable` boolean as the raw
 materials around it, because both record types shared the one "raw_materials"
 page_key. Suppliers are their own record domain, so this page takes that
 Create / Edit / Delete functionality over as an independently navigable page
@@ -21,7 +21,7 @@ New here, not just moved: a CSV / Excel import tab. Rigid Foam's standalone
 page has one and the nested tab in this edition never did, so porting the page
 is what brings bulk supplier loading to Flexible.
 
-What deliberately did NOT move: pages/14_Raw_Materials.py keeps its
+What deliberately did NOT move: views/14_Raw_Materials.py keeps its
 _supplier_picker / _supplier_names / _ensure_supplier_exists helpers and the
 "Default supplier" dropdown on its Manual entry and TDS forms. Those read and
 write the same db.Supplier rows this page manages, BY NAME -

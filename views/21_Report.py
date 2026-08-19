@@ -2,7 +2,7 @@
 
 "Report" is one of PI3 Plant Edition's own standard, always-included
 capabilities (Search, Compare, Retrieve, Structure, Report, Review and
-Approval - see pages/10_PI3_AI_Connectivity.py). This screen was the gap:
+Approval - see views/10_PI3_AI_Connectivity.py). This screen was the gap:
 it did not exist as a dedicated page before. Not gated behind PI3
 connectivity - every logged-in user can generate these.
 
