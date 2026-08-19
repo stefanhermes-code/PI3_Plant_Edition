@@ -76,6 +76,7 @@ from db import (
     ProductionPhase,
     ProductionRun,
     QualityObservation,
+    RawMaterialLotUse,
     RecipeComponent,
     RecipeVersion,
     Sample,
@@ -314,13 +315,14 @@ runs = (
     .all()
 )
 
-tab_runs, tab_setup, tab_runtime, tab_streams, tab_dosing, tab_events = st.tabs(
+tab_runs, tab_setup, tab_runtime, tab_streams, tab_dosing, tab_lots, tab_events = st.tabs(
     [
         "📋 Production Runs",
         "🛠️ Setup",
         "📊 Runtime Data",
         "🧪 Component Stream Readings",
         "⚖️ Recipe vs Actual",
+        "🏷️ Raw Material Lots",
         "🚨 Production Events",
     ]
 )
@@ -1441,6 +1443,170 @@ with tab_dosing:
                     f"{comparison['unmatched_streams']} stream reading(s) on this run are not linked to a "
                     "raw material, so they are not included above."
                 )
+
+
+with tab_lots:
+    # db.RawMaterialLotUse has existed since the Mandatory-tier data-capture
+    # work but never had a screen - the only references to it were in
+    # cascades.py, for dependency counting and cascade deletes. Found during
+    # the UAT data-coverage audit (19 Aug 2026) and built here on Stefan's
+    # direction. It is a tab on the production run rather than its own page
+    # because a lot use is only ever meaningful against one run.
+    st.caption(
+        "Which supplier lot actually went into this run, per component stream. This is the "
+        "traceability record: if a lot is later found to be off-specification, this is what "
+        "identifies the runs it reached."
+    )
+
+    if not runs:
+        st.info("Create a production run first (Production Runs tab).")
+    else:
+        lot_run = _run_selector(runs, key="lots_tab_run_select")
+
+        # Stream names come from what was actually metered on this run, so a
+        # lot is attached to a real stream rather than a retyped one. Free text
+        # is the fallback only when no readings exist yet.
+        lot_phase = (
+            session.query(ProductionPhase)
+            .filter(
+                ProductionPhase.production_run_id == lot_run.id,
+                ProductionPhase.phase_name == "Finalized",
+            )
+            .first()
+        )
+        stream_options = []
+        if lot_phase is not None:
+            stream_options = sorted(
+                {
+                    r.stream_name
+                    for r in session.query(ComponentStreamReading)
+                    .filter(ComponentStreamReading.production_phase_id == lot_phase.id)
+                    .all()
+                    if r.stream_name
+                }
+            )
+
+        sub_lots_overview, sub_lots_create = st.tabs(["Overview & Edit", "Create"])
+
+        lots_for_run = (
+            session.query(RawMaterialLotUse)
+            .filter(RawMaterialLotUse.production_run_id == lot_run.id)
+            .order_by(RawMaterialLotUse.component_stream_name)
+            .all()
+        )
+
+        with sub_lots_create:
+            if not page_usable:
+                st.caption("View-only access - recording a lot is restricted for your role.")
+            else:
+                with st.form(f"add_lot_use_{lot_run.id}"):
+                    if stream_options:
+                        new_stream = st.selectbox("Component stream *", stream_options)
+                    else:
+                        st.caption(
+                            "No component stream readings on this run yet, so the stream name is "
+                            "typed here. Record the readings first and this becomes a dropdown."
+                        )
+                        new_stream = st.text_input("Component stream *")
+                    new_lot_no = st.text_input("Supplier lot number *")
+                    new_lot_notes = st.text_area("Notes")
+                    if st.form_submit_button("Add lot use"):
+                        if not (new_stream or "").strip():
+                            st.error("Component stream is required.")
+                        elif not new_lot_no.strip():
+                            st.error("Supplier lot number is required.")
+                        else:
+                            session.add(
+                                RawMaterialLotUse(
+                                    production_run_id=lot_run.id,
+                                    component_stream_name=new_stream.strip(),
+                                    supplier_lot_no=new_lot_no.strip(),
+                                    notes=new_lot_notes.strip() or None,
+                                )
+                            )
+                            session.commit()
+                            st.success(f"Lot {new_lot_no.strip()} recorded against {new_stream.strip()}.")
+                            st.rerun()
+
+        with sub_lots_overview:
+            if not lots_for_run:
+                st.info(
+                    f"No supplier lots recorded yet for {_run_label(lot_run)} - use the Create tab."
+                )
+            else:
+                st.caption(f"{len(lots_for_run)} lot use(s). Click a row to edit or delete it.")
+                lot_idx = clickable_table(
+                    [
+                        {
+                            "Component stream": lot.component_stream_name,
+                            "Supplier lot no": lot.supplier_lot_no,
+                            "Notes": lot.notes or "—",
+                        }
+                        for lot in lots_for_run
+                    ],
+                    key=f"lot_use_table_{lot_run.id}",
+                )
+                if lot_idx is not None and lot_idx < len(lots_for_run):
+                    st.session_state["lot_use_selected_id"] = lots_for_run[lot_idx].id
+                elif st.session_state.get("lot_use_selected_id") not in {l.id for l in lots_for_run}:
+                    st.session_state.pop("lot_use_selected_id", None)
+
+                sel_lot = next(
+                    (l for l in lots_for_run if l.id == st.session_state.get("lot_use_selected_id")),
+                    None,
+                )
+                if sel_lot:
+                    st.markdown(f"#### Edit: {sel_lot.supplier_lot_no}")
+                    if not page_usable:
+                        st.caption("View-only access - editing and deleting is restricted for your role.")
+                    else:
+                        with st.form(f"edit_lot_use_{sel_lot.id}"):
+                            if stream_options:
+                                opts = stream_options + (
+                                    [] if sel_lot.component_stream_name in stream_options
+                                    else [sel_lot.component_stream_name]
+                                )
+                                e_stream = st.selectbox(
+                                    "Component stream *", opts,
+                                    index=opts.index(sel_lot.component_stream_name),
+                                    key=f"edit_lot_stream_{sel_lot.id}",
+                                )
+                            else:
+                                e_stream = st.text_input(
+                                    "Component stream *", value=sel_lot.component_stream_name,
+                                    key=f"edit_lot_stream_{sel_lot.id}",
+                                )
+                            e_lot_no = st.text_input(
+                                "Supplier lot number *", value=sel_lot.supplier_lot_no,
+                                key=f"edit_lot_no_{sel_lot.id}",
+                            )
+                            e_lot_notes = st.text_area(
+                                "Notes", value=sel_lot.notes or "", key=f"edit_lot_notes_{sel_lot.id}",
+                            )
+                            if st.form_submit_button("Save changes"):
+                                if not (e_stream or "").strip() or not e_lot_no.strip():
+                                    st.error("Component stream and supplier lot number are both required.")
+                                else:
+                                    sel_lot.component_stream_name = e_stream.strip()
+                                    sel_lot.supplier_lot_no = e_lot_no.strip()
+                                    sel_lot.notes = e_lot_notes.strip() or None
+                                    session.commit()
+                                    st.success("Lot use updated.")
+                                    st.rerun()
+
+                        def _do_delete_lot_use(_session=session, _id=sel_lot.id):
+                            _session.query(RawMaterialLotUse).filter(
+                                RawMaterialLotUse.id == _id
+                            ).delete(synchronize_session=False)
+                            _session.commit()
+                            st.session_state.pop("lot_use_selected_id", None)
+
+                        delete_with_confirm(
+                            f"lot {sel_lot.supplier_lot_no}",
+                            _do_delete_lot_use,
+                            key_prefix=f"lot_use_{sel_lot.id}",
+                            extra_warning="Nothing else references a lot use, so deleting it is safe.",
+                        )
 
 
 with tab_events:
