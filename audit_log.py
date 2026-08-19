@@ -153,6 +153,7 @@ def log_pi3_interaction(
     is absent stays NULL, which reads as "not recorded" instead of a
     fabricated value."""
     allowed = {
+        "user_display_name",
         "model_name",
         "application_version",
         "system_prompt_version",
@@ -197,6 +198,7 @@ def log_pi3_review(
     pi3_interaction_log_id,
     review_status,
     reviewer_user_id=None,
+    reviewer_display_name=None,
     review_comment=None,
     customer_final_action=None,
 ):
@@ -214,6 +216,7 @@ def log_pi3_review(
         row = PI3InteractionReview(
             pi3_interaction_log_id=pi3_interaction_log_id,
             reviewer_user_id=reviewer_user_id,
+            reviewer_display_name=reviewer_display_name,
             review_status=review_status,
             review_comment=review_comment,
             customer_final_action=customer_final_action,

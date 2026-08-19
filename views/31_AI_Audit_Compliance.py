@@ -189,6 +189,15 @@ def _latest_status(interaction):
 def _label(value):
     return value if value not in (None, "") else NOT_RECORDED
 
+
+def _who(recorded_name, user_id):
+    """Who did this, preferring the name recorded at the time over a lookup
+    through the user id. The id is a link, not an identity - a renamed or
+    deleted user would otherwise take their name out of the audit record, and
+    a session that authenticates outside the users table never had an id to
+    record in the first place."""
+    return recorded_name or users.get(user_id) or NOT_RECORDED
+
 if page_has_data:
 
     # --- Filters --------------------------------------------------------------
@@ -199,7 +208,7 @@ if page_has_data:
             f_company = st.selectbox("Company", company_options, key="ai_audit_company")
             plant_options = [ANY] + sorted({plants.get(i.plant_id, NOT_RECORDED) for i in interactions})
             f_plant = st.selectbox("Plant", plant_options, key="ai_audit_plant")
-            user_options = [ANY] + sorted({users.get(i.user_id, NOT_RECORDED) for i in interactions})
+            user_options = [ANY] + sorted({_who(i.user_display_name, i.user_id) for i in interactions})
             f_user = st.selectbox("User", user_options, key="ai_audit_user")
             f_id = st.text_input("Interaction ID", key="ai_audit_id", placeholder="Exact id")
         with f2:
@@ -234,7 +243,7 @@ if page_has_data:
             return False
         if f_plant != ANY and plants.get(i.plant_id, NOT_RECORDED) != f_plant:
             return False
-        if f_user != ANY and users.get(i.user_id, NOT_RECORDED) != f_user:
+        if f_user != ANY and _who(i.user_display_name, i.user_id) != f_user:
             return False
         if f_site != ANY and i.call_site != f_site:
             return False
@@ -355,7 +364,7 @@ if page_has_data:
                 "Recorded (UTC)": i.created_at,
                 "Company": companies.get(i.company_id, ""),
                 "Plant": plants.get(i.plant_id, ""),
-                "User": users.get(i.user_id, ""),
+                "User": _who(i.user_display_name, i.user_id),
                 "Call site": i.call_site,
                 "Classification": i.interaction_classification,
                 "Classification source": i.classification_source,
@@ -383,7 +392,7 @@ if page_has_data:
                 "Interaction ID": r.pi3_interaction_log_id,
                 "Review ID": r.id,
                 "Recorded (UTC)": r.created_at,
-                "Reviewer": users.get(r.reviewer_user_id, ""),
+                "Reviewer": _who(r.reviewer_display_name, r.reviewer_user_id),
                 "Decision": r.review_status,
                 "Reviewer comment": r.review_comment,
                 "Customer action taken": r.customer_final_action,
@@ -453,7 +462,7 @@ if page_has_data:
                 "When": i.created_at,
                 "Company": companies.get(i.company_id, "—"),
                 "Plant": plants.get(i.plant_id, "—"),
-                "User": users.get(i.user_id, "—"),
+                "User": _who(i.user_display_name, i.user_id),
                 "Call site": i.call_site,
                 "Classification": _label(i.interaction_classification),
                 "Verification": "Required" if i.verification_required else "—",
@@ -491,7 +500,7 @@ if page_has_data:
                             {"Field": "Recorded", "Value": str(selected.created_at)},
                             {"Field": "Company", "Value": companies.get(selected.company_id, "—")},
                             {"Field": "Plant", "Value": plants.get(selected.plant_id, "—")},
-                            {"Field": "User", "Value": users.get(selected.user_id, "—")},
+                            {"Field": "User", "Value": _who(selected.user_display_name, selected.user_id)},
                             {"Field": "Call site", "Value": selected.call_site or "—"},
                         ]
                     ).set_index("Field")
@@ -564,7 +573,7 @@ if page_has_data:
                     [
                         {
                             "When": r.created_at,
-                            "Reviewer": users.get(r.reviewer_user_id, "—"),
+                            "Reviewer": _who(r.reviewer_display_name, r.reviewer_user_id),
                             "Decision": r.review_status,
                             "Comment": r.review_comment or "—",
                             "Customer action": r.customer_final_action or "—",

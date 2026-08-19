@@ -500,6 +500,14 @@ def _governance_fields(
     """
     classification, source = ai_governance.classify(call_site, input_text)
     fields = {
+        # Who asked, as text. st.session_state carries a display name on every
+        # authentication path, including the legacy one that has no user_id -
+        # see db.PI3InteractionLog.user_display_name.
+        "user_display_name": (
+            st.session_state.get("display_name")
+            or st.session_state.get("username")
+            or None
+        ),
         "model_name": model,
         "application_version": APP_VERSION,
         "system_prompt_version": SYSTEM_PROMPT_VERSION,

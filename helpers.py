@@ -837,8 +837,14 @@ def render_pi3_verification_panel(session, interaction_log_id, key_prefix):
                     "your own materials, equipment and process conditions."
                 )
         else:
+            # Prefer the name recorded at the time. The user lookup is the
+            # fallback for reviews written before that column existed.
             reviewer = session.get(User, latest.reviewer_user_id) if latest.reviewer_user_id else None
-            who = (reviewer.display_name or reviewer.email) if reviewer is not None else "an unrecorded user"
+            who = (
+                latest.reviewer_display_name
+                or (reviewer.display_name or reviewer.email if reviewer is not None else None)
+                or "an unrecorded user"
+            )
             when = latest.created_at.strftime("%Y-%m-%d %H:%M UTC") if latest.created_at else "an unrecorded time"
             # The status text already says what was decided, so REVIEW_DISPLAY
             # is used only for the Pending case - repeating it here read as
@@ -877,7 +883,10 @@ def render_pi3_verification_panel(session, interaction_log_id, key_prefix):
                             session,
                             pi3_interaction_log_id=interaction_log_id,
                             review_status=decision,
-                            reviewer_user_id=current_user().get("id"),
+                            reviewer_user_id=viewer.get("id"),
+                        reviewer_display_name=(
+                            viewer.get("display_name") or viewer.get("username") or None
+                        ),
                             review_comment=(comment or "").strip() or None,
                             customer_final_action=(action or "").strip() or None,
                         )

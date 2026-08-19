@@ -1497,6 +1497,14 @@ class PI3InteractionLog(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"))
+    # The name as it stood when the question was asked, recorded beside the
+    # id rather than instead of it (Stefan, 19 Aug 2026). An id is a link, not
+    # an identity: rename or delete the user and the audit record can no
+    # longer say who asked. It also covers the sessions that authenticate
+    # outside the users table - the legacy secrets.toml path sets a display
+    # name but no user_id, which is why every interaction before this change
+    # carries a NULL user. Same pattern as CustomerTrial.customer_name.
+    user_display_name = Column(String(200))
     company_id = Column(Integer, ForeignKey("companies.id"))
     plant_id = Column(Integer, ForeignKey("plants.id"))
     call_site = Column(String(100), nullable=False)
@@ -1568,6 +1576,10 @@ class PI3InteractionReview(Base):
         Integer, ForeignKey("pi3_interaction_logs.id"), nullable=False
     )
     reviewer_user_id = Column(Integer, ForeignKey("users.id"))
+    # Who decided, as text, for the same reason as user_display_name above -
+    # and it matters more here: a decision whose author cannot be named later
+    # is not much of a decision.
+    reviewer_display_name = Column(String(200))
     # One of ai_governance.REVIEW_STATUSES. Text rather than an enum for the
     # same reason as the classification above.
     review_status = Column(String(60), nullable=False)
