@@ -315,12 +315,13 @@ runs = (
     .all()
 )
 
-tab_runs, tab_setup, tab_runtime, tab_streams, tab_events = st.tabs(
+tab_runs, tab_setup, tab_runtime, tab_streams, tab_dosing, tab_events = st.tabs(
     [
         "📋 Production Runs",
         "🛠️ Setup",
         "📊 Runtime Data",
         "🧪 Component Stream Readings",
+        "⚖️ Recipe vs Actual",
         "🚨 Production Events",
     ]
 )
@@ -1383,6 +1384,66 @@ with tab_streams:
 # ---------------------------------------------------------------------------
 # Production events (alarms / interventions / grade changes)
 # ---------------------------------------------------------------------------
+with tab_dosing:
+    # Requested by Charlie, 19 Aug 2026, once every component stream reading
+    # had been mapped to a raw material (2,013 of 2,013). Until that mapping
+    # existed the two sides of this screen could not be lined up at all: the
+    # recipe talks about "Caradol SC65-18S" and the line reports a stream
+    # called "Polyol".
+    st.caption(
+        "What the recipe asks for, beside what the line actually metered, for the selected run. "
+        "Actual php is each material's stream flow as a percentage of the total polyol flow on "
+        "that run - the same basis the recipe uses, since php means parts per hundred polyol."
+    )
+
+    if not runs:
+        st.info("Create a production run first (Production Runs tab).")
+    else:
+        dosing_run = _run_selector(runs, key="dosing_tab_run_select")
+        comparison = analytics.recipe_vs_actual_dosing(session, dosing_run)
+
+        if comparison["reason"]:
+            st.info(comparison["reason"])
+        else:
+            basis = f"{comparison['polyol_flow']:g}"
+            if comparison["flow_unit"]:
+                basis += f" {comparison['flow_unit']}"
+            st.caption(
+                f"Showing **{_run_label(dosing_run)}** · php basis (total polyol flow) **{basis}** · "
+                f"{len(comparison['rows'])} material(s) compared"
+            )
+
+            df = pd.DataFrame(comparison["rows"])
+            render_data_table(df)
+
+            # Deliberately no colouring, threshold or pass/fail on Deviation.
+            # Charlie's instruction is explicit that it stays a numeric
+            # comparison until a tolerance is separately approved, and a red
+            # cell here would be inventing a specification nobody has agreed.
+            st.caption(
+                "Deviation is actual php minus recipe php. It is shown as a number only - there is "
+                "no approved dosing tolerance yet, so nothing here is a pass or a fail."
+            )
+
+            if comparison["recipe_only"]:
+                st.warning(
+                    "In the recipe but not metered on this run: "
+                    + ", ".join(comparison["recipe_only"])
+                    + ". Either the stream was not recorded, or the material was added by hand."
+                )
+            if comparison["stream_only"]:
+                st.warning(
+                    "Metered on this run but not in the recipe: "
+                    + ", ".join(comparison["stream_only"])
+                    + "."
+                )
+            if comparison["unmatched_streams"]:
+                st.caption(
+                    f"{comparison['unmatched_streams']} stream reading(s) on this run are not linked to a "
+                    "raw material, so they are not included above."
+                )
+
+
 with tab_events:
     st.caption(
         "Alarms, manual interventions, grade changes, and planned/unplanned pauses. This log is what "

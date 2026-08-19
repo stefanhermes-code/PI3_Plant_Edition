@@ -47,6 +47,7 @@ from db import (
     ProductionPhase,
     ProductionRun,
     RawMaterial,
+    RecipeComponent,
     RecipeVersion,
 )
 from quality_standards import compute_pass_fail
@@ -1366,4 +1367,158 @@ def trend_test(series_df, min_points=5, alpha=0.05):
         "mk_p_value": round(mk_p_value, 4),
         "mk_significant": mk_significant,
         "mk_direction": mk_direction,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Recipe vs actual dosing
+# ---------------------------------------------------------------------------
+# php means parts per hundred polyol, so the denominator is the TOTAL polyol
+# flow on the run, not one nominated polyol stream. That matters: half the
+# recipes in this database are two-polyol formulations (e.g. Caradol SC65-18S
+# at 80 php with POP P2045 at 20), and dividing by either stream alone would
+# put every other line out by a factor of five or so. Summing the
+# Polyol-category streams reproduces the recipe basis exactly - on UAT-B0001
+# the two polyols come back as 80.029 and 19.971, totalling 100.
+#
+# Verified against the two reference pairs Charlie set as the acceptance check
+# (19 Aug 2026): on UAT-B0067, AMINE 33 -> Dabco 33LV reads 0.082 php against a
+# recipe value of 0.09, and AMINE 1 -> Dabco BL11 reads 0.032 against 0.03.
+
+PHP_BASIS_CATEGORY = "Polyol"
+
+
+def recipe_vs_actual_dosing(session, run):
+    """Compare what a run's recipe asks for against what the line actually
+    metered, per raw material.
+
+    Returns a dict:
+        rows            list of per-material dicts, recipe order then extras
+        polyol_flow     the php basis (sum of Polyol-category stream flows)
+        flow_unit       unit those flows were recorded in, when consistent
+        unmatched_streams   streams with no raw material mapped
+        recipe_only     recipe components with no stream on this run
+        stream_only     mapped streams with no line in this recipe
+        reason          None when a comparison was produced, otherwise a
+                        plain-language explanation of why it could not be
+
+    Deliberately returns no verdict, tolerance or colour. Charlie's
+    instruction of 19 Aug 2026 is explicit that deviation stays a numeric
+    comparison until a tolerance is separately approved - a red cell here
+    would be inventing a specification the business has not agreed.
+    """
+    empty = {
+        "rows": [], "polyol_flow": None, "flow_unit": None,
+        "unmatched_streams": 0, "recipe_only": [], "stream_only": [], "reason": None,
+    }
+
+    if run is None:
+        return {**empty, "reason": "No production run selected."}
+    if not run.recipe_version_id:
+        return {**empty, "reason": "This run has no recipe version attached, so there is nothing to compare against."}
+
+    phase = (
+        session.query(ProductionPhase)
+        .filter(ProductionPhase.production_run_id == run.id, ProductionPhase.phase_name == "Finalized")
+        .first()
+    )
+    if phase is None:
+        return {**empty, "reason": "This run has no Runtime Data (Finalized) snapshot, which is where stream readings attach."}
+
+    readings = (
+        session.query(ComponentStreamReading)
+        .filter(ComponentStreamReading.production_phase_id == phase.id)
+        .all()
+    )
+    if not readings:
+        return {**empty, "reason": "No component stream readings were recorded for this run."}
+
+    material_ids = {r.raw_material_id for r in readings if r.raw_material_id}
+    materials = (
+        {m.id: m for m in session.query(RawMaterial).filter(RawMaterial.id.in_(material_ids)).all()}
+        if material_ids else {}
+    )
+
+    unmatched = sum(1 for r in readings if not r.raw_material_id)
+    polyol_flow = sum(
+        (r.flow or 0)
+        for r in readings
+        if r.raw_material_id
+        and materials.get(r.raw_material_id) is not None
+        and materials[r.raw_material_id].category == PHP_BASIS_CATEGORY
+    )
+    if not polyol_flow:
+        return {
+            **empty, "unmatched_streams": unmatched,
+            "reason": (
+                "No polyol stream flow was recorded for this run. php is parts per hundred polyol, "
+                "so without it there is no basis to express the other streams against."
+            ),
+        }
+
+    units = {r.flow_unit for r in readings if r.flow_unit}
+    flow_unit = units.pop() if len(units) == 1 else None
+
+    actual_by_material = {}
+    for r in readings:
+        if not r.raw_material_id or r.flow is None:
+            continue
+        actual_by_material.setdefault(r.raw_material_id, {"flow": 0.0, "streams": []})
+        actual_by_material[r.raw_material_id]["flow"] += r.flow
+        actual_by_material[r.raw_material_id]["streams"].append(r.stream_name or "—")
+
+    components = (
+        session.query(RecipeComponent)
+        .filter(RecipeComponent.recipe_version_id == run.recipe_version_id)
+        .all()
+    )
+    comp_material_ids = {c.raw_material_id for c in components if c.raw_material_id}
+    comp_materials = (
+        {m.id: m for m in session.query(RawMaterial).filter(RawMaterial.id.in_(comp_material_ids)).all()}
+        if comp_material_ids else {}
+    )
+
+    rows, recipe_only, stream_only = [], [], []
+    seen = set()
+    # Recipe order first: the recipe is the specification, so it sets the
+    # reading order and a missing line is visible as a gap rather than an
+    # absence.
+    for c in sorted(components, key=lambda c: (-(c.php or 0), (c.raw_material_name or ""))):
+        name = c.raw_material_name or (comp_materials.get(c.raw_material_id).name if comp_materials.get(c.raw_material_id) else "—")
+        actual = actual_by_material.get(c.raw_material_id) if c.raw_material_id else None
+        if actual is None:
+            recipe_only.append(name)
+            continue
+        seen.add(c.raw_material_id)
+        actual_php = actual["flow"] / polyol_flow * 100
+        rows.append({
+            "Raw material": name,
+            "Stream": ", ".join(actual["streams"]),
+            "Recipe php": round(c.php, 3) if c.php is not None else None,
+            "Actual php": round(actual_php, 3),
+            "Deviation php": round(actual_php - c.php, 3) if c.php is not None else None,
+        })
+
+    for rm_id, actual in actual_by_material.items():
+        if rm_id in seen:
+            continue
+        material = materials.get(rm_id)
+        name = material.name if material else "—"
+        stream_only.append(name)
+        rows.append({
+            "Raw material": name,
+            "Stream": ", ".join(actual["streams"]),
+            "Recipe php": None,
+            "Actual php": round(actual["flow"] / polyol_flow * 100, 3),
+            "Deviation php": None,
+        })
+
+    return {
+        "rows": rows,
+        "polyol_flow": round(polyol_flow, 4),
+        "flow_unit": flow_unit,
+        "unmatched_streams": unmatched,
+        "recipe_only": recipe_only,
+        "stream_only": stream_only,
+        "reason": None,
     }
