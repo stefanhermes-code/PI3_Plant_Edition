@@ -9,10 +9,22 @@ import pandas as pd
 import streamlit as st
 
 import ai_assistant
+import ai_governance
 import audit_log
 import reports
 from auth import current_user
-from db import ExpertNote, FoamGrade, Plant, ProductFamily, ProductionRun, RecipeVersion, get_session
+from db import (
+    ExpertNote,
+    FoamGrade,
+    PI3InteractionLog,
+    PI3InteractionReview,
+    Plant,
+    ProductFamily,
+    ProductionRun,
+    RecipeVersion,
+    User,
+    get_session,
+)
 
 
 def expert_note_plant_id_for_link(entity_type, entity_id, session):
@@ -730,9 +742,138 @@ def log_export_click(export_type, description=None):
         pass
 
 
+def pi3_verification_status(session, interaction_log_id):
+    """Current review position for one PI3 answer, or None when the answer
+    never required a recorded decision.
+
+    Reviews are append-only (see db.PI3InteractionReview), so the newest row
+    is the standing decision. An interaction that requires verification and
+    has no review yet is Pending."""
+    if not interaction_log_id:
+        return None
+    row = session.get(PI3InteractionLog, interaction_log_id)
+    if row is None or not row.verification_required:
+        return None
+    latest = (
+        session.query(PI3InteractionReview)
+        .filter(PI3InteractionReview.pi3_interaction_log_id == interaction_log_id)
+        .order_by(PI3InteractionReview.created_at.desc())
+        .first()
+    )
+    return latest.review_status if latest else ai_governance.REVIEW_PENDING
+
+
+def render_pi3_verification_panel(session, interaction_log_id, key_prefix):
+    """The verification control that sits with a PI3 answer (CR of 19 Aug
+    2026, sections 7 and 13).
+
+    Shown only for interactions classified Process / Safety Relevant - those
+    are the answers that can change what is dosed or how the line is set, so
+    those are the ones that need a qualified person to decide before trial or
+    operational use. An advisory answer keeps the ordinary caption the page
+    already shows and gets no panel; adding one everywhere would turn the
+    notice into wallpaper.
+
+    Returns the current status string (or None), so the caller can carry it
+    into the .docx export - a downloaded recommendation has to say where it
+    stands, or it reads as approved once it leaves the screen.
+
+    The decision is written through audit_log.log_pi3_review, which appends.
+    Nothing here edits the interaction: the original question and answer stay
+    exactly as generated, and a changed mind is a new row."""
+    if not interaction_log_id:
+        return None
+    row = session.get(PI3InteractionLog, interaction_log_id)
+    if row is None or not row.verification_required:
+        return None
+
+    # Record that the notice was actually put in front of someone. Written
+    # once - the column stays True afterwards - and left for
+    # close_out_session() to commit with the rest of the rerun.
+    if not row.verification_message_shown:
+        row.verification_message_shown = True
+        session.flush()
+
+    reviews = (
+        session.query(PI3InteractionReview)
+        .filter(PI3InteractionReview.pi3_interaction_log_id == interaction_log_id)
+        .order_by(PI3InteractionReview.created_at.desc())
+        .all()
+    )
+    latest = reviews[0] if reviews else None
+    status = latest.review_status if latest else ai_governance.REVIEW_PENDING
+    display = ai_governance.REVIEW_DISPLAY.get(status, "")
+
+    with st.container(border=True):
+        if latest is None:
+            st.markdown(f"**Verification required.** {display}")
+        else:
+            reviewer = session.get(User, latest.reviewer_user_id) if latest.reviewer_user_id else None
+            who = (reviewer.display_name or reviewer.email) if reviewer is not None else "an unrecorded user"
+            when = latest.created_at.strftime("%Y-%m-%d %H:%M UTC") if latest.created_at else "an unrecorded time"
+            # The status text already says what was decided, so REVIEW_DISPLAY
+            # is used only for the Pending case - repeating it here read as
+            # "Accepted... Accepted...".
+            st.markdown(f"**{status}** — reviewed by {who} on {when}.")
+            if latest.review_comment:
+                st.caption(f"Comment: {latest.review_comment}")
+            if latest.customer_final_action:
+                st.caption(f"Action taken: {latest.customer_final_action}")
+
+        label = "Record a decision" if latest is None else "Record a further decision"
+        with st.expander(label, expanded=False):
+            st.caption(
+                "The decision is added to this answer's history. Previous decisions stay on "
+                "record, and the answer above is unchanged by it."
+            )
+            with st.form(f"{key_prefix}_verification_form"):
+                decision = st.selectbox(
+                    "Decision *",
+                    [x for x in ai_governance.REVIEW_STATUSES if x != ai_governance.REVIEW_PENDING],
+                    key=f"{key_prefix}_verification_decision",
+                )
+                comment = st.text_area(
+                    "Reviewer comment",
+                    help="What was checked, and against what.",
+                    key=f"{key_prefix}_verification_comment",
+                )
+                action = st.text_area(
+                    "Customer action taken",
+                    help="What was actually done, where that differs from the recommendation.",
+                    key=f"{key_prefix}_verification_action",
+                )
+                if st.form_submit_button("Record decision"):
+                    written = audit_log.log_pi3_review(
+                        session,
+                        pi3_interaction_log_id=interaction_log_id,
+                        review_status=decision,
+                        reviewer_user_id=current_user().get("id"),
+                        review_comment=(comment or "").strip() or None,
+                        customer_final_action=(action or "").strip() or None,
+                    )
+                    if written is None:
+                        st.error(
+                            "The decision was not recorded. Try again, or ask your administrator "
+                            "to check the error log."
+                        )
+                    else:
+                        session.commit()
+                        st.rerun()
+
+        if len(reviews) > 1:
+            with st.expander(f"Earlier decisions ({len(reviews) - 1})", expanded=False):
+                for r in reviews[1:]:
+                    stamp = r.created_at.strftime("%Y-%m-%d %H:%M UTC") if r.created_at else "—"
+                    st.markdown(f"- **{r.review_status}** · {stamp}")
+                    if r.review_comment:
+                        st.caption(r.review_comment)
+
+    return status
+
+
 def render_pi3_docx_download(
     session, plant_id, key_prefix, question_label, answer, tool_log=None,
-    page_context="", foam_grade_id=None,
+    page_context="", foam_grade_id=None, interaction_log_id=None,
 ):
     """Shared 'Download as Word (.docx)' button for any PI3-generated
     answer - both the older fixed-prompt sections (Recipe Optimization's
@@ -762,6 +903,10 @@ def render_pi3_docx_download(
         plant_name=reports.plant_label(session, plant_id),
         foam_grade_name=grade_name,
         asked_by=current_user().get("display_name"),
+        # CR of 19 Aug 2026, section 13: a recommendation that leaves the
+        # screen has to say where its verification stands, or the reader has
+        # no way to tell an unreviewed answer from an accepted one.
+        verification_status=pi3_verification_status(session, interaction_log_id),
     )
     st.download_button(
         "Download as Word (.docx)",
@@ -960,6 +1105,14 @@ def render_ask_pi3_section(
         st.write(answer)
         tool_log = st.session_state.get(f"{key_prefix}_tool_log") or []
         st.caption("Confirm through your own investigation before acting on this.")
+        # A free-form question that asks for a formulation or process change is
+        # classified Process / Safety Relevant by ai_governance, so the panel
+        # appears here too - not only on the three fixed Intelligence
+        # functions. An ordinary "what was the average density" question is
+        # advisory and renders nothing.
+        render_pi3_verification_panel(
+            session, st.session_state.get(f"{key_prefix}_interaction_log_id"), key_prefix=key_prefix,
+        )
         render_pi3_feedback_control(
             session, st.session_state.get(f"{key_prefix}_interaction_log_id"), key_prefix=key_prefix,
         )
@@ -973,6 +1126,7 @@ def render_ask_pi3_section(
                 question_label=st.session_state.get(f"{key_prefix}_asked", ""),
                 answer=answer,
                 tool_log=tool_log,
+                interaction_log_id=st.session_state.get(f"{key_prefix}_interaction_log_id"),
                 page_context=page_context,
                 foam_grade_id=default_foam_grade_id,
             )

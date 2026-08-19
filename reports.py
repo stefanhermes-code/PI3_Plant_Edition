@@ -2145,6 +2145,7 @@ _HTC_GREY = RGBColor(0x5A, 0x6B, 0x74)
 def build_pi3_qa_report_data(
     question, answer, tool_log, page_context="", plant_name=None,
     foam_grade_name=None, asked_by=None, asked_at=None,
+    verification_status=None,
 ):
     """Plain-dict data assembly for one 'Ask PI3' question/answer exchange -
     no Streamlit or python-docx import, so this half is easy to unit test
@@ -2161,6 +2162,10 @@ def build_pi3_qa_report_data(
         "foam_grade_name": foam_grade_name,
         "asked_by": asked_by,
         "asked_at": asked_at or dt.datetime.utcnow(),
+        # None means the answer never required a recorded human decision -
+        # rendered as "Not required" rather than left blank, so the reader can
+        # tell "no decision needed" from "nobody has looked at this yet".
+        "verification_status": verification_status,
     }
 
 
@@ -2437,6 +2442,7 @@ def render_pi3_qa_report_docx(data):
         ("Foam grade", data.get("foam_grade_name") or "—"),
         ("Asked by", data.get("asked_by") or "—"),
         ("Page context", data.get("page_context") or "—"),
+        ("Verification status", data.get("verification_status") or "Not required"),
     ])
 
     # --- Question / answer ---------------------------------------------

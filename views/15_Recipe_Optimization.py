@@ -41,6 +41,7 @@ from helpers import (
     render_function_action_intro,
     render_pi3_docx_download,
     render_pi3_feedback_control,
+    render_pi3_verification_panel,
     render_save_to_expert_notes_button,
     view_only_notice,
 )
@@ -657,6 +658,14 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "historical cases. For your technical team to evaluate and confirm before applying."
         )
         st.write(ai_answer)
+        # This function is classified Process / Safety Relevant, so the answer
+        # carries a verification control: a qualified person records Accepted,
+        # Modified or Rejected before it is taken to a trial or to the line.
+        # See ai_governance and helpers.render_pi3_verification_panel.
+        render_pi3_verification_panel(
+            session, st.session_state.get(f"recipe_opt_ai_interaction_id_{grade.id}"),
+            key_prefix=f"recipe_opt_fixed_{grade.id}",
+        )
         render_pi3_feedback_control(
             session, st.session_state.get(f"recipe_opt_ai_interaction_id_{grade.id}"),
             key_prefix=f"recipe_opt_fixed_{grade.id}",
@@ -671,6 +680,7 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
                 question_label=ro_question_label,
                 answer=ai_answer,
                 foam_grade_id=grade.id,
+                interaction_log_id=st.session_state.get(f"recipe_opt_ai_interaction_id_{grade.id}"),
             )
         with ro_save_col:
             render_save_to_expert_notes_button(

@@ -31,6 +31,7 @@ from helpers import (
     render_function_action_intro,
     render_pi3_docx_download,
     render_pi3_feedback_control,
+    render_pi3_verification_panel,
     render_save_to_expert_notes_button,
     render_scatter_chart_no_zero,
     view_only_notice,
@@ -327,6 +328,14 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
             "historical cases. Confirm through your own investigation before acting on it."
         )
         st.write(ai_answer)
+        # This function is classified Process / Safety Relevant, so the answer
+        # carries a verification control: a qualified person records Accepted,
+        # Modified or Rejected before it is taken to a trial or to the line.
+        # See ai_governance and helpers.render_pi3_verification_panel.
+        render_pi3_verification_panel(
+            session, st.session_state.get(f"optimization_ai_interaction_id_{unit['state_key']}_{property_name}"),
+            key_prefix=f"optimization_fixed_{unit['state_key']}_{property_name}",
+        )
         render_pi3_feedback_control(
             session, st.session_state.get(f"optimization_ai_interaction_id_{unit['state_key']}_{property_name}"),
             key_prefix=f"optimization_fixed_{unit['state_key']}_{property_name}",
@@ -341,6 +350,7 @@ if ai_assistant.is_enabled_for_plant(session, plant_id):
                 question_label=optimization_question_label,
                 answer=ai_answer,
                 foam_grade_id=docx_grade_id,
+                interaction_log_id=st.session_state.get(f"optimization_ai_interaction_id_{unit['state_key']}_{property_name}"),
             )
         with opt_save_col:
             render_save_to_expert_notes_button(

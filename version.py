@@ -9,4 +9,4 @@ Convention: bump this on every commit that gets pushed to GitHub.
 rework + machine setup). Everything before this was unversioned.
 """
 
-APP_VERSION = "2.12.2"
+APP_VERSION = "2.13.0"
