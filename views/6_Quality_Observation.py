@@ -204,16 +204,34 @@ optimization_trials = (
     .order_by(OptimizationTrial.created_at.desc())
     .all()
 )
+# Where each source type is created, so the "Record against" picker can say
+# what to do rather than silently dropping a source. Same change as the
+# Quality Test Result page, 20 Aug 2026 - the two pages share this picker
+# shape, so they share the defect and the fix.
+SOURCE_ORIGIN_PAGE = {
+    "Production Run": "Production Run",
+    "Customer Trial": "Customer Trials & Samples",
+    "Optimization Trial": "Optimization Trials & Samples",
+}
+records_for_source = {
+    "Production Run": runs,
+    "Customer Trial": customer_trials,
+    "Optimization Trial": optimization_trials,
+}
+
 if not runs and not customer_trials and not optimization_trials:
     st.warning(
         "Create a production run, customer trial, or optimization trial first "
         "(Production Run / Customer Trials / Optimization Trials pages)."
     )
-    st.stop()
+    # No st.stop() - see the equivalent note on the Quality Test Result page.
+    # A company with nothing recorded yet hits this on every render, and
+    # st.stop() there leaves the read transaction open.
 
 tab_obs_manual, tab_obs_import = st.tabs(["Add quality issue", "CSV / Excel import"])
 
 with tab_obs_manual:
+    show_pending_banner("observation_manual_msg")
     with st.expander("Add quality issue", expanded=False):
         if not page_usable:
             st.caption("View-only access - adding a quality issue is restricted for your role.")
@@ -227,14 +245,21 @@ with tab_obs_manual:
             if _typical_causes:
                 st.caption(f"Typical causes/checks: {_typical_causes}")
 
-            available_sources = [
-                s for s in SAMPLE_SOURCE_TYPES
-                if (s == "Production Run" and runs)
-                or (s == "Customer Trial" and customer_trials)
-                or (s == "Optimization Trial" and optimization_trials)
-            ]
-            source_type = st.selectbox("Record against *", available_sources, key="obs_source_type")
-            if source_type == "Production Run":
+            # All three source types are always offered - a source with no
+            # records says what to create instead of disappearing. See the
+            # longer note on the Quality Test Result page.
+            source_type = st.selectbox(
+                "Record against *", list(SAMPLE_SOURCE_TYPES), key="obs_source_type",
+            )
+            source_records = records_for_source.get(source_type) or []
+            if not source_records:
+                st.info(
+                    "No %s has been recorded for this company yet, so there is nothing to record an "
+                    "issue against. Create one on the %s page first."
+                    % (source_type.lower(), SOURCE_ORIGIN_PAGE.get(source_type, source_type))
+                )
+                parent = None
+            elif source_type == "Production Run":
                 parent = st.selectbox(
                     "Production run *", runs,
                     format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
@@ -255,40 +280,47 @@ with tab_obs_manual:
                     ),
                     key="obs_ot_select",
                 )
-            with st.form("add_observation"):
-                st.caption(f"Issue type: **{observation_type or '(describe the issue above)'}**")
-                c1, c2 = st.columns(2)
-                severity = c1.selectbox("Severity", SEVERITIES)
-                frequency = c2.selectbox("Frequency", ["One-off", "Recurring"])
-                location_in_block = st.text_input("Location in block")
-                suspected_cause = st.text_area("Suspected cause")
-                confidence_level = st.selectbox("Confidence level *", CONFIDENCE_LEVELS, index=2)
-                product_impact = st.text_area("Product impact")
-                customer_impact = st.text_area("Customer impact")
-                notes = st.text_area("Notes")
-                observed_at = st.date_input("Observed on", value=dt.date.today())
-                submitted = st.form_submit_button("Save issue")
-                if submitted:
-                    if not observation_type:
-                        st.error("Issue type is required.")
-                    else:
-                        new_obs = QualityObservation(
-                            observation_type=observation_type,
-                            severity=severity,
-                            frequency=frequency,
-                            location_in_block=location_in_block,
-                            suspected_cause=suspected_cause,
-                            confidence_level=confidence_level,
-                            product_impact=product_impact,
-                            customer_impact=customer_impact,
-                            notes=notes,
-                            observed_at=observed_at,
-                        )
-                        setattr(new_obs, sample_source_fk_field(source_type), parent.id)
-                        session.add(new_obs)
-                        session.commit()
-                        st.success("Quality issue saved.")
-                        st.rerun()
+            # Only when a source record is actually selected. The message above
+            # has already said what to create otherwise.
+            if parent is not None:
+                with st.form("add_observation"):
+                    st.caption(f"Issue type: **{observation_type or '(describe the issue above)'}**")
+                    c1, c2 = st.columns(2)
+                    severity = c1.selectbox("Severity", SEVERITIES)
+                    frequency = c2.selectbox("Frequency", ["One-off", "Recurring"])
+                    location_in_block = st.text_input("Location in block")
+                    suspected_cause = st.text_area("Suspected cause")
+                    confidence_level = st.selectbox("Confidence level *", CONFIDENCE_LEVELS, index=2)
+                    product_impact = st.text_area("Product impact")
+                    customer_impact = st.text_area("Customer impact")
+                    notes = st.text_area("Notes")
+                    observed_at = st.date_input("Observed on", value=dt.date.today())
+                    submitted = st.form_submit_button("Save issue")
+                    if submitted:
+                        if not observation_type:
+                            st.error("Issue type is required.")
+                        else:
+                            new_obs = QualityObservation(
+                                observation_type=observation_type,
+                                severity=severity,
+                                frequency=frequency,
+                                location_in_block=location_in_block,
+                                suspected_cause=suspected_cause,
+                                confidence_level=confidence_level,
+                                product_impact=product_impact,
+                                customer_impact=customer_impact,
+                                notes=notes,
+                                observed_at=observed_at,
+                            )
+                            setattr(new_obs, sample_source_fk_field(source_type), parent.id)
+                            session.add(new_obs)
+                            session.commit()
+                            # Stashed, not shown directly: st.rerun() below restarts the
+                            # script and wipes an st.success() written just before it, so
+                            # a successful save looked like nothing happened. See
+                            # helpers.show_pending_banner.
+                            set_pending_banner("observation_manual_msg", "Quality issue saved.")
+                            st.rerun()
 
 with tab_obs_import:
     show_pending_banner("observation_import_msg")

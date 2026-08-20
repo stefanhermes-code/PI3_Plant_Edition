@@ -178,12 +178,32 @@ optimization_trials = (
     .order_by(OptimizationTrial.created_at.desc())
     .all()
 )
+# Where each source type is created, so the "Record against" picker below can
+# say what to do rather than silently dropping a source the user was told to
+# expect (Charlie's CR of 20 Aug 2026 - see the note above the picker).
+SOURCE_ORIGIN_PAGE = {
+    "Production Run": "Production Run",
+    "Customer Trial": "Customer Trials & Samples",
+    "Optimization Trial": "Optimization Trials & Samples",
+}
+records_for_source = {
+    "Production Run": runs,
+    "Customer Trial": customer_trials,
+    "Optimization Trial": optimization_trials,
+}
+
 if not runs and not customer_trials and not optimization_trials:
     st.warning(
         "Create a production run, customer trial, or optimization trial first "
         "(Production Run / Customer Trials / Optimization Trials pages)."
     )
-    st.stop()
+    # Deliberately no st.stop() here. A company that has not recorded anything
+    # yet reaches this branch on EVERY render, and st.stop() on a path like
+    # that leaves Streamlit's stop flag set - which skips close_out_session()
+    # in app.py's finally and leaves the read transaction open. See the
+    # Streamlit stop-deadlock note of 19 Aug 2026. The rest of the page copes
+    # with having nothing to show: the picker explains what to create, and the
+    # results list below is simply empty.
 
 # ---------------------------------------------------------------------------
 # Physical property results
@@ -204,22 +224,36 @@ if not property_defs:
 tab_result_manual, tab_result_import = st.tabs(["Add quality test result", "CSV / Excel import"])
 
 with tab_result_manual:
+    show_pending_banner("result_manual_msg")
     with st.expander("Add quality test result", expanded=False):
         if not page_usable:
             st.caption("View-only access - adding a quality test result is restricted for your role.")
         else:
-            available_sources = [
-                s for s in SAMPLE_SOURCE_TYPES
-                if (s == "Production Run" and runs)
-                or (s == "Customer Trial" and customer_trials)
-                or (s == "Optimization Trial" and optimization_trials)
-            ]
-            # Source picker lives outside the form, same reasoning as the
-            # Samples & Trials pages' own source pickers - which parent-
-            # picker shows below depends on this choice, and form-internal
-            # widgets don't rerun until submit.
-            source_type = st.selectbox("Record against *", available_sources, key="result_source_type")
-            if source_type == "Production Run":
+            # All three source types are always offered, even when one has no
+            # records in scope yet.
+            #
+            # This list used to be filtered down to the sources that actually
+            # had records, which silently removed "Optimization Trial" for any
+            # company with no optimization trial recorded - while this page's
+            # own Function and Action text still told the user to expect three.
+            # Reported as a defect by Charlie on 20 Aug 2026; the code was
+            # correct in every other respect (manual entry, sample linkage and
+            # the importer all handle optimization trials), and the cause was
+            # an empty table. A missing option with no explanation is not a
+            # useful answer to a user who was told the option exists, so the
+            # option now stays and says what to create instead.
+            source_type = st.selectbox(
+                "Record against *", list(SAMPLE_SOURCE_TYPES), key="result_source_type",
+            )
+            source_records = records_for_source.get(source_type) or []
+            if not source_records:
+                st.info(
+                    "No %s has been recorded for this company yet, so there is nothing to record a "
+                    "result against. Create one on the %s page first."
+                    % (source_type.lower(), SOURCE_ORIGIN_PAGE.get(source_type, source_type))
+                )
+                parent = None
+            elif source_type == "Production Run":
                 run = st.selectbox(
                     "Production run *", runs,
                     format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
@@ -242,101 +276,108 @@ with tab_result_manual:
                     key="result_ot_select",
                 )
 
-            samples_for_parent = _samples_for_parent(session, source_type, parent.id if parent else None)
-            sample = st.selectbox(
-                "Sample (optional, but recommended for comparability)",
-                [None] + samples_for_parent,
-                format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
-                key="result_sample_select",
-            )
-            property_def = st.selectbox(
-                "Property * (⭐ = most commonly tested; full list searchable below)",
-                property_defs,
-                format_func=lambda p: f"⭐ {p.name}" if p.is_common else p.name,
-                key="result_property_select",
-            )
-            if property_def:
-                st.caption(f"{property_def.what_it_measures} — category: {property_def.category}")
-
-            methods_for_property = (
-                session.query(PhysicalPropertyMethod)
-                .filter(PhysicalPropertyMethod.property_definition_id == property_def.id)
-                .order_by(PhysicalPropertyMethod.sort_order)
-                .all()
-                if property_def
-                else []
-            )
-            uoms_for_property = (
-                session.query(PhysicalPropertyUOM)
-                .filter(PhysicalPropertyUOM.property_definition_id == property_def.id)
-                .order_by(PhysicalPropertyUOM.sort_order)
-                .all()
-                if property_def
-                else []
-            )
-
-            with st.form("add_property_result"):
-                c1, c2 = st.columns(2)
-                method_choice = c1.selectbox(
-                    "Measuring method *",
-                    methods_for_property,
-                    format_func=lambda m: m.method_code,
+            # Only when a source record is actually selected. The message
+            # above has already said what to create otherwise.
+            if parent is not None:
+                samples_for_parent = _samples_for_parent(session, source_type, parent.id)
+                sample = st.selectbox(
+                    "Sample (optional, but recommended for comparability)",
+                    [None] + samples_for_parent,
+                    format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
+                    key="result_sample_select",
                 )
-                method_other = c1.text_input("Or type a method not listed above")
-                uom_choice = c2.selectbox(
-                    "Unit of measure *",
-                    uoms_for_property,
-                    format_func=lambda u: u.unit_label,
+                property_def = st.selectbox(
+                    "Property * (⭐ = most commonly tested; full list searchable below)",
+                    property_defs,
+                    format_func=lambda p: f"⭐ {p.name}" if p.is_common else p.name,
+                    key="result_property_select",
                 )
-                uom_other = c2.text_input("Or type a unit not listed above")
-
-                c3, c4, c5 = st.columns(3)
-                target_value = c3.number_input("Target value", step=0.1)
-                actual_value = c4.number_input("Actual value", step=0.1)
-                method_revision = c5.text_input("Method edition / revision (e.g. 2017)")
                 if property_def:
-                    st.caption(f"Industry accepted tolerance for {property_def.name}: {tolerance_label(property_def.name)}")
-                replicate_no = st.number_input(
-                    "Replicate no.", min_value=1, step=1, value=1,
-                    help=(
-                        "Which repeat this is when the same property is tested more than once on "
-                        "the same sample (e.g. running tensile strength 3 times for a reliable "
-                        "average) - use 1 for the first/only measurement, 2 for the second, and so "
-                        "on. Leave at 1 if you're only testing this property once per sample."
-                    ),
+                    st.caption(f"{property_def.what_it_measures} — category: {property_def.category}")
+
+                methods_for_property = (
+                    session.query(PhysicalPropertyMethod)
+                    .filter(PhysicalPropertyMethod.property_definition_id == property_def.id)
+                    .order_by(PhysicalPropertyMethod.sort_order)
+                    .all()
+                    if property_def
+                    else []
                 )
-                tested_at = st.date_input("Tested on", value=dt.date.today())
-                notes = st.text_area("Notes (e.g. specimen geometry, orientation, deflection, temperature)")
-                submitted = st.form_submit_button("Save result")
-                if submitted:
-                    final_method = method_other.strip() or (method_choice.method_code if method_choice else "")
-                    final_unit = uom_other.strip() or (uom_choice.unit_label if uom_choice else "")
-                    if not property_def:
-                        st.error("Select a property.")
-                    elif not final_method:
-                        st.error("A measuring method is required — pick one or type a custom one.")
-                    else:
-                        pass_fail = compute_pass_fail(property_def.name, target_value, actual_value)
-                        new_result = PhysicalPropertyResult(
-                            sample_id=sample.id if sample else None,
-                            property_definition_id=property_def.id,
-                            property_method_id=method_choice.id if (method_choice and not method_other.strip()) else None,
-                            property_name=property_def.name,
-                            target_value=target_value or None,
-                            actual_value=actual_value or None,
-                            unit=final_unit,
-                            pass_fail=pass_fail,
-                            test_method=final_method,
-                            method_revision=method_revision,
-                            replicate_no=int(replicate_no),
-                            tested_at=tested_at,
-                            notes=notes,
-                        )
-                        setattr(new_result, sample_source_fk_field(source_type), parent.id)
-                        session.add(new_result)
-                        session.commit()
-                        st.success("Quality test result saved.")
-                        st.rerun()
+                uoms_for_property = (
+                    session.query(PhysicalPropertyUOM)
+                    .filter(PhysicalPropertyUOM.property_definition_id == property_def.id)
+                    .order_by(PhysicalPropertyUOM.sort_order)
+                    .all()
+                    if property_def
+                    else []
+                )
+
+                with st.form("add_property_result"):
+                    c1, c2 = st.columns(2)
+                    method_choice = c1.selectbox(
+                        "Measuring method *",
+                        methods_for_property,
+                        format_func=lambda m: m.method_code,
+                    )
+                    method_other = c1.text_input("Or type a method not listed above")
+                    uom_choice = c2.selectbox(
+                        "Unit of measure *",
+                        uoms_for_property,
+                        format_func=lambda u: u.unit_label,
+                    )
+                    uom_other = c2.text_input("Or type a unit not listed above")
+
+                    c3, c4, c5 = st.columns(3)
+                    target_value = c3.number_input("Target value", step=0.1)
+                    actual_value = c4.number_input("Actual value", step=0.1)
+                    method_revision = c5.text_input("Method edition / revision (e.g. 2017)")
+                    if property_def:
+                        st.caption(f"Industry accepted tolerance for {property_def.name}: {tolerance_label(property_def.name)}")
+                    replicate_no = st.number_input(
+                        "Replicate no.", min_value=1, step=1, value=1,
+                        help=(
+                            "Which repeat this is when the same property is tested more than once on "
+                            "the same sample (e.g. running tensile strength 3 times for a reliable "
+                            "average) - use 1 for the first/only measurement, 2 for the second, and so "
+                            "on. Leave at 1 if you're only testing this property once per sample."
+                        ),
+                    )
+                    tested_at = st.date_input("Tested on", value=dt.date.today())
+                    notes = st.text_area("Notes (e.g. specimen geometry, orientation, deflection, temperature)")
+                    submitted = st.form_submit_button("Save result")
+                    if submitted:
+                        final_method = method_other.strip() or (method_choice.method_code if method_choice else "")
+                        final_unit = uom_other.strip() or (uom_choice.unit_label if uom_choice else "")
+                        if not property_def:
+                            st.error("Select a property.")
+                        elif not final_method:
+                            st.error("A measuring method is required — pick one or type a custom one.")
+                        else:
+                            pass_fail = compute_pass_fail(property_def.name, target_value, actual_value)
+                            new_result = PhysicalPropertyResult(
+                                sample_id=sample.id if sample else None,
+                                property_definition_id=property_def.id,
+                                property_method_id=method_choice.id if (method_choice and not method_other.strip()) else None,
+                                property_name=property_def.name,
+                                target_value=target_value or None,
+                                actual_value=actual_value or None,
+                                unit=final_unit,
+                                pass_fail=pass_fail,
+                                test_method=final_method,
+                                method_revision=method_revision,
+                                replicate_no=int(replicate_no),
+                                tested_at=tested_at,
+                                notes=notes,
+                            )
+                            setattr(new_result, sample_source_fk_field(source_type), parent.id)
+                            session.add(new_result)
+                            session.commit()
+                            # Stashed, not shown directly: st.rerun() below restarts the
+                            # script and wipes an st.success() written just before it, so
+                            # a successful save looked like nothing happened. See
+                            # helpers.show_pending_banner.
+                            set_pending_banner("result_manual_msg", "Quality test result saved.")
+                            st.rerun()
 
 with tab_result_import:
     show_pending_banner("result_import_msg")
