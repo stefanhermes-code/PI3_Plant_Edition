@@ -238,12 +238,14 @@ def require_login():
         # name identifies but does not authenticate - and an audit record that
         # reads like a signed-in user when nobody signed in would be worse
         # than one that reads "Dev". The suffix is what keeps it honest.
-        dev_name = _get_secret_value("DEV_USER_DISPLAY_NAME")
-        st.session_state.setdefault("username", (dev_name or "dev").strip() or "dev")
+        # str() before strip(): TOML types a bare 2026 as an integer, and this
+        # runs at the very top of require_login() on EVERY page, so a
+        # non-string here would take the whole app down rather than degrade.
+        dev_name = str(_get_secret_value("DEV_USER_DISPLAY_NAME") or "").strip()
+        st.session_state.setdefault("username", dev_name or "dev")
         st.session_state.setdefault(
             "display_name",
-            f"{dev_name.strip()} (auth disabled)" if (dev_name or "").strip()
-            else "Dev (auth disabled)",
+            f"{dev_name} (auth disabled)" if dev_name else "Dev (auth disabled)",
         )
         # "Platform Admin", not "Company Admin": this synthetic session also
         # sets is_platform_owner=True below, and every real account with
