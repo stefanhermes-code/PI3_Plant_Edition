@@ -15,6 +15,7 @@ cycle.
 """
 
 import hashlib
+import re
 
 
 # --- Classification vocabulary -------------------------------------------
@@ -85,6 +86,12 @@ _PROCESS_NOUNS = (
 )
 
 
+def _matches_any(text, terms):
+    """True when any term appears at a word start in text. Terms may be
+    multi-word ("machine setting") or stems ("optimis", "optimiz")."""
+    return any(re.search(r"\b" + re.escape(term), text) for term in terms)
+
+
 def classify(call_site, question_text=None):
     """Returns (classification, classification_source) for one interaction.
 
@@ -104,7 +111,10 @@ def classify(call_site, question_text=None):
 
     if site in CONTENT_SCANNED_CALL_SITES and question_text:
         text = question_text.lower()
-        if any(v in text for v in _CHANGE_VERBS) and any(n in text for n in _PROCESS_NOUNS):
+        # Match at a word start. Plain substring matching read the verb stem
+        # "optimiz" out of the middle of nouns, which is how a page name
+        # ("Recipe Optimization") escalated an innocent question.
+        if _matches_any(text, _CHANGE_VERBS) and _matches_any(text, _PROCESS_NOUNS):
             classification = PROCESS_SAFETY_RELEVANT
             source = SOURCE_APPLICATION_RULE
 

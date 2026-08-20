@@ -484,6 +484,7 @@ def _estimate_cost_usd(prompt_tokens, completion_tokens):
 def _governance_fields(
     call_site, model, system_prompt, input_text,
     response_id=None, response_chain=None, tool_log=None, retrieval_evidence=None,
+    classify_text=None,
 ):
     """Builds the AI-governance evidence recorded against one interaction
     (CR of 19 Aug 2026, section 8.1).
@@ -498,7 +499,18 @@ def _governance_fields(
     column stays NULL. A blank column reads as "not recorded"; a filled-in
     guess would be a false audit trail.
     """
-    classification, source = ai_governance.classify(call_site, input_text)
+    # Classify on what the REVIEWER actually asked, not on the whole payload.
+    # The free-form box prefixes the question with a context line naming the
+    # current page, and two of those pages are called "Recipe Optimization"
+    # and "Machine Settings Optimization" - so the content scan matched
+    # "optimiz" in the app's own boilerplate and raised every question asked
+    # from those pages, however innocent. Seen live on interaction 8, a plain
+    # "what does this recipe cost per kg", recorded as Process / Safety
+    # Relevant by application_rule. Callers pass classify_text where the input
+    # they send the model is not the same string the person typed.
+    classification, source = ai_governance.classify(
+        call_site, classify_text if classify_text is not None else input_text
+    )
     fields = {
         # Who asked, as text. st.session_state carries a display name on every
         # authentication path, including the legacy one that has no user_id -
@@ -1245,6 +1257,7 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
                 model=model,
                 system_prompt=PLANT_QUERY_SYSTEM_PROMPT,
                 input_text=input_text,
+                classify_text=question,
                 response_id=getattr(response, "id", None),
                 response_chain=[r for r in response_chain if r],
                 # Tool evidence is captured HERE, at answer time. It used to
