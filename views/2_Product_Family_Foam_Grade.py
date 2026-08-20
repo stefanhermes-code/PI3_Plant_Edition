@@ -5,6 +5,7 @@ import streamlit as st
 
 from access_control import can_use_page
 from auth import current_user, logout_button, require_login
+from certipur_criteria import FOAM_FAMILIES
 from cascades import (
     delete_foam_grade_cascade,
     delete_product_family_cascade,
@@ -27,7 +28,31 @@ from helpers import (
 from tenant_scope import apply_scope, clear_scope_cache, company_picker, family_ids_for_plants, plant_ids_for_company
 
 GRADE_REQUIRED_COLUMNS = ["product_family_id", "grade_name"]
-GRADE_OPTIONAL_COLUMNS = ["target_density", "target_hardness", "notes"]
+GRADE_OPTIONAL_COLUMNS = ["target_density", "target_hardness", "certipur_foam_family", "notes"]
+
+# CertiPUR family names, indexed case-insensitively, for the importer. The
+# vocabulary is EUROPUR's and a customer cannot invent a value: an unmatched
+# name flags the row rather than being stored, so a typo cannot quietly place a
+# grade in a family it does not belong to. Blank is fine - most grades will not
+# be pursuing CertiPUR at all.
+_CERTIPUR_FAMILY_BY_LOWER = {f.strip().lower(): f for f in FOAM_FAMILIES}
+
+
+def _certipur_family_cell_ok(value):
+    """True if this cell is blank or names a real CertiPUR foam family."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return True
+    text = str(value).strip()
+    return not text or text.lower() in _CERTIPUR_FAMILY_BY_LOWER
+
+
+def _import_certipur_family(value):
+    """The canonical spelling for a cell already checked by the function above."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    text = str(value).strip()
+    return _CERTIPUR_FAMILY_BY_LOWER.get(text.lower()) if text else None
+
 
 # Density and 40% IFD/hardness already have dedicated foam_grades columns
 # (every grade has them, and the grade-naming code itself encodes them) - so
@@ -214,6 +239,17 @@ with tab_grade:
                         grade_name = st.text_input("Grade name / code *")
                         target_density = st.number_input("Target density (kg/m3)", min_value=0.0, step=0.5)
                         target_hardness = st.number_input("Target hardness (N, 40% ILD)", min_value=0.0, step=1.0)
+                        certipur_family = st.selectbox(
+                            "CertiPUR foam family",
+                            [None] + list(FOAM_FAMILIES),
+                            format_func=lambda f: "\u2014 not set \u2014" if f is None else f,
+                            help=(
+                                "The family this grade would be certified under. CertiPUR is applied "
+                                "for per foam family and the seven here are the ones its application "
+                                "form lists. Leave unset if you are not pursuing CertiPUR for this "
+                                "grade."
+                            ),
+                        )
                         notes = st.text_area("Notes")
                         submitted = st.form_submit_button("Save foam grade")
                         if submitted:
@@ -226,6 +262,7 @@ with tab_grade:
                                         grade_name=grade_name,
                                         target_density=target_density or None,
                                         target_hardness=target_hardness or None,
+                                        certipur_foam_family=certipur_family,
                                         notes=notes,
                                     )
                                 )
@@ -245,14 +282,22 @@ with tab_grade:
                     valid_family_ids = {f.id for f in families}
                     good_rows, bad_rows = [], []
                     for _, row in df.iterrows():
-                        if row.get("product_family_id") in valid_family_ids and str(row.get("grade_name", "")).strip():
+                        if (
+                            row.get("product_family_id") in valid_family_ids
+                            and str(row.get("grade_name", "")).strip()
+                            and _certipur_family_cell_ok(row.get("certipur_foam_family"))
+                        ):
                             good_rows.append(row)
                         else:
                             bad_rows.append(row)
 
                     st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged/rejected: **{len(bad_rows)}**")
                     if bad_rows:
-                        st.warning("Flagged rows reference an unknown product_family_id or have no grade_name.")
+                        st.warning(
+                            "Flagged rows reference an unknown product_family_id, have no grade_name, or "
+                            "carry a certipur_foam_family that is not one of: "
+                            + "; ".join(FOAM_FAMILIES)
+                        )
                         render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
                     if good_rows and st.button("Confirm import", key="confirm_grade_import"):
@@ -274,6 +319,7 @@ with tab_grade:
                                     grade_name=str(row["grade_name"]).strip(),
                                     target_density=row.get("target_density") if not pd.isna(row.get("target_density")) else None,
                                     target_hardness=row.get("target_hardness") if not pd.isna(row.get("target_hardness")) else None,
+                                    certipur_foam_family=_import_certipur_family(row.get("certipur_foam_family")),
                                     notes=str(row.get("notes", "") or ""),
                                 )
                             )
@@ -296,6 +342,7 @@ with tab_grade:
                     "Family": grade.product_family.name,
                     "Target density (kg/m3)": grade.target_density,
                     "Target hardness (N, 40% ILD)": grade.target_hardness,
+                    "CertiPUR foam family": grade.certipur_foam_family or "\u2014",
                     "Other target properties": len(grade.target_properties),
                 }
                 for grade in grades
@@ -332,6 +379,17 @@ with tab_grade:
                             "Target hardness (N, 40% ILD)", min_value=0.0, step=1.0,
                             value=float(selected_grade.target_hardness or 0.0), key=f"edit_grade_hardness_{selected_grade.id}",
                         )
+                        _ff_options = [None] + list(FOAM_FAMILIES)
+                        e_certipur_family = st.selectbox(
+                            "CertiPUR foam family",
+                            _ff_options,
+                            index=(
+                                _ff_options.index(selected_grade.certipur_foam_family)
+                                if selected_grade.certipur_foam_family in _ff_options else 0
+                            ),
+                            format_func=lambda f: "\u2014 not set \u2014" if f is None else f,
+                            key=f"edit_grade_certipur_{selected_grade.id}",
+                        )
                         e_notes = st.text_area("Notes", value=selected_grade.notes or "", key=f"edit_grade_notes_{selected_grade.id}")
                         if st.form_submit_button("Save changes"):
                             if not e_grade_name.strip():
@@ -341,6 +399,7 @@ with tab_grade:
                                 selected_grade.grade_name = e_grade_name.strip()
                                 selected_grade.target_density = e_density or None
                                 selected_grade.target_hardness = e_hardness or None
+                                selected_grade.certipur_foam_family = e_certipur_family
                                 selected_grade.notes = e_notes
                                 session.commit()
                                 st.success("Foam grade updated.")

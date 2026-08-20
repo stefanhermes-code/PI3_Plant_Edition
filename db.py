@@ -579,6 +579,23 @@ class FoamGrade(Base):
     grade_name = Column(String(200), nullable=False)
     target_density = Column(Float)
     target_hardness = Column(Float)  # Newtons, 40% ILD
+    # Which of CertiPUR's seven foam families this grade belongs to (added
+    # 2026-08-20). NOT the same thing as product_family above: that is the
+    # customer's own grouping and they name it whatever suits them, while this
+    # is a fixed vocabulary owned by EUROPUR - see
+    # certipur_criteria.FOAM_FAMILIES, transcribed from the application form.
+    #
+    # It sits on the GRADE rather than the product family because CertiPUR
+    # certifies per family and selects a grade within it to test, and two
+    # grades in one of the customer's product families can easily be different
+    # CertiPUR families - a standard ether foam and its combustion-modified
+    # version being the obvious pair.
+    #
+    # Nullable, and stays nullable: a customer who is not pursuing CertiPUR has
+    # no reason to fill it in, and a grade without it simply cannot be
+    # pre-audited until someone says which family it is. That is an evidence
+    # gap the readiness page reports, not a data error.
+    certipur_foam_family = Column(String(120))
     notes = Column(Text)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
 
