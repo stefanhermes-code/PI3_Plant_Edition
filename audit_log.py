@@ -298,8 +298,10 @@ def log_export(session, export_type, description=None, user_id=None, company_id=
 
 
 def log_role_change(session, target_type, change_summary, changed_by_user_id=None, company_id=None, target_id=None, target_label=None):
-    """Item 54. target_type is 'user', 'role', or 'permission' (page-access
-    grid saves on the User Roles page)."""
+    """Item 54. target_type is 'user', 'role', 'permission' (page-access grid
+    saves on the User Roles page), or 'function_availability' (which pages a
+    customer is implemented with - see views/32_Function_Availability.py;
+    target_id/target_label are the company there, not a role or a user)."""
     try:
         row = RoleChangeLog(
             changed_by_user_id=changed_by_user_id,

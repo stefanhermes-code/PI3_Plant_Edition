@@ -394,6 +394,59 @@ class RolePagePermission(Base):
     can_use = Column(Boolean, default=True)  # False = read-only for this page (only meaningful when can_view is True)
 
 
+# ---------------------------------------------------------------------------
+# 2c. company_page_availability - which pages a customer has actually been
+#     implemented with (added 2026-08-20)
+# ---------------------------------------------------------------------------
+# RolePagePermission above answers "what may this ROLE do inside a page the
+# customer has". This table answers the question that sits ABOVE it: has this
+# customer been implemented with that page at all. A page switched off here is
+# invisible to every user of that company regardless of role, including the
+# company's own admin, because the reason it is off is commercial and
+# implementational rather than a permission the customer administers.
+#
+# Same deny-list convention as RolePagePermission, and for the same reason: a
+# row only ever exists to switch a page OFF. Zero rows means the full
+# application, so every company that existed before this table did keeps
+# exactly the navigation it had, and a company created without its
+# implementation sheet being loaded is over-served rather than left looking
+# broken. Only HTC writes here (see views/32_Function_Availability.py) - a
+# customer administrator can neither see this nor widen their own scope.
+#
+# plant_id is deliberately present and deliberately always NULL for now.
+# Navigation is built once per browser session, before any page has picked a
+# plant, so a plant-level row cannot hide a menu item today and nothing reads
+# this column yet - resolution is company-level only (see
+# access_control.unavailable_page_keys, which filters on plant_id IS NULL).
+# It is here so the plant override agreed on 2026-08-20 can be added without a
+# migration on a table that will by then hold live customer configuration.
+# Every subscription tier currently caps plants at one, so no customer can
+# exercise an override in any case.
+class CompanyPageAvailability(Base):
+    __tablename__ = "company_page_availability"
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    # NULL = the company-wide setting. Reserved for a future plant override;
+    # nothing writes or reads a non-NULL value yet - see the note above.
+    plant_id = Column(Integer, ForeignKey("plants.id"))
+    page_key = Column(String(100), nullable=False)  # see access_control.PAGE_CATALOG
+    # Always False in practice, for the same reason RolePagePermission never
+    # stores an "allow" row: the absence of a row IS the allow. Stored
+    # explicitly anyway so a row read on its own is unambiguous, and so an
+    # explicit "yes, deliberately included" row can be recorded later without
+    # changing what the column means.
+    available = Column(Boolean, default=False, nullable=False)
+    # Who last set this and when - this is commercial configuration, so it
+    # needs to be answerable later without reading a change log.
+    set_by = Column(String(200))
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+    updated_at = Column(DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow)
+
+    company = relationship("Company")
+    plant = relationship("Plant")
+
+
 class User(Base):
     __tablename__ = "users"
 

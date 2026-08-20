@@ -3908,3 +3908,172 @@ def render_ai_audit_export_xlsx(summary_rows, interaction_rows, review_rows, too
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Function availability - the implementation workbook (2026-08-20)
+# ---------------------------------------------------------------------------
+# The sheet a customer fills in before implementation, and the same sheet read
+# back. Both halves live here, next to each other, so the column the writer
+# produces and the column the reader expects cannot drift apart unnoticed.
+#
+# The page list is generated from access_control.CONFIGURABLE_PAGE_KEYS rather
+# than typed, for the same reason: a page added to the application appears in
+# the next workbook without anyone remembering to add it.
+
+FUNCTION_AVAILABILITY_SHEET = "Function Availability"
+_FA_HEADERS = ["Section", "Page", "Include (Yes/No)", "Page key", "Notes"]
+_FA_YES = {"yes", "y", "true", "1", "x", "include", "included"}
+_FA_NO = {"no", "n", "false", "0", "exclude", "excluded", "-"}
+_FA_NOTE = (
+    "Mark each page Yes to include it in this customer's implementation, or No to leave it out. "
+    "A page marked No is hidden from every user of that company, including their own administrator. "
+    "Do not edit the Page key column - it is what the application reads. "
+    "Rows may be left blank; a blank Include cell is read as Yes."
+)
+
+
+def render_function_availability_xlsx(company_name, availability, page_notes=None):
+    """The implementation workbook for one customer.
+
+    `availability` is page_key -> True/False, normally straight from
+    access_control.current_page_availability(). `page_notes` is an optional
+    page_key -> text map for anything HTC wants to say about a specific page.
+
+    One sheet. A second sheet listing what each page does was considered and
+    left out: the customer reads this next to a demonstration, and a
+    description column that nobody maintains is worse than none."""
+    from access_control import CONFIGURABLE_PAGE_KEYS, PAGE_CATALOG, PAGE_SECTION, SECTION_ORDER
+
+    notes = page_notes or {}
+    keys = sorted(
+        CONFIGURABLE_PAGE_KEYS,
+        key=lambda k: (
+            SECTION_ORDER.index(PAGE_SECTION[k]) if PAGE_SECTION[k] in SECTION_ORDER else 99,
+            PAGE_CATALOG[k].lower(),
+        ),
+    )
+    rows = [
+        {
+            "Section": PAGE_SECTION[k],
+            "Page": PAGE_CATALOG[k],
+            "Include (Yes/No)": "Yes" if availability.get(k, True) else "No",
+            "Page key": k,
+            "Notes": notes.get(k, ""),
+        }
+        for k in keys
+    ]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = FUNCTION_AVAILABILITY_SHEET
+    _write_xlsx_sheet(
+        ws, _FA_HEADERS, rows,
+        widths={"Section": 24, "Page": 48, "Include (Yes/No)": 18, "Page key": 32, "Notes": 60},
+    )
+
+    # Company name and the instruction sit BELOW the data, not above it, so the
+    # header stays on row 1 - _write_xlsx_sheet freezes and autofilters row 1,
+    # and a title block above the header breaks both.
+    note_row = len(rows) + 3
+    ws.cell(row=note_row, column=1, value="Customer").font = openpyxl.styles.Font(name="Arial", size=10, bold=True)
+    ws.cell(row=note_row, column=2, value=company_name or "").font = openpyxl.styles.Font(name="Arial", size=10)
+    ws.cell(row=note_row + 1, column=1, value="How to fill this in").font = openpyxl.styles.Font(name="Arial", size=10, bold=True)
+    note_cell = ws.cell(row=note_row + 1, column=2, value=_FA_NOTE)
+    note_cell.font = openpyxl.styles.Font(name="Arial", size=10, italic=True)
+    note_cell.alignment = openpyxl.styles.Alignment(wrap_text=True, vertical="top")
+    ws.row_dimensions[note_row + 1].height = 58
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def read_function_availability_xlsx(file_obj):
+    """Reads a filled-in implementation workbook back.
+
+    Returns (availability, problems, missing).
+
+    `availability` is page_key -> True/False covering every configurable page.
+    `problems` is a list of human-readable strings, one per fault found.
+    `missing` is every configurable page the sheet did not mention; those
+    default to included, and the caller states that rather than letting it
+    pass silently.
+
+    All-or-nothing is the CALLER's job, and it is not optional: this function
+    reports every problem it finds instead of stopping at the first, so the
+    caller can refuse the whole file and show the complete list. That is the
+    same rule the raw-material lot importer follows, for the same reason - a
+    half-applied configuration leaves a customer with a navigation nobody
+    intended and no record of what was skipped."""
+    from access_control import CONFIGURABLE_PAGE_KEYS, NON_CONFIGURABLE_PAGE_KEYS, PAGE_CATALOG
+
+    problems = []
+    try:
+        wb = openpyxl.load_workbook(file_obj, data_only=True)
+    except Exception as exc:
+        return {}, ["The file could not be opened as a workbook (%s)." % exc], []
+
+    ws = wb[FUNCTION_AVAILABILITY_SHEET] if FUNCTION_AVAILABILITY_SHEET in wb.sheetnames else wb.active
+
+    header_cells = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1), [])]
+    header = {str(v).strip().lower(): i for i, v in enumerate(header_cells) if v is not None}
+    for needed in ("page key", "include (yes/no)"):
+        if needed not in header:
+            problems.append(
+                'Sheet "%s" has no "%s" column. Download a fresh workbook from this page and fill that in.'
+                % (ws.title, needed.title())
+            )
+    if problems:
+        return {}, problems, []
+
+    key_col = header["page key"]
+    inc_col = header["include (yes/no)"]
+
+    availability = {key: True for key in CONFIGURABLE_PAGE_KEYS}
+    seen = set()
+    for row_no, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        if row is None or key_col >= len(row):
+            continue
+        raw_key = row[key_col]
+        if raw_key is None or not str(raw_key).strip():
+            continue
+        page_key = str(raw_key).strip()
+        raw_inc = row[inc_col] if inc_col < len(row) else None
+        text = str(raw_inc).strip().lower() if raw_inc is not None else ""
+
+        if page_key in NON_CONFIGURABLE_PAGE_KEYS:
+            problems.append(
+                "Row %d: %s is not part of a customer implementation and cannot be switched off."
+                % (row_no, PAGE_CATALOG.get(page_key, page_key))
+            )
+            continue
+        if page_key not in CONFIGURABLE_PAGE_KEYS:
+            problems.append(
+                'Row %d: "%s" is not a page in this application. The Page key column must not be edited.'
+                % (row_no, page_key)
+            )
+            continue
+        if page_key in seen:
+            problems.append(
+                "Row %d: %s appears more than once." % (row_no, PAGE_CATALOG[page_key])
+            )
+            continue
+        seen.add(page_key)
+
+        if text == "":
+            availability[page_key] = True
+        elif text in _FA_YES:
+            availability[page_key] = True
+        elif text in _FA_NO:
+            availability[page_key] = False
+        else:
+            problems.append(
+                'Row %d (%s): "%s" is not Yes or No.' % (row_no, PAGE_CATALOG[page_key], raw_inc)
+            )
+
+    if not seen and not problems:
+        problems.append("The sheet has no page rows in it.")
+
+    missing = sorted(set(CONFIGURABLE_PAGE_KEYS) - seen)
+    return availability, problems, missing

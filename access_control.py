@@ -1,7 +1,18 @@
 """Shared page-visibility rules for the multi-tenant admin layer.
 
-Three independent things can hide a page from the current user, checked in
+Four independent things can hide a page from the current user, checked in
 this order by `page_visible()`:
+
+0. Implementation scope - whether this customer was implemented with the page
+   at all (db.CompanyPageAvailability, added 2026-08-20, configured by HTC
+   only on views/32_Function_Availability.py). Checked immediately after the
+   platform-only gate below, and deliberately BEFORE both the subscription
+   flag and the role permission: a page the customer never bought is not a
+   permission question, so no role edit and no tier change should reach it.
+   Zero rows for a company means the full application, so nothing that
+   existed before this table changed behaviour. A switched-off page is hidden
+   outright rather than shown locked (Stefan, 20 August 2026) - the customer
+   should not see a door they cannot open.
 
 1. Platform-only pages (Companies, Subscription Types, PI3 Connectivity) -
    only ever visible to a user whose company is the platform owner (HTC
@@ -87,7 +98,7 @@ User Roles / Default User Roles admin pages.
 
 import streamlit as st
 
-from db import RolePagePermission
+from db import CompanyPageAvailability, RolePagePermission
 
 # The three states the admin UI ever offers for a role's access to a page -
 # see the module docstring above for what each means. Stored as two
@@ -173,6 +184,7 @@ PAGE_CATALOG = {
     "performance_admin": "Performance",
     "pilot_analysis_admin": "Company Analysis",
     "ai_audit_compliance": "AI Audit & Compliance",
+    "function_availability_admin": "Function Availability",
 }
 
 REPORT_KEYS = frozenset({"report"})
@@ -183,8 +195,83 @@ PLATFORM_ONLY_KEYS = frozenset(
         # Cross-customer AI governance evidence - platform owner only, by
         # definition: the value of the page is the view ACROSS companies.
         "ai_audit_compliance",
+        # Decides what every OTHER company is implemented with. Platform owner
+        # only, and excluded from CONFIGURABLE_PAGE_KEYS below - the screen
+        # that switches pages off must not be switchable off.
+        "function_availability_admin",
     }
 )
+
+# page_key -> the navigation section it sits in, matching
+# app.py's nav_sections_with_keys. Kept here rather than read back out of
+# app.py because app.py builds st.Page objects, which cannot be imported from
+# without starting Streamlit - and because the implementation workbook (see
+# reports.render_function_availability_xlsx) has to group pages the same way
+# the customer sees them in the sidebar. The consistency check below fails at
+# import time if a page is ever added to PAGE_CATALOG and not to this map, so
+# the two cannot silently drift.
+PAGE_SECTION = {
+    "plant_overview": "Setup",
+    "product_family_foam_grade": "Setup",
+    "raw_materials": "Setup",
+    "suppliers": "Setup",
+    "recipes": "Setup",
+    "production_run": "Production",
+    "customers": "Customers",
+    "samples_conditioning": "Samples & Trials",
+    "customer_trials": "Samples & Trials",
+    "optimization_trials": "Samples & Trials",
+    "quality_test_result": "Quality",
+    "quality_issue": "Quality",
+    "recipe_optimization": "Industrial Intelligence",
+    "trend_analysis": "Industrial Intelligence",
+    "machine_settings_correlation": "Industrial Intelligence",
+    "root_cause_assistant": "Industrial Intelligence",
+    "machine_settings_optimization": "Industrial Intelligence",
+    "expert_notes": "Industrial Intelligence",
+    "report": "Reports",
+    "user_roles_admin": "Company Admin",
+    "user_accounts_admin": "Company Admin",
+    "pi3_ai_connectivity": "Application Admin",
+    "companies_admin": "Application Admin",
+    "subscription_types_admin": "Application Admin",
+    "default_user_roles_admin": "Application Admin",
+    "performance_admin": "Application Admin",
+    "pilot_analysis_admin": "Application Admin",
+    "ai_audit_compliance": "Application Admin",
+    "function_availability_admin": "Application Admin",
+}
+
+# The order sections are shown in, on the Function Availability screen and in
+# the implementation workbook. Matches the sidebar order.
+SECTION_ORDER = (
+    "Setup", "Production", "Customers", "Samples & Trials", "Quality",
+    "Industrial Intelligence", "Reports", "Company Admin", "Application Admin",
+)
+
+if set(PAGE_SECTION) != set(PAGE_CATALOG):
+    raise RuntimeError(
+        "PAGE_SECTION and PAGE_CATALOG have drifted apart: "
+        + repr(sorted(set(PAGE_CATALOG) ^ set(PAGE_SECTION)))
+    )
+
+# Pages a customer implementation can switch off (see
+# db.CompanyPageAvailability). Everything else is excluded on purpose:
+#
+#   - PLATFORM_ONLY_KEYS are HTC's own screens. They are not sold, so there is
+#     nothing to include or exclude, and one of them is the screen that does
+#     this configuring - which must stay reachable whatever is switched off.
+#   - user_roles_admin and user_accounts_admin are structurally required: a
+#     company that cannot reach them can never manage its own users or roles
+#     again, and nothing in the application could put that right from the
+#     customer's side.
+#
+# Overview is not in PAGE_CATALOG at all - it is the landing page and is
+# always shown (see app.py's top_pages).
+NON_CONFIGURABLE_PAGE_KEYS = PLATFORM_ONLY_KEYS | frozenset(
+    {"user_roles_admin", "user_accounts_admin"}
+)
+CONFIGURABLE_PAGE_KEYS = frozenset(PAGE_CATALOG) - NON_CONFIGURABLE_PAGE_KEYS
 
 
 @st.cache_data(ttl=60)
@@ -277,6 +364,102 @@ def usable_page_keys_denied(session, role_id):
     return {r.page_key for r in rows}
 
 
+@st.cache_data(ttl=60)
+def unavailable_page_keys(_session, company_id):
+    """Every page_key this company has NOT been implemented with (see
+    db.CompanyPageAvailability).
+
+    Company-level rows only - plant_id IS NULL. The plant column exists for a
+    later override and nothing resolves it yet; see the note above the model.
+
+    Cached on the same terms and for the same reason as denied_page_keys()
+    above: this is called from app.py's module-level nav code, which reruns on
+    every widget interaction anywhere in the app. `_session` is
+    underscore-prefixed so Streamlit does not try to hash the SQLAlchemy
+    Session; the cache key is company_id, which is what determines the result.
+    save_page_availability() clears the cache immediately after an edit, so a
+    change is never masked by the 60s TTL.
+
+    A company_id of None (the platform owner viewing unscoped, or the
+    AUTH_DISABLED development fallback) has nothing to resolve and returns an
+    empty set - the full application, same as before this table existed."""
+    if not company_id:
+        return set()
+    rows = (
+        _session.query(CompanyPageAvailability)
+        .filter(
+            CompanyPageAvailability.company_id == company_id,
+            CompanyPageAvailability.plant_id.is_(None),
+            CompanyPageAvailability.available.is_(False),
+        )
+        .all()
+    )
+    # Intersected with what is actually configurable, so a stale row for a
+    # page that has since been retired, or one loaded against a key that is no
+    # longer sellable, cannot hide something it was never allowed to hide.
+    return {r.page_key for r in rows} & set(CONFIGURABLE_PAGE_KEYS)
+
+
+def current_page_availability(session, company_id):
+    """page_key -> True/False for every configurable page, for the editor.
+
+    Unlike unavailable_page_keys() this returns a complete map rather than
+    just the exceptions, because the screen and the workbook both have to show
+    the customer every page and its state, not only the ones switched off."""
+    off = set()
+    if company_id:
+        rows = (
+            session.query(CompanyPageAvailability)
+            .filter(
+                CompanyPageAvailability.company_id == company_id,
+                CompanyPageAvailability.plant_id.is_(None),
+                CompanyPageAvailability.available.is_(False),
+            )
+            .all()
+        )
+        off = {r.page_key for r in rows}
+    return {key: key not in off for key in CONFIGURABLE_PAGE_KEYS}
+
+
+def save_page_availability(session, company_id, availability, set_by=None):
+    """Replaces every company-level row for company_id to match
+    `availability` (page_key -> True/False). True entries are simply omitted,
+    matching the "no row = available" deny-list convention.
+
+    Returns the sorted list of page_keys left switched off, so the caller can
+    log and report exactly what was written rather than what it intended.
+
+    Does not commit - the caller controls the transaction. Clears the cache
+    for the same reason save_access_states() does: st.cache_data has no
+    per-key clear, and both call sites save then rerun immediately, so without
+    this the administrator would see their own edit appear not to work.
+
+    Plant-level rows are left untouched. Nothing writes them today; if that
+    changes, this function deletes only what it owns rather than quietly
+    discarding an override it does not understand."""
+    st.cache_data.clear()
+    session.query(CompanyPageAvailability).filter(
+        CompanyPageAvailability.company_id == company_id,
+        CompanyPageAvailability.plant_id.is_(None),
+    ).delete(synchronize_session=False)
+    switched_off = []
+    for page_key, is_available in availability.items():
+        if page_key not in CONFIGURABLE_PAGE_KEYS:
+            # Silently ignoring an unknown key would let a hand-edited
+            # workbook write a row that hides nothing and confuses the next
+            # person to read the table.
+            raise ValueError("%s is not a configurable page" % page_key)
+        if not is_available:
+            session.add(
+                CompanyPageAvailability(
+                    company_id=company_id, plant_id=None, page_key=page_key,
+                    available=False, set_by=set_by,
+                )
+            )
+            switched_off.append(page_key)
+    return sorted(switched_off)
+
+
 def can_use_page(page_key, *, role_id, session, is_super_admin=False):
     """Single-page convenience wrapper around usable_page_keys_denied() for
     a page that just wants one yes/no answer at the top of its script, to
@@ -310,7 +493,7 @@ def protected_role_name(name):
     return (name or "").strip().lower() in STRUCTURALLY_REQUIRED_ROLE_NAMES
 
 
-def page_visible(page_key, *, is_platform_owner, subscription, denied_keys, is_super_admin=False):
+def page_visible(page_key, *, is_platform_owner, subscription, denied_keys, is_super_admin=False, unavailable_keys=None):
     """subscription may be None (no subscription assigned yet - treat as
     full access rather than locking a company out over a data gap).
 
@@ -323,6 +506,14 @@ def page_visible(page_key, *, is_platform_owner, subscription, denied_keys, is_s
         return True
     if page_key in PLATFORM_ONLY_KEYS:
         return bool(is_platform_owner)
+    # Implementation scope, checked BEFORE subscription and role: a page the
+    # customer was never implemented with is not a permission question, so it
+    # should not be reachable by widening a role or changing a tier. Placed
+    # after the platform-only gate on purpose, so that whatever a company has
+    # switched off, HTC's own screens - including the one that does this
+    # configuring - stay reachable.
+    if unavailable_keys and page_key in unavailable_keys:
+        return False
     if subscription is not None:
         if page_key in REPORT_KEYS and not subscription.reports_enabled:
             return False

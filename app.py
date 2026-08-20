@@ -19,7 +19,7 @@ from sqlalchemy.orm import joinedload
 
 import analytics
 import audit_log
-from access_control import denied_page_keys, page_visible
+from access_control import denied_page_keys, page_visible, unavailable_page_keys
 from auth import current_user, logout_button, require_login
 from db import (
     Company,
@@ -361,6 +361,7 @@ platform_admin_pages = [
     ("performance_admin", st.Page("views/27_Performance.py", title="Performance", icon="⚡")),
     ("pilot_analysis_admin", st.Page("views/28_Pilot_Analysis.py", title="Company Analysis", icon="🔬")),
     ("ai_audit_compliance", st.Page("views/31_AI_Audit_Compliance.py", title="AI Audit & Compliance", icon="🛡️")),
+    ("function_availability_admin", st.Page("views/32_Function_Availability.py", title="Function Availability", icon="🧩")),
 ]
 
 nav_sections_with_keys = {
@@ -493,7 +494,7 @@ def _recover_session():
 
 
 def _nav_context():
-    """The three things nav visibility needs from the database."""
+    """The four things nav visibility needs from the database."""
     session = get_session()
     is_auth = bool(st.session_state.get("authenticated"))
     denied = denied_page_keys(session, st.session_state.get("role_id")) if is_auth else set()
@@ -502,7 +503,11 @@ def _nav_context():
     if company_id:
         company = session.get(Company, company_id)
         subscription = company.subscription_type if company else None
-    return session, denied, subscription
+    # Which pages this customer was implemented with (access_control's rule 0).
+    # Like denied_page_keys this is st.cache_data-cached, so it usually costs
+    # nothing here.
+    unavailable = unavailable_page_keys(session, company_id) if is_auth else set()
+    return session, denied, subscription, unavailable
 
 
 _is_authenticated = bool(st.session_state.get("authenticated"))
@@ -516,18 +521,18 @@ _is_super_admin = bool(st.session_state.get("is_super_admin", False)) if _is_aut
 # 2026-08-18 crash surfaced further in, on the Overview page's first real
 # query, rather than here.
 try:
-    _nav_session, _denied_keys, _subscription = _nav_context()
+    _nav_session, _denied_keys, _subscription, _unavailable_keys = _nav_context()
 except sa_exc.DBAPIError as _boot_exc:
     if not _is_dead_connection(_boot_exc):
         raise
     _discard_session()
-    _nav_session, _denied_keys, _subscription = _nav_context()
+    _nav_session, _denied_keys, _subscription, _unavailable_keys = _nav_context()
 
 
 def _visible(key):
     return page_visible(
         key, is_platform_owner=_is_platform_owner, subscription=_subscription, denied_keys=_denied_keys,
-        is_super_admin=_is_super_admin,
+        is_super_admin=_is_super_admin, unavailable_keys=_unavailable_keys,
     )
 
 
