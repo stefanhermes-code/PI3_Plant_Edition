@@ -89,6 +89,26 @@ from version import APP_VERSION
 # the PI3_MODEL secret without touching code.
 DEFAULT_MODEL = "gpt-5.6-terra"
 
+# Published list price per 1,000,000 tokens, USD, per model. Checked against
+# OpenAI's price list on 20 Aug 2026: gpt-5.6-terra is $2.00 in / $12.00 out
+# following the 30 July 2026 reduction.
+#
+# Kept here rather than in secrets, which is where an earlier build read it
+# from and where it was never populated. A published price is not a secret,
+# and hiding it there made the basis of a recorded figure invisible and
+# unversioned - change it and every future cost moves with no commit, no date
+# and no author. In code, a price change is a commit like any other.
+#
+# Note this is list price on uncached input. OpenAI bills cached input far
+# lower (currently $0.20/1M), and this app does not separate cached from fresh
+# tokens, so the figure is an upper bound on a repeated prompt - which is why
+# the column is called ESTIMATED cost.
+MODEL_TOKEN_RATES_USD_PER_1M = {
+    "gpt-5.6-terra": {"input": 2.00, "output": 12.00},
+    "gpt-5.6-sol": {"input": 5.00, "output": 30.00},
+    "gpt-5.6-luna": {"input": 0.20, "output": 1.20},
+}
+
 # --- Prompt version identifiers (CR of 19 Aug 2026, section 9) -------------
 # Governance identifiers, recorded on every interaction so a later prompt
 # edit is visible in the audit trail without relying on Git history alone.
@@ -461,22 +481,30 @@ def _extract_token_usage(response):
     return prompt_tokens, completion_tokens, total_tokens
 
 
-def _estimate_cost_usd(prompt_tokens, completion_tokens):
-    """Item 50. Cost is derived from optional per-1M-token rates in
-    st.secrets (PI3_INPUT_COST_PER_1M_TOKENS / PI3_OUTPUT_COST_PER_1M_TOKENS,
-    both USD) rather than a rate hard-coded here - OpenAI pricing changes
-    over time and can vary by contract, so a baked-in figure would go
-    stale silently and mislead whoever reviews the pilot-analysis page
-    (Item 56). Returns None (no fabricated figure) if either rate isn't
-    configured or either token count is unknown."""
+def _estimate_cost_usd(prompt_tokens, completion_tokens, model=None):
+    """Item 50. Tokens are already recorded and the price per token is
+    published, so this is arithmetic: rate x tokens, from
+    MODEL_TOKEN_RATES_USD_PER_1M above.
+
+    Returns None rather than a fabricated figure when either token count is
+    unknown, or when the model in use has no published rate here - a model
+    that was swapped in without its price being added should show no cost, not
+    somebody else's cost.
+
+    Only ever displayed on Application Admin screens (Company Analysis and AI
+    Audit & Compliance, both in access_control.PLATFORM_ONLY_KEYS). Customers
+    do not see what their questions cost to answer.
+    """
     if prompt_tokens is None or completion_tokens is None:
         return None
+    rates = MODEL_TOKEN_RATES_USD_PER_1M.get(model or DEFAULT_MODEL)
+    if not rates:
+        return None
     try:
-        input_rate = _get_secret("PI3_INPUT_COST_PER_1M_TOKENS")
-        output_rate = _get_secret("PI3_OUTPUT_COST_PER_1M_TOKENS")
-        if input_rate is None or output_rate is None:
-            return None
-        return (prompt_tokens / 1_000_000) * float(input_rate) + (completion_tokens / 1_000_000) * float(output_rate)
+        return (
+            (prompt_tokens / 1_000_000) * rates["input"]
+            + (completion_tokens / 1_000_000) * rates["output"]
+        )
     except Exception:
         return None
 
@@ -573,7 +601,12 @@ def _record_pi3_interaction(
     just the last one. Returns the new PI3InteractionLog row (or None on
     failure) - callers that want to attach a feedback control (Item 55)
     should hold onto its .id."""
-    estimated_cost_usd = _estimate_cost_usd(prompt_tokens, completion_tokens)
+    # The model comes from the governance evidence this call already carries,
+    # so the cost is priced against the model that actually answered rather
+    # than against whatever the default happens to be at the time.
+    estimated_cost_usd = _estimate_cost_usd(
+        prompt_tokens, completion_tokens, model=(governance or {}).get("model_name")
+    )
     response_time_ms = (time.monotonic() - start_time) * 1000 if start_time is not None else None
     try:
         session = get_session()

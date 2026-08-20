@@ -187,9 +187,11 @@ with tab_pi3:
         pc4.metric("Feedback", f"👍 {up_count} / 👎 {down_count}" if (up_count or down_count) else "No feedback yet")
 
         st.caption(
-            "Estimated cost is only shown if PI3_INPUT_COST_PER_1M_TOKENS and "
-            "PI3_OUTPUT_COST_PER_1M_TOKENS are configured in secrets (see ai_assistant._estimate_cost_usd) "
-            "- otherwise token counts are still shown but cost is left blank rather than guessed."
+            "Estimated cost is the recorded token counts priced at the published list rate for "
+            "the model that answered (see ai_assistant.MODEL_TOKEN_RATES_USD_PER_1M). An "
+            "interaction recorded before pricing was applied, or answered by a model with no "
+            "rate on file, is left blank rather than guessed. Cached input is billed lower than "
+            "list, so treat the figure as an upper bound."
         )
 
         by_call_site = (

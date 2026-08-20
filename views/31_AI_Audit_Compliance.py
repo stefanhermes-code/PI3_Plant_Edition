@@ -421,12 +421,18 @@ if page_has_data:
              "Value": len(legacy_reviews)},
             {"Item": "PI3 errors in period", "Value": pi3_error_count},
         ]
-        if not any(i.estimated_cost_usd for i in population):
+        priced = [i.estimated_cost_usd for i in population if i.estimated_cost_usd]
+        if priced:
             export_summary.append({
-                "Item": "Estimated cost",
-                "Value": "Not calculated - PI3_INPUT_COST_PER_1M_TOKENS and "
-                         "PI3_OUTPUT_COST_PER_1M_TOKENS are not configured, so no rate exists "
-                         "to price the recorded tokens against",
+                "Item": "Estimated cost of the exported population",
+                "Value": f"${sum(priced):.4f} across {len(priced)} priced interaction(s)",
+            })
+        if len(priced) < len(population):
+            export_summary.append({
+                "Item": "Interactions with no cost figure",
+                "Value": f"{len(population) - len(priced)} - recorded before token pricing was "
+                         "applied, or answered by a model with no published rate on file. "
+                         "Not back-filled.",
             })
         for version, count in sorted(version_counts.items()):
             export_summary.append({"Item": f"System prompt version {version}", "Value": count})
@@ -643,7 +649,7 @@ if page_has_data:
                 # instead: the tokens are recorded, there is simply no rate to
                 # price them against until the two cost secrets are set.
                 f"${selected.estimated_cost_usd:.4f}" if selected.estimated_cost_usd
-                else "cost not priced - no per-token rate configured",
+                else "cost not priced at the time of this interaction",
                 f"{selected.response_time_ms:.0f} ms" if selected.response_time_ms else None,
             ]
             st.caption("Usage: " + (" · ".join(b for b in usage_bits if b) or NOT_RECORDED))
