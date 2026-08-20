@@ -4077,3 +4077,220 @@ def read_function_availability_xlsx(file_obj):
 
     missing = sorted(set(CONFIGURABLE_PAGE_KEYS) - seen)
     return availability, problems, missing
+
+
+# ---------------------------------------------------------------------------
+# CertiPUR Readiness Pre-Audit report (2026-08-20)
+# ---------------------------------------------------------------------------
+# Built entirely from the SAVED assessment - its items, its evidence rows and
+# its stored counts - and never by re-running the engine. That is the whole
+# point of the snapshot: a report downloaded in November must say what the
+# assessment said in August, including where the criteria or the documents have
+# moved on since. Nothing here queries the current state of a raw material.
+#
+# Section 9 carries the assessment statement the change request requires, using
+# Europur's own phrase for the boundary.
+
+CERTIPUR_ASSESSMENT_STATEMENT = (
+    "This CertiPUR Readiness Pre-Audit evaluates the selected foam grade against the "
+    "requirements that can be assessed from information held within PI3 Plant Edition - the "
+    "formulation, the raw materials and their supplier documentation. It indicates whether the "
+    "foam in principle complies with the criteria of CertiPUR. It is not a CertiPUR test, a "
+    "CertiPUR application or a certification. Criteria that depend on measurement of finished "
+    "foam are identified separately and require testing by one of the accredited laboratories "
+    "within the formal CertiPUR certification process, which is administered by EUROPUR."
+)
+
+
+def render_certipur_pre_audit_docx(session, assessment):
+    """The Word pre-audit report for one saved assessment."""
+    from db import CertipurAssessmentEvidence, CertipurAssessmentItem
+    import certipur_criteria as _cc
+
+    items = (
+        session.query(CertipurAssessmentItem)
+        .filter(CertipurAssessmentItem.assessment_id == assessment.id)
+        .order_by(CertipurAssessmentItem.sort_order)
+        .all()
+    )
+    evidence_by_item = {}
+    if items:
+        rows = (
+            session.query(CertipurAssessmentEvidence)
+            .filter(CertipurAssessmentEvidence.item_id.in_([i.id for i in items]))
+            .all()
+        )
+        for row in rows:
+            evidence_by_item.setdefault(row.item_id, []).append(row)
+
+    doc = Document()
+    _docx_report_header(
+        doc, "CertiPUR Readiness Pre-Audit",
+        "%s · recipe %s" % (assessment.foam_grade_name or "", assessment.recipe_version_label or ""),
+    )
+
+    # 1. Identification
+    _docx_heading(doc, "1. Identification", size=13)
+    _docx_kv_table(doc, [
+        ("Company", assessment.company_name),
+        ("Plant", assessment.plant_name),
+        ("Foam grade", assessment.foam_grade_name),
+        ("CertiPUR foam family", assessment.certipur_foam_family or "not set"),
+        ("Recipe version assessed", assessment.recipe_version_label),
+        ("Criteria set", assessment.criteria_set_label),
+        ("Assessed on (UTC)", assessment.assessed_at.strftime("%Y-%m-%d %H:%M") if assessment.assessed_at else "—"),
+        ("Assessed by", assessment.assessed_by or "not recorded"),
+    ])
+
+    # 2. Executive readiness summary
+    _docx_heading(doc, "2. Readiness summary", size=13)
+    counts = {
+        "Meets requirement": assessment.count_meets or 0,
+        "Potential issue": assessment.count_potential_issue or 0,
+        "Evidence missing": assessment.count_evidence_missing or 0,
+        "Testing required": assessment.count_testing_required or 0,
+        "Not applicable": assessment.count_not_applicable or 0,
+    }
+    headline = _certipur_headline(counts, assessment.blocking_reason)
+    doc.add_paragraph(headline).runs[0].font.size = Pt(10)
+    _docx_kv_table(doc, list(counts.items()) + [("Criteria assessed", assessment.count_total or 0)])
+    if assessment.notes:
+        p = doc.add_paragraph()
+        p.add_run("Notes recorded with this assessment: ").bold = True
+        p.add_run(assessment.notes).font.size = Pt(9.5)
+
+    # 3. Requirement assessment
+    _docx_heading(doc, "3. Requirement assessment", size=13)
+    _docx_data_table(doc, [
+        {
+            "Section": i.section or "",
+            "Requirement": i.title or "",
+            "Determination": "Laboratory" if i.determination == _cc.DETERMINATION_MEASURED else "Declaration",
+            "Result": i.status or "",
+        }
+        for i in items
+    ])
+
+    # 4. Findings, criterion by criterion
+    _docx_heading(doc, "4. Findings", size=13)
+    for i in items:
+        _docx_heading(doc, "%s  %s — %s" % (i.section or "", i.title or "", i.status or ""), size=11)
+        p = doc.add_paragraph()
+        p.add_run("Requirement: ").bold = True
+        p.add_run(i.requirement or "").font.size = Pt(9.5)
+        p = doc.add_paragraph()
+        p.add_run("Finding: ").bold = True
+        p.add_run(i.rationale or "").font.size = Pt(9.5)
+        if i.action:
+            p = doc.add_paragraph()
+            p.add_run("Action: ").bold = True
+            p.add_run(i.action).font.size = Pt(9.5)
+
+    # 5. Independent testing requirements
+    _docx_heading(doc, "5. Independent laboratory testing", size=13)
+    doc.add_paragraph(
+        "These criteria are limits on finished foam. CertiPUR accepts results only from the "
+        "accredited laboratories listed below; results from any other laboratory are not "
+        "accepted."
+    ).runs[0].font.size = Pt(9.5)
+    _docx_data_table(doc, [
+        {"Section": i.section or "", "Requirement": i.title or "", "Position": i.status or ""}
+        for i in items if i.determination == _cc.DETERMINATION_MEASURED
+    ])
+    for lab in _cc.ACCREDITED_LABORATORIES:
+        doc.add_paragraph(lab, style="List Bullet").runs[0].font.size = Pt(9.5)
+
+    # 6. Open evidence gaps
+    _docx_heading(doc, "6. Open evidence gaps", size=13)
+    gaps = [i for i in items if i.status == "Evidence missing"]
+    if gaps:
+        _docx_data_table(doc, [
+            {"Section": i.section or "", "Requirement": i.title or "",
+             "What is missing": i.rationale or "", "Action": i.action or ""}
+            for i in gaps
+        ])
+    else:
+        doc.add_paragraph("None. Every criterion PI3 assesses had the evidence it needed.").runs[0].font.size = Pt(9.5)
+
+    # 7. Potential issues
+    _docx_heading(doc, "7. Potential issues", size=13)
+    issues = [i for i in items if i.status == "Potential issue"]
+    if issues:
+        _docx_data_table(doc, [
+            {"Section": i.section or "", "Requirement": i.title or "",
+             "Concern": i.rationale or "", "Action": i.action or ""}
+            for i in issues
+        ])
+    else:
+        doc.add_paragraph("None found in the evidence assessed.").runs[0].font.size = Pt(9.5)
+
+    # 8. Action plan
+    _docx_heading(doc, "8. Pre-audit action plan", size=13)
+    ordered = sorted(
+        [i for i in items if i.status in ("Potential issue", "Evidence missing")],
+        key=lambda i: 0 if i.status == "Potential issue" else 1,
+    )
+    if ordered:
+        doc.add_paragraph(
+            "Potential issues first: those are formulation decisions. Evidence gaps after them: "
+            "those are documents to collect."
+        ).runs[0].font.size = Pt(9.5)
+        _docx_data_table(doc, [
+            {"Priority": n + 1, "Section": i.section or "", "Requirement": i.title or "",
+             "Status": i.status or "", "Action": i.action or ""}
+            for n, i in enumerate(ordered)
+        ])
+    else:
+        doc.add_paragraph(
+            "No open actions. The remaining step before a formal application is the independent "
+            "laboratory testing in section 5."
+        ).runs[0].font.size = Pt(9.5)
+
+    # 9. Assessment statement
+    _docx_heading(doc, "9. Assessment statement", size=13)
+    doc.add_paragraph(CERTIPUR_ASSESSMENT_STATEMENT).runs[0].font.size = Pt(9.5)
+
+    # 10. Evidence register
+    _docx_heading(doc, "10. Evidence register", size=13)
+    register = []
+    for i in items:
+        for e in evidence_by_item.get(i.id, []):
+            register.append({
+                "Section": i.section or "",
+                "Evidence": e.evidence_type or "",
+                "Raw material": e.raw_material_name or "—",
+                "Document": e.document_reference or "—",
+                "What it showed": e.detail or "",
+            })
+    if register:
+        _docx_data_table(doc, register, max_rows=400)
+    else:
+        doc.add_paragraph("No evidence records were captured for this assessment.").runs[0].font.size = Pt(9.5)
+
+    return _docx_bytes(doc)
+
+
+def _certipur_headline(counts, blocking=None):
+    """The summary sentence, duplicated from certipur_assessment rather than
+    imported, because this function reads STORED counts from a snapshot and
+    that module reads live ones. Importing it here would make the report
+    depend on the engine at render time, which is precisely what the snapshot
+    exists to avoid."""
+    if blocking:
+        return blocking
+    issues = counts.get("Potential issue", 0)
+    missing = counts.get("Evidence missing", 0)
+    testing = counts.get("Testing required", 0)
+    meets = counts.get("Meets requirement", 0)
+    if issues:
+        lead = "%d criterion%s indicated a compliance concern" % (issues, "" if issues == 1 else "s")
+    elif missing:
+        lead = "No compliance concern was found, but %d criteri%s could not be answered" % (
+            missing, "on" if missing == 1 else "a"
+        )
+    else:
+        lead = "Every criterion assessed was supported by evidence"
+    return (
+        "%s. %d met, %d awaiting evidence, %d requiring independent laboratory testing."
+        % (lead, meets, missing, testing)
+    )

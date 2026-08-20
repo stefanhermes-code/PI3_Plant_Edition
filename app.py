@@ -346,6 +346,7 @@ industrial_intelligence_pages = [
     ("root_cause_assistant", st.Page("views/18_Root_Cause_Assistant.py", title="Root-Cause Assistant", icon="🩺")),
     ("machine_settings_optimization", st.Page("views/19_Machine_Settings_Optimization.py", title="Machine Settings Optimization", icon="⚙️")),
     ("expert_notes", st.Page("views/20_Expert_Notes.py", title="Expert Notes", icon="🧠")),
+    ("certipur_readiness", st.Page("views/33_CertiPUR_Readiness.py", title="CertiPUR Readiness", icon="✅")),
 ]
 
 admin_pages = [
@@ -494,12 +495,13 @@ def _recover_session():
 
 
 def _nav_context():
-    """The four things nav visibility needs from the database."""
+    """The five things nav visibility needs from the database."""
     session = get_session()
     is_auth = bool(st.session_state.get("authenticated"))
     denied = denied_page_keys(session, st.session_state.get("role_id")) if is_auth else set()
     company_id = st.session_state.get("company_id") if is_auth else None
     subscription = None
+    company = None
     if company_id:
         company = session.get(Company, company_id)
         subscription = company.subscription_type if company else None
@@ -507,7 +509,11 @@ def _nav_context():
     # Like denied_page_keys this is st.cache_data-cached, so it usually costs
     # nothing here.
     unavailable = unavailable_page_keys(session, company_id) if is_auth else set()
-    return session, denied, subscription, unavailable
+    # The CertiPUR add-on flag, read from the same Company row already loaded
+    # above. Not part of the availability deny-list on purpose - see the note
+    # on Company.certipur_enabled in db.py.
+    certipur = bool(company.certipur_enabled) if (company_id and company is not None) else False
+    return session, denied, subscription, unavailable, certipur
 
 
 _is_authenticated = bool(st.session_state.get("authenticated"))
@@ -521,18 +527,19 @@ _is_super_admin = bool(st.session_state.get("is_super_admin", False)) if _is_aut
 # 2026-08-18 crash surfaced further in, on the Overview page's first real
 # query, rather than here.
 try:
-    _nav_session, _denied_keys, _subscription, _unavailable_keys = _nav_context()
+    _nav_session, _denied_keys, _subscription, _unavailable_keys, _certipur_enabled = _nav_context()
 except sa_exc.DBAPIError as _boot_exc:
     if not _is_dead_connection(_boot_exc):
         raise
     _discard_session()
-    _nav_session, _denied_keys, _subscription, _unavailable_keys = _nav_context()
+    _nav_session, _denied_keys, _subscription, _unavailable_keys, _certipur_enabled = _nav_context()
 
 
 def _visible(key):
     return page_visible(
         key, is_platform_owner=_is_platform_owner, subscription=_subscription, denied_keys=_denied_keys,
         is_super_admin=_is_super_admin, unavailable_keys=_unavailable_keys,
+        certipur_enabled=_certipur_enabled,
     )
 
 

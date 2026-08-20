@@ -174,6 +174,7 @@ PAGE_CATALOG = {
     "root_cause_assistant": "Root-Cause Assistant",
     "machine_settings_optimization": "Machine Settings Optimization",
     "expert_notes": "Expert Notes",
+    "certipur_readiness": "CertiPUR Readiness",
     "report": "Report",
     "pi3_ai_connectivity": "PI3 Connectivity",
     "companies_admin": "Companies",
@@ -229,6 +230,7 @@ PAGE_SECTION = {
     "root_cause_assistant": "Industrial Intelligence",
     "machine_settings_optimization": "Industrial Intelligence",
     "expert_notes": "Industrial Intelligence",
+    "certipur_readiness": "Industrial Intelligence",
     "report": "Reports",
     "user_roles_admin": "Company Admin",
     "user_accounts_admin": "Company Admin",
@@ -269,7 +271,16 @@ if set(PAGE_SECTION) != set(PAGE_CATALOG):
 # Overview is not in PAGE_CATALOG at all - it is the landing page and is
 # always shown (see app.py's top_pages).
 NON_CONFIGURABLE_PAGE_KEYS = PLATFORM_ONLY_KEYS | frozenset(
-    {"user_roles_admin", "user_accounts_admin"}
+    {
+        "user_roles_admin", "user_accounts_admin",
+        # CertiPUR Readiness is a commercial add-on with its own explicit
+        # opt-in on the company (Company.certipur_enabled), not a page that
+        # was always there and can be taken away. It is excluded here so the
+        # two mechanisms cannot disagree - a deny-list row saying a customer
+        # HAS the page while the add-on flag says they have not would be a
+        # contradiction with no obvious winner.
+        "certipur_readiness",
+    }
 )
 CONFIGURABLE_PAGE_KEYS = frozenset(PAGE_CATALOG) - NON_CONFIGURABLE_PAGE_KEYS
 
@@ -493,7 +504,7 @@ def protected_role_name(name):
     return (name or "").strip().lower() in STRUCTURALLY_REQUIRED_ROLE_NAMES
 
 
-def page_visible(page_key, *, is_platform_owner, subscription, denied_keys, is_super_admin=False, unavailable_keys=None):
+def page_visible(page_key, *, is_platform_owner, subscription, denied_keys, is_super_admin=False, unavailable_keys=None, certipur_enabled=False):
     """subscription may be None (no subscription assigned yet - treat as
     full access rather than locking a company out over a data gap).
 
@@ -506,6 +517,12 @@ def page_visible(page_key, *, is_platform_owner, subscription, denied_keys, is_s
         return True
     if page_key in PLATFORM_ONLY_KEYS:
         return bool(is_platform_owner)
+    # CertiPUR Readiness is visible only to a company that has opted into it,
+    # and to the platform owner, who needs to reach it to configure and support
+    # it. Checked here rather than left to the page, so the menu item does not
+    # appear for a customer who has not bought the add-on.
+    if page_key == "certipur_readiness":
+        return bool(is_platform_owner or certipur_enabled)
     # Implementation scope, checked BEFORE subscription and role: a page the
     # customer was never implemented with is not a permission question, so it
     # should not be reachable by widening a role or changing a tier. Placed
