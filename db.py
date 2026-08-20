@@ -1511,6 +1511,12 @@ class PI3InteractionLog(Base):
     question_text = Column(Text)
     response_text = Column(Text)
     prompt_tokens = Column(Integer)
+    # How many of prompt_tokens OpenAI served from its prompt cache. Billed at
+    # roughly a tenth of list, and PI3 sends the same large system prompt on
+    # every call, so without this the recorded cost is an upper bound rather
+    # than the real figure - which matters when the number is used to check a
+    # customer is being charged enough.
+    cached_input_tokens = Column(Integer)
     completion_tokens = Column(Integer)
     total_tokens = Column(Integer)
     estimated_cost_usd = Column(Float)

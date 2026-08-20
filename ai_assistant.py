@@ -99,14 +99,15 @@ DEFAULT_MODEL = "gpt-5.6-terra"
 # unversioned - change it and every future cost moves with no commit, no date
 # and no author. In code, a price change is a commit like any other.
 #
-# Note this is list price on uncached input. OpenAI bills cached input far
-# lower (currently $0.20/1M), and this app does not separate cached from fresh
-# tokens, so the figure is an upper bound on a repeated prompt - which is why
-# the column is called ESTIMATED cost.
+# Three rates per model, because OpenAI bills input twice over: tokens it has
+# to read fresh at list price, and tokens it recognises from a recent
+# identical prompt prefix at roughly a tenth of that. PI3 sends the same
+# ~10,000-token system prompt on every call, so the cached share is large and
+# ignoring it overstates cost by roughly a third on a repeated call.
 MODEL_TOKEN_RATES_USD_PER_1M = {
-    "gpt-5.6-terra": {"input": 2.00, "output": 12.00},
-    "gpt-5.6-sol": {"input": 5.00, "output": 30.00},
-    "gpt-5.6-luna": {"input": 0.20, "output": 1.20},
+    "gpt-5.6-terra": {"input": 2.00, "cached_input": 0.20, "output": 12.00},
+    "gpt-5.6-sol": {"input": 5.00, "cached_input": 0.50, "output": 30.00},
+    "gpt-5.6-luna": {"input": 0.20, "cached_input": 0.02, "output": 1.20},
 }
 
 # --- Prompt version identifiers (CR of 19 Aug 2026, section 9) -------------
@@ -481,15 +482,40 @@ def _extract_token_usage(response):
     return prompt_tokens, completion_tokens, total_tokens
 
 
-def _estimate_cost_usd(prompt_tokens, completion_tokens, model=None):
-    """Item 50. Tokens are already recorded and the price per token is
-    published, so this is arithmetic: rate x tokens, from
-    MODEL_TOKEN_RATES_USD_PER_1M above.
+def _extract_cached_tokens(response):
+    """How many input tokens came from OpenAI's prompt cache, or None when the
+    SDK in use does not report it.
+
+    Read separately from _extract_token_usage rather than widening its return
+    tuple, which several callers unpack positionally. Nested under
+    usage.input_tokens_details.cached_tokens on the Responses API; every step
+    is defensive because that shape has moved between SDK versions before."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    details = getattr(usage, "input_tokens_details", None)
+    if details is None:
+        return None
+    cached = getattr(details, "cached_tokens", None)
+    if cached is None and isinstance(details, dict):
+        cached = details.get("cached_tokens")
+    return cached
+
+
+def _estimate_cost_usd(prompt_tokens, completion_tokens, model=None, cached_tokens=None):
+    """Item 50. Tokens are recorded and the price per token is published, so
+    this is arithmetic: rate x tokens, from MODEL_TOKEN_RATES_USD_PER_1M.
+
+    Input is priced in two parts. Tokens OpenAI served from its prompt cache
+    are billed at about a tenth of list, and PI3 repeats a large system prompt
+    on every call, so pricing everything at list overstates a repeated call by
+    roughly a third. cached_tokens is a SUBSET of prompt_tokens, not an
+    addition to it.
 
     Returns None rather than a fabricated figure when either token count is
     unknown, or when the model in use has no published rate here - a model
-    that was swapped in without its price being added should show no cost, not
-    somebody else's cost.
+    swapped in without its price being added should show no cost, not somebody
+    else's cost.
 
     Only ever displayed on Application Admin screens (Company Analysis and AI
     Audit & Compliance, both in access_control.PLATFORM_ONLY_KEYS). Customers
@@ -501,8 +527,14 @@ def _estimate_cost_usd(prompt_tokens, completion_tokens, model=None):
     if not rates:
         return None
     try:
+        # Guard the arithmetic rather than trusting the API: a cached count
+        # larger than the input count would otherwise price fresh tokens
+        # negatively and quietly understate the bill.
+        cached = min(cached_tokens or 0, prompt_tokens)
+        fresh = prompt_tokens - cached
         return (
-            (prompt_tokens / 1_000_000) * rates["input"]
+            (fresh / 1_000_000) * rates["input"]
+            + (cached / 1_000_000) * rates.get("cached_input", rates["input"])
             + (completion_tokens / 1_000_000) * rates["output"]
         )
     except Exception:
@@ -588,7 +620,7 @@ def _safe_json(value):
 def _record_pi3_interaction(
     call_site, question_text, response_text, company_id=None, plant_id=None,
     prompt_tokens=None, completion_tokens=None, total_tokens=None, start_time=None,
-    governance=None,
+    governance=None, cached_input_tokens=None,
 ):
     """Items 49-51. Called from both ask_assistant() and
     ask_plant_question() right after a successful call, so every PI3
@@ -605,7 +637,9 @@ def _record_pi3_interaction(
     # so the cost is priced against the model that actually answered rather
     # than against whatever the default happens to be at the time.
     estimated_cost_usd = _estimate_cost_usd(
-        prompt_tokens, completion_tokens, model=(governance or {}).get("model_name")
+        prompt_tokens, completion_tokens,
+        model=(governance or {}).get("model_name"),
+        cached_tokens=cached_input_tokens,
     )
     response_time_ms = (time.monotonic() - start_time) * 1000 if start_time is not None else None
     try:
@@ -619,6 +653,7 @@ def _record_pi3_interaction(
             company_id=company_id,
             plant_id=plant_id,
             prompt_tokens=prompt_tokens,
+            cached_input_tokens=cached_input_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             estimated_cost_usd=estimated_cost_usd,
@@ -844,6 +879,7 @@ def ask_assistant(prompt, company_id=None, call_site="ask_assistant"):
         )
         answer = response.output_text or None
         prompt_tokens, completion_tokens, total_tokens = _extract_token_usage(response)
+        cached_input_tokens = _extract_cached_tokens(response)
         log_row = _record_pi3_interaction(
             call_site=call_site,
             question_text=prompt,
@@ -852,6 +888,7 @@ def ask_assistant(prompt, company_id=None, call_site="ask_assistant"):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
+            cached_input_tokens=cached_input_tokens,
             start_time=start_time,
             governance=_governance_fields(
                 call_site=call_site,
@@ -1184,13 +1221,19 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
         input_text = f"Context: {page_context}\n\nQuestion: {question.strip()}"
 
     start_time = time.monotonic()
+    cached_tokens_sum = 0
     prompt_tokens_sum = 0
     completion_tokens_sum = 0
     usage_seen = False
 
     def _accumulate_usage(resp):
-        nonlocal prompt_tokens_sum, completion_tokens_sum, usage_seen
+        nonlocal prompt_tokens_sum, completion_tokens_sum, usage_seen, cached_tokens_sum
         pt, ct, _ = _extract_token_usage(resp)
+        # One question can take several API calls here, and each is billed
+        # separately, so the cached share has to be summed alongside the rest.
+        cached = _extract_cached_tokens(resp)
+        if cached:
+            cached_tokens_sum += cached
         if pt is not None:
             prompt_tokens_sum += pt
             usage_seen = True
@@ -1284,6 +1327,7 @@ def ask_plant_question(session, plant_id, question, default_foam_grade_id=None, 
             prompt_tokens=prompt_tokens_sum if usage_seen else None,
             completion_tokens=completion_tokens_sum if usage_seen else None,
             total_tokens=(prompt_tokens_sum + completion_tokens_sum) if usage_seen else None,
+            cached_input_tokens=cached_tokens_sum if usage_seen else None,
             start_time=start_time,
             governance=_governance_fields(
                 call_site="ask_plant_question",

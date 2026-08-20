@@ -463,6 +463,7 @@ if page_has_data:
                 "Call prompt hash": i.call_prompt_hash,
                 "OpenAI response ID": i.openai_response_id,
                 "Total tokens": i.total_tokens,
+                "Cached input tokens": i.cached_input_tokens,
                 "Estimated cost (USD)": i.estimated_cost_usd,
                 "Response time (ms)": i.response_time_ms,
                 "Question": i.question_text,
@@ -643,8 +644,16 @@ if page_has_data:
             _show_json("Retrieval evidence", selected.retrieval_evidence_json)
             _show_json("OpenAI response chain", selected.openai_response_chain_json)
 
+            cache_note = None
+            if selected.cached_input_tokens and selected.prompt_tokens:
+                share = 100 * selected.cached_input_tokens / selected.prompt_tokens
+                cache_note = (
+                    f"{selected.cached_input_tokens:,} of {selected.prompt_tokens:,} input "
+                    f"tokens served from cache ({share:.0f}%)"
+                )
             usage_bits = [
                 f"{selected.total_tokens} tokens" if selected.total_tokens else None,
+                cache_note,
                 # A blank cost column reads as "this call was free". Say why
                 # instead: the tokens are recorded, there is simply no rate to
                 # price them against until the two cost secrets are set.
