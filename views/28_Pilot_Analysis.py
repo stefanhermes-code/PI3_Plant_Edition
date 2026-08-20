@@ -172,7 +172,16 @@ with tab_pi3:
         st.info(f"No PI3 questions logged for '{window_label}'.")
     else:
         total_tokens = sum(p.total_tokens or 0 for p in pi3_logs)
+        # `or 0` prices an interaction with no cost figure as free. That is
+        # fine for the arithmetic and misleading on its own, so the count of
+        # unpriced interactions is carried alongside and stated below the
+        # metric - a total that silently omits rows understates the spend, and
+        # understating is the wrong direction when the figure is used to check
+        # a customer is being charged enough.
         total_cost = sum(p.estimated_cost_usd or 0 for p in pi3_logs)
+        unpriced = [p for p in pi3_logs if not p.estimated_cost_usd]
+        cached_total = sum(p.cached_input_tokens or 0 for p in pi3_logs)
+        prompt_total = sum(p.prompt_tokens or 0 for p in pi3_logs)
         avg_response_ms = (
             sum(p.response_time_ms for p in pi3_logs if p.response_time_ms is not None)
             / max(1, sum(1 for p in pi3_logs if p.response_time_ms is not None))
@@ -186,12 +195,24 @@ with tab_pi3:
         pc3.metric("Avg response time", f"{avg_response_ms:.0f} ms" if avg_response_ms else "—")
         pc4.metric("Feedback", f"👍 {up_count} / 👎 {down_count}" if (up_count or down_count) else "No feedback yet")
 
+        if unpriced:
+            st.warning(
+                f"{len(unpriced)} of {len(pi3_logs)} interaction(s) in this period carry no cost "
+                "figure, so the total above is a floor rather than the full spend. Those are "
+                "interactions recorded before pricing was applied, or answered by a model with "
+                "no published rate on file. They are not priced retrospectively."
+            )
+        if cached_total and prompt_total:
+            st.caption(
+                f"{cached_total:,} of {prompt_total:,} input tokens were served from OpenAI's "
+                f"prompt cache ({100 * cached_total / prompt_total:.0f}%), billed at a tenth of "
+                "the fresh rate. A falling share here is a cost rise."
+            )
         st.caption(
-            "Estimated cost is the recorded token counts priced at the published list rate for "
-            "the model that answered (see ai_assistant.MODEL_TOKEN_RATES_USD_PER_1M). An "
-            "interaction recorded before pricing was applied, or answered by a model with no "
-            "rate on file, is left blank rather than guessed. Cached input is billed lower than "
-            "list, so treat the figure as an upper bound."
+            "Estimated cost is the recorded token counts priced at the published rate for the "
+            "model that answered, with cached input priced separately from fresh input (see "
+            "ai_assistant.MODEL_TOKEN_RATES_USD_PER_1M). Where a cached count was recorded the "
+            "figure is exact; on an interaction predating that, it is an upper bound."
         )
 
         by_call_site = (
