@@ -42,6 +42,8 @@ import reports
 from auth import current_user, logout_button, require_login, require_platform_owner
 from db import (
     Company,
+    ErrorLog,
+    PI3Feedback,
     PI3InteractionLog,
     PI3InteractionReview,
     Plant,
@@ -163,6 +165,28 @@ companies = {c.id: c.name for c in session.query(Company).all()}
 plants = {p.id: p.name for p in session.query(Plant).all()}
 users = {u.id: (u.display_name or u.email or f"User {u.id}") for u in session.query(User).all()}
 
+# PI3 call failures in the same period (CR section 10.1). Recorded by
+# ai_assistant._record_pi3_error as an ErrorLog row, so a failed call is
+# visible here rather than only in the general error log.
+pi3_error_count = (
+    session.query(ErrorLog)
+    .filter(ErrorLog.created_at >= start_dt)
+    .filter(ErrorLog.created_at <= end_dt)
+    .filter(ErrorLog.error_message.like("PI3 call failed%"))
+    .count()
+)
+
+# Existing thumbs-up/down feedback, shown on the interaction detail
+# (CR section 10.3, Charlie's item E).
+feedback_by_interaction = {}
+for fb in (
+    session.query(PI3Feedback)
+    .filter(PI3Feedback.pi3_interaction_log_id.in_([i.id for i in interactions]))
+    .order_by(PI3Feedback.created_at)
+    .all()
+):
+    feedback_by_interaction.setdefault(fb.pi3_interaction_log_id, []).append(fb)
+
 reviews_by_interaction = {}
 for rev in (
     session.query(PI3InteractionReview)
@@ -182,7 +206,10 @@ def _latest_status(interaction):
     if revs:
         return revs[-1].review_status
     if interaction.verification_required:
-        return ai_governance.REVIEW_PENDING
+        # No review row is "Verification outstanding". "Pending review" is a
+        # decision a person actually recorded, and conflating the two hides
+        # whether anyone has looked - Charlie's correction of 20 Aug 2026.
+        return ai_governance.VERIFICATION_OUTSTANDING
     return None
 
 
@@ -227,7 +254,8 @@ if page_has_data:
             )
         with f3:
             f_review = st.selectbox(
-                "Review status", [ANY] + list(ai_governance.REVIEW_STATUSES) + ["Not applicable"],
+                "Review status",
+                [ANY] + list(ai_governance.ALL_REVIEW_STATES) + ["Not applicable"],
                 key="ai_audit_review",
             )
             model_options = [ANY] + sorted({_label(i.model_name) for i in interactions})
@@ -284,10 +312,31 @@ if page_has_data:
     # --- Summary --------------------------------------------------------------
     st.subheader("Summary")
     statuses = [_latest_status(i) for i in population]
+    # "Governed" means the interactions this CR actually governs: those
+    # classified as requiring verification. Charlie's item G - the outcome
+    # counts must not silently mix in a legacy review recorded against an
+    # interaction that never required one.
     required = [i for i in population if i.verification_required]
-    completed = [
+    required_ids = {i.id for i in required}
+    governed_statuses = [_latest_status(i) for i in required]
+    resolved = [
         i for i in required
-        if _latest_status(i) not in (None, ai_governance.REVIEW_PENDING)
+        if _latest_status(i) not in ai_governance.UNRESOLVED_REVIEW_STATES
+    ]
+    outstanding = [
+        i for i in required
+        if _latest_status(i) == ai_governance.VERIFICATION_OUTSTANDING
+    ]
+    deferred = [
+        i for i in required
+        if _latest_status(i) == ai_governance.REVIEW_PENDING
+    ]
+    # Review events recorded against interactions that never required
+    # verification - the historical test review on interaction 1 is one.
+    # Kept visible, counted separately, never folded into the outcome figures.
+    legacy_reviews = [
+        r for i in population if i.id not in required_ids
+        for r in reviews_by_interaction.get(i.id, [])
     ]
 
     m1, m2, m3, m4 = st.columns(4)
@@ -297,13 +346,28 @@ if page_has_data:
         sum(1 for i in population if i.interaction_classification == ai_governance.PROCESS_SAFETY_RELEVANT),
     )
     m3.metric("Verification required", len(required))
-    m4.metric("Verification completed", len(completed))
+    m4.metric("Decision recorded", len(resolved))
 
     m5, m6, m7, m8 = st.columns(4)
-    m5.metric("Verification pending", len(required) - len(completed))
-    m6.metric("Accepted for trial", statuses.count(ai_governance.REVIEW_ACCEPTED))
-    m7.metric("Modified", statuses.count(ai_governance.REVIEW_MODIFIED))
-    m8.metric("Rejected", statuses.count(ai_governance.REVIEW_REJECTED))
+    m5.metric("Verification outstanding", len(outstanding))
+    m6.metric("Reviewer deferred (Pending)", len(deferred))
+    m7.metric("PI3 errors in period", pi3_error_count)
+    m8.metric("Legacy review events", len(legacy_reviews))
+
+    st.caption(
+        "Outcome counts below are of interactions that REQUIRED verification, so they cannot "
+        "be inflated by a review recorded against one that did not."
+    )
+    o1, o2, o3 = st.columns(3)
+    o1.metric("Accepted for trial", governed_statuses.count(ai_governance.REVIEW_ACCEPTED))
+    o2.metric("Modified", governed_statuses.count(ai_governance.REVIEW_MODIFIED))
+    o3.metric("Rejected", governed_statuses.count(ai_governance.REVIEW_REJECTED))
+    if legacy_reviews:
+        st.caption(
+            f"{len(legacy_reviews)} review event(s) sit against interactions that never required "
+            "verification. They stay in the record and in the export, and are excluded from the "
+            "outcome counts above."
+        )
 
     version_counts = {}
     for i in population:
@@ -344,12 +408,26 @@ if page_has_data:
                 ),
             },
             {"Item": "Verification required", "Value": len(required)},
-            {"Item": "Verification completed", "Value": len(completed)},
-            {"Item": "Verification pending", "Value": len(required) - len(completed)},
-            {"Item": "Accepted for trial", "Value": statuses.count(ai_governance.REVIEW_ACCEPTED)},
-            {"Item": "Modified", "Value": statuses.count(ai_governance.REVIEW_MODIFIED)},
-            {"Item": "Rejected", "Value": statuses.count(ai_governance.REVIEW_REJECTED)},
+            {"Item": "Decision recorded (of those required)", "Value": len(resolved)},
+            {"Item": "Verification outstanding - no review event", "Value": len(outstanding)},
+            {"Item": "Pending review - reviewer deferred", "Value": len(deferred)},
+            {"Item": "Accepted for trial (of those required)",
+             "Value": governed_statuses.count(ai_governance.REVIEW_ACCEPTED)},
+            {"Item": "Modified (of those required)",
+             "Value": governed_statuses.count(ai_governance.REVIEW_MODIFIED)},
+            {"Item": "Rejected (of those required)",
+             "Value": governed_statuses.count(ai_governance.REVIEW_REJECTED)},
+            {"Item": "Legacy review events - interaction did not require verification",
+             "Value": len(legacy_reviews)},
+            {"Item": "PI3 errors in period", "Value": pi3_error_count},
         ]
+        if not any(i.estimated_cost_usd for i in population):
+            export_summary.append({
+                "Item": "Estimated cost",
+                "Value": "Not calculated - PI3_INPUT_COST_PER_1M_TOKENS and "
+                         "PI3_OUTPUT_COST_PER_1M_TOKENS are not configured, so no rate exists "
+                         "to price the recorded tokens against",
+            })
         for version, count in sorted(version_counts.items()):
             export_summary.append({"Item": f"System prompt version {version}", "Value": count})
         if truncated:
@@ -393,6 +471,8 @@ if page_has_data:
                 "Review ID": r.id,
                 "Recorded (UTC)": r.created_at,
                 "Reviewer": _who(r.reviewer_display_name, r.reviewer_user_id),
+                "Reviewer company": r.reviewer_company_name or companies.get(r.reviewer_company_id, ""),
+                "Reviewer plant": r.reviewer_plant_name or plants.get(r.reviewer_plant_id, ""),
                 "Decision": r.review_status,
                 "Reviewer comment": r.review_comment,
                 "Customer action taken": r.customer_final_action,
@@ -559,11 +639,35 @@ if page_has_data:
 
             usage_bits = [
                 f"{selected.total_tokens} tokens" if selected.total_tokens else None,
-                f"${selected.estimated_cost_usd:.4f}" if selected.estimated_cost_usd else None,
+                # A blank cost column reads as "this call was free". Say why
+                # instead: the tokens are recorded, there is simply no rate to
+                # price them against until the two cost secrets are set.
+                f"${selected.estimated_cost_usd:.4f}" if selected.estimated_cost_usd
+                else "cost not priced - no per-token rate configured",
                 f"{selected.response_time_ms:.0f} ms" if selected.response_time_ms else None,
             ]
             st.caption("Usage: " + (" · ".join(b for b in usage_bits if b) or NOT_RECORDED))
 
+
+            # --- Reviewer feedback ----------------------------------------------------
+            st.markdown("**Reviewer feedback**")
+            fb_rows = feedback_by_interaction.get(selected.id, [])
+            if fb_rows:
+                st.dataframe(
+                    [
+                        {
+                            "When": f.created_at,
+                            "Rating": {"up": "👍 Useful", "down": "👎 Not useful"}.get(f.rating, f.rating),
+                            "Comment": f.comment or "—",
+                            "By": _who(None, f.user_id),
+                        }
+                        for f in fb_rows
+                    ],
+                    hide_index=True,
+                    use_container_width=True,
+                )
+            else:
+                st.caption("No feedback given on this answer.")
 
             # --- Human review ---------------------------------------------------------
             st.markdown("**Human review**")
@@ -574,6 +678,8 @@ if page_has_data:
                         {
                             "When": r.created_at,
                             "Reviewer": _who(r.reviewer_display_name, r.reviewer_user_id),
+                            "Company": r.reviewer_company_name or companies.get(r.reviewer_company_id, "—"),
+                            "Plant": r.reviewer_plant_name or plants.get(r.reviewer_plant_id, "—"),
                             "Decision": r.review_status,
                             "Comment": r.review_comment or "—",
                             "Customer action": r.customer_final_action or "—",

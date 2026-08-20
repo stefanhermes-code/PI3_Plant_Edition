@@ -1580,7 +1580,15 @@ class PI3InteractionReview(Base):
     # and it matters more here: a decision whose author cannot be named later
     # is not much of a decision.
     reviewer_display_name = Column(String(200))
-    # One of ai_governance.REVIEW_STATUSES. Text rather than an enum for the
+    # The reviewer's own company and plant at the time of the decision
+    # (Charlie's review, 20 Aug 2026, item A). Ids for the link, names beside
+    # them so the record stays readable after a rename or a deletion - the
+    # same reasoning as reviewer_display_name above.
+    reviewer_company_id = Column(Integer, ForeignKey("companies.id"))
+    reviewer_company_name = Column(String(200))
+    reviewer_plant_id = Column(Integer, ForeignKey("plants.id"))
+    reviewer_plant_name = Column(String(200))
+    # One of ai_governance.RECORDABLE_REVIEW_STATUSES. Text rather than an enum for the
     # same reason as the classification above.
     review_status = Column(String(60), nullable=False)
     review_comment = Column(Text)

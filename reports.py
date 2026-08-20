@@ -3888,11 +3888,13 @@ def render_ai_audit_export_xlsx(summary_rows, interaction_rows, review_rows, too
     _write_xlsx_sheet(
         wb.create_sheet("Reviews"),
         [
-            "Interaction ID", "Review ID", "Recorded (UTC)", "Reviewer", "Decision",
+            "Interaction ID", "Review ID", "Recorded (UTC)", "Reviewer",
+            "Reviewer company", "Reviewer plant", "Decision",
             "Reviewer comment", "Customer action taken",
         ],
         review_rows,
-        widths={"Decision": 34, "Reviewer comment": 60, "Customer action taken": 60},
+        widths={"Decision": 34, "Reviewer comment": 60, "Customer action taken": 60,
+                "Reviewer company": 26, "Reviewer plant": 22},
     )
 
     _write_xlsx_sheet(

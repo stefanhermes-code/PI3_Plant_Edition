@@ -14,6 +14,7 @@ import audit_log
 import reports
 from auth import current_user
 from db import (
+    Company,
     ExpertNote,
     FoamGrade,
     PI3InteractionLog,
@@ -760,7 +761,28 @@ def pi3_verification_status(session, interaction_log_id):
         .order_by(PI3InteractionReview.created_at.desc())
         .first()
     )
-    return latest.review_status if latest else ai_governance.REVIEW_PENDING
+    return latest.review_status if latest else ai_governance.VERIFICATION_OUTSTANDING
+
+
+def _reviewer_scope(session, viewer, interaction):
+    """Company and plant recorded against a review event (Charlie's review,
+    20 Aug 2026, item A), as ids with a name snapshot beside each.
+
+    Company comes from the reviewer's own session where it resolves, and falls
+    back to the company the interaction was logged against - the same company
+    either way, since only that company may record a decision here. Plant
+    comes from the interaction, because that is the plant the recommendation
+    concerns; a reviewer has no single plant of their own."""
+    company_id = viewer.get("company_id") or interaction.company_id
+    plant_id = interaction.plant_id
+    company = session.get(Company, company_id) if company_id else None
+    plant = session.get(Plant, plant_id) if plant_id else None
+    return {
+        "reviewer_company_id": company_id,
+        "reviewer_company_name": company.name if company is not None else None,
+        "reviewer_plant_id": plant_id,
+        "reviewer_plant_name": plant.name if plant is not None else None,
+    }
 
 
 def render_pi3_verification_panel(session, interaction_log_id, key_prefix):
@@ -801,7 +823,10 @@ def render_pi3_verification_panel(session, interaction_log_id, key_prefix):
         .all()
     )
     latest = reviews[0] if reviews else None
-    status = latest.review_status if latest else ai_governance.REVIEW_PENDING
+    # No review row is "Verification outstanding", not "Pending review".
+    # Pending review means a person engaged with the answer and deferred -
+    # Charlie's correction of 20 Aug 2026.
+    status = latest.review_status if latest else ai_governance.VERIFICATION_OUTSTANDING
     display = ai_governance.REVIEW_DISPLAY.get(status, "")
 
     # WHO MAY QUALIFY AN ANSWER - Stefan's ruling, 19 Aug 2026: HTC must
@@ -865,7 +890,10 @@ def render_pi3_verification_panel(session, interaction_log_id, key_prefix):
                 with st.form(f"{key_prefix}_verification_form"):
                     decision = st.selectbox(
                         "Decision *",
-                        [x for x in ai_governance.REVIEW_STATUSES if x != ai_governance.REVIEW_PENDING],
+                        # Pending review is recordable now: a reviewer who
+                        # has looked and deferred is a different, and useful,
+                        # audit state from one nobody has touched.
+                        list(ai_governance.RECORDABLE_REVIEW_STATUSES),
                         key=f"{key_prefix}_verification_decision",
                     )
                     comment = st.text_area(
@@ -887,6 +915,13 @@ def render_pi3_verification_panel(session, interaction_log_id, key_prefix):
                         reviewer_display_name=(
                             viewer.get("display_name") or viewer.get("username") or None
                         ),
+                        # The reviewer's own company where the session resolves
+                        # one, otherwise the company the answer was logged
+                        # against - which is the same company, since only that
+                        # company may record here. Plant comes from the
+                        # interaction: it is the plant the recommendation
+                        # concerns, and the reviewer is working in it.
+                        **_reviewer_scope(session, viewer, row),
                             review_comment=(comment or "").strip() or None,
                             customer_final_action=(action or "").strip() or None,
                         )

@@ -128,20 +128,48 @@ def verification_required(classification):
 
 
 # --- Review vocabulary ---------------------------------------------------
+# Charlie's review, 20 Aug 2026: "no review event yet" and "a reviewer looked
+# at this and recorded Pending" are two DIFFERENT audit states, and calling
+# both of them Pending hides the difference. An answer nobody has touched is
+# outstanding; Pending review means a person engaged with it and deferred.
+#
+# So VERIFICATION_OUTSTANDING is derived - it is the absence of any review row
+# and can never be written - while everything in RECORDABLE_REVIEW_STATUSES is
+# an actual appended decision, Pending review included.
+VERIFICATION_OUTSTANDING = "Verification outstanding"
+
 REVIEW_PENDING = "Pending review"
 REVIEW_ACCEPTED = "Accepted for controlled trial / evaluation"
 REVIEW_MODIFIED = "Modified before trial / evaluation"
 REVIEW_REJECTED = "Rejected"
 
-REVIEW_STATUSES = (REVIEW_PENDING, REVIEW_ACCEPTED, REVIEW_MODIFIED, REVIEW_REJECTED)
+RECORDABLE_REVIEW_STATUSES = (
+    REVIEW_PENDING,
+    REVIEW_ACCEPTED,
+    REVIEW_MODIFIED,
+    REVIEW_REJECTED,
+)
+
+# Every state the audit can show, outstanding first - this is the filter list
+# and the order the summary counts follow.
+ALL_REVIEW_STATES = (VERIFICATION_OUTSTANDING,) + RECORDABLE_REVIEW_STATUSES
+
+# Kept as an alias: older callers imported REVIEW_STATUSES to mean "what a
+# reviewer may record", which is exactly RECORDABLE_REVIEW_STATUSES.
+REVIEW_STATUSES = RECORDABLE_REVIEW_STATUSES
 
 # What the UI must show beside an answer for each state (CR section 13).
 REVIEW_DISPLAY = {
-    REVIEW_PENDING: "Technical validation required before trial or operational implementation.",
+    VERIFICATION_OUTSTANDING: "Technical validation required before trial or operational implementation.",
+    REVIEW_PENDING: "A reviewer has seen this and deferred the decision. Not cleared for trial or operational use.",
     REVIEW_ACCEPTED: "Accepted for controlled trial / evaluation.",
     REVIEW_MODIFIED: "Customer modification recorded.",
     REVIEW_REJECTED: "Recommendation rejected.",
 }
+
+# The two states that mean nobody has cleared the recommendation. Used by the
+# summary so "completed" counts decisions that actually resolved something.
+UNRESOLVED_REVIEW_STATES = (VERIFICATION_OUTSTANDING, REVIEW_PENDING)
 
 
 # --- Prompt versioning ---------------------------------------------------
