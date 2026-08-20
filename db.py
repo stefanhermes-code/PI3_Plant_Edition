@@ -25,6 +25,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -308,6 +309,21 @@ class Company(Base):
     # every company, manage subscription types/companies, unrestricted by
     # any single company's plant/user limits).
     is_platform_owner = Column(Boolean, default=False)
+    # CertiPUR Readiness is a commercial add-on this company has opted into
+    # (added 2026-08-20). Default False, and it must stay default False:
+    # switching it on makes a safety data sheet MANDATORY on every new raw
+    # material for this company (Stefan, 20 Aug 2026 - "otherwise we cannot
+    # provide this function"), and an obligation that arrives by default is an
+    # obligation nobody agreed to.
+    #
+    # Deliberately NOT part of CompanyPageAvailability, even though that also
+    # decides what a customer can see. That table is a deny-list - no row means
+    # the company has the page - which is right for pages that were always
+    # there and wrong for an add-on that imposes a data-entry rule the moment
+    # it is on. The precedent followed here is PI3AIConnectionSetting's own
+    # explicit per-plant enable, which is the same shape: an add-on HTC
+    # switches on for a customer, not a permission the customer administers.
+    certipur_enabled = Column(Boolean, default=False)
     contact_name = Column(String(200))
     contact_email = Column(String(200))
     contact_phone = Column(String(50))
@@ -733,6 +749,146 @@ class RawMaterial(Base):
 # ---------------------------------------------------------------------------
 # 5. recipe_components
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 5b. raw_material_documents and raw_material_substances
+#     Supplier documentation held as evidence (added 2026-08-20)
+# ---------------------------------------------------------------------------
+# Until now the application read a technical data sheet to PREFILL a raw
+# material and then threw the document away - the PDF, the extracted text and
+# everything in it except four master-data fields (see
+# views/14_Raw_Materials.py's "Add from TDS" tab). That is fine for master
+# data and useless for compliance, where the question is not "what is this
+# material called" but "what did the supplier's document actually say, and on
+# what revision".
+#
+# CertiPUR is what forces the change. Its section 3.4 prohibits a raw material
+# whose supplier self-classifies it as CMR 1a/1b (H340, H350, H360) or STOT SE
+# 1 (H370) "from the moment this appear on the SDS" - the criterion is written
+# by reference to the document, so the document has to be kept. And a saved
+# pre-audit has to be reconstructable months later (CR of 19 Aug 2026, section
+# 15), which it cannot be if the evidence was a file somebody uploaded once and
+# nobody stored.
+#
+# WHY THE FILE ITSELF AND NOT ONLY THE TEXT
+# The bytes are kept, not just the extraction. An extraction is an
+# interpretation; when a conclusion is challenged the answer has to be the
+# original document, not this application's reading of it. An SDS is a few
+# hundred kilobytes and a plant has tens of raw materials, so the storage cost
+# is trivial next to an unverifiable compliance claim. MAX_DOCUMENT_BYTES caps
+# it so a mis-selected file cannot fill the database.
+#
+# WHY NOT SUPERSEDE IN PLACE
+# A new revision is a NEW row and the old one is marked not current, never
+# edited or deleted. An assessment references the document id it actually
+# read, so a supplier reissuing a sheet next month cannot silently change what
+# an assessment concluded last month. Same append-only reasoning as the PI3
+# governance audit trail.
+
+# 10 MB. An SDS that does not fit is almost always a scan of something else.
+MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
+
+DOCUMENT_TYPE_SDS = "Safety Data Sheet"
+DOCUMENT_TYPE_TDS = "Technical Data Sheet"
+DOCUMENT_TYPE_DECLARATION = "Supplier Declaration"
+# A supplier declaration is a separate type because three CertiPUR criteria
+# cannot be answered from an SDS at all, and the source document says so: heavy
+# metals in colour pastes (3.1, "suppliers of colour pastes should be asked to
+# provide information on the concentration"), azo dyes (3.2, REACH Restriction
+# Entry 43 lists the amines a dye may RELEASE, which only the dye maker knows),
+# and chlorobenzenes in diisocyanates (3.7, "evidence may be obtained the raw
+# material supplier"). An SDS declares hazards, not a full composition, so it
+# is silent on all three by design rather than by omission.
+DOCUMENT_TYPES = (DOCUMENT_TYPE_SDS, DOCUMENT_TYPE_TDS, DOCUMENT_TYPE_DECLARATION)
+
+
+class RawMaterialDocument(Base):
+    __tablename__ = "raw_material_documents"
+
+    id = Column(Integer, primary_key=True)
+    raw_material_id = Column(Integer, ForeignKey("raw_materials.id"), nullable=False)
+    # Denormalised from the raw material, matching how RawMaterial itself
+    # carries company_id, so a document can be scoped without a join.
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    document_type = Column(String(50), nullable=False)  # see DOCUMENT_TYPES
+
+    file_name = Column(String(300))
+    content_type = Column(String(100))
+    file_bytes = Column(LargeBinary)
+    file_size = Column(Integer)
+    # sha256 of file_bytes. Two purposes: proving the stored file is the one
+    # that was assessed, and recognising a re-upload of the identical document
+    # so a revision is not invented where none happened.
+    file_hash = Column(String(64))
+
+    # Text as extracted locally with pdfplumber, before any model saw it. Kept
+    # so a conclusion can be traced to a passage rather than only to a file,
+    # and so a later re-read does not need the PDF parsed again.
+    extracted_text = Column(Text)
+
+    # What the document says about ITSELF - supplier, revision, date - as
+    # printed on it. Not derived from the raw material's master data, because
+    # the point is what the document claims.
+    supplier_name = Column(String(200))
+    document_revision = Column(String(100))
+    document_date = Column(Date)
+
+    # --- structured extraction, section 2 of an SDS ----------------------
+    # Comma-joined H-codes found on the document, e.g. "H315,H319,H350".
+    # Stored as text rather than a child table because they are a small flat
+    # set per document and every question asked of them is "does it contain".
+    hazard_codes = Column(String(500))
+    signal_word = Column(String(50))
+
+    # Provenance of the extraction, on the same terms as the PI3 governance
+    # fields: which model read it, when, and whether it succeeded. A criterion
+    # concluded from an extraction has to be able to say what produced it.
+    extraction_model = Column(String(100))
+    extraction_status = Column(String(50))  # Extracted / Partial / Failed / Not attempted
+    extraction_notes = Column(Text)
+    extracted_at = Column(DateTime)
+
+    # False once a newer revision of the same document type is uploaded for
+    # this raw material. Never deleted - an assessment may still reference it.
+    is_current = Column(Boolean, default=True)
+
+    uploaded_by = Column(String(200))
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    raw_material = relationship("RawMaterial")
+    substances = relationship(
+        "RawMaterialSubstance", back_populates="document", cascade="all, delete-orphan"
+    )
+
+
+class RawMaterialSubstance(Base):
+    """One line of section 3 of a safety data sheet - the composition.
+
+    This is where the CAS numbers come from, and CAS numbers are how five of
+    the eight pre-auditable CertiPUR criteria are screened (ortho-phthalates,
+    blowing agents, brominated diphenyl ethers, heavy metals, and the biocide
+    check). A child table rather than a text blob because the screen is a set
+    membership test that has to name WHICH substance matched, on which
+    document, at what concentration.
+
+    concentration is deliberately text. Safety data sheets state ranges
+    ("1 - 5 %"), inequalities ("< 0.1 %") and qualifiers, and coercing that to
+    a number would invent precision the document does not have."""
+
+    __tablename__ = "raw_material_substances"
+
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey("raw_material_documents.id"), nullable=False)
+    name = Column(String(300))
+    cas_number = Column(String(50))
+    ec_number = Column(String(50))
+    concentration = Column(String(100))
+    # H-codes attributed to this individual substance where the sheet gives
+    # them per component rather than only for the mixture as a whole.
+    hazard_codes = Column(String(500))
+
+    document = relationship("RawMaterialDocument", back_populates="substances")
+
+
 class RecipeComponent(Base):
     __tablename__ = "recipe_components"
 

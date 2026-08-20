@@ -453,3 +453,35 @@ def prohibited_cas_numbers():
 
 
 PROHIBITED_H_CODES = ("H340", "H350", "H360", "H370")
+
+
+def prohibited_hazard_codes(codes):
+    """Which of `codes` are prohibited by section 3.4, matched on the FAMILY.
+
+    A hazard statement carries an optional letter suffix that narrows what the
+    hazard is without changing its class: H350i is Carcinogen 1A/1B by
+    inhalation, H360D and H360FD are Reprotoxic 1A/1B. Section 3.4 prohibits
+    the class, so all of those are prohibited and an exact string match against
+    "H350" or "H360" would let every one of them through.
+
+    Matched on the first four characters, which is precise in both directions:
+    H341 (Mutagen 2) and H361 (Reprotoxic 2) and H371 (STOT SE 2) are NOT
+    prohibited by 3.4, and their four-character prefixes are not in the list,
+    so they correctly do not match.
+
+    `codes` may be a list or a comma-joined string, since that is how the
+    column stores them."""
+    if not codes:
+        return []
+    if isinstance(codes, str):
+        codes = [c.strip() for c in codes.split(",")]
+    hits = []
+    for code in codes:
+        c = (code or "").strip()
+        # Compared case-insensitively, reported as the sheet prints it - the
+        # suffix casing is meaningful to a reader (H360Df is not H360DF) and a
+        # report that silently re-cases the evidence is harder to check against
+        # the document it came from.
+        if len(c) >= 4 and c[:4].upper() in PROHIBITED_H_CODES:
+            hits.append(c)
+    return sorted(set(hits))

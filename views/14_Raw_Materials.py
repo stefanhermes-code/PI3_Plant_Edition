@@ -10,9 +10,23 @@ import pandas as pd
 import streamlit as st
 
 import ai_assistant
+import certipur_criteria
+import document_store
 from access_control import can_use_page
 from auth import current_user, logout_button, require_login
-from db import RAW_MATERIAL_CATEGORIES, Company, RawMaterial, RecipeComponent, Supplier, get_session, init_db
+from db import (
+    DOCUMENT_TYPE_DECLARATION,
+    DOCUMENT_TYPE_SDS,
+    DOCUMENT_TYPE_TDS,
+    RAW_MATERIAL_CATEGORIES,
+    Company,
+    RawMaterial,
+    RawMaterialDocument,
+    RecipeComponent,
+    Supplier,
+    get_session,
+    init_db,
+)
 from helpers import (
     clickable_table,
     csv_excel_uploader,
@@ -115,8 +129,10 @@ render_function_action_intro(
     ),
     action_text=(
         "Add a material manually, or upload a supplier's technical data sheet (TDS) under 'Add "
-        "from TDS' to prefill its fields instead of retyping them - an SDS is optional and only "
-        "adds handling/hazard notes. Use CSV/Excel import to bulk-load a material list from an "
+        "from TDS' to prefill its fields instead of retyping them. Attach the safety data sheet "
+        "(SDS) on the Documents tab - it is what CertiPUR Readiness reads, and it is required "
+        "before a material can be added if your company has that function. "
+        "Use CSV/Excel import to bulk-load a material list from an "
         "ERP or supplier export. Set cost per kg on each material so Recipe Optimization can "
         "price formulations completely. The 'Default supplier' dropdown is maintained on the "
         "Suppliers page - keep that list curated so the same supplier doesn't end up entered "
@@ -152,11 +168,64 @@ def _target_company(key):
     return st.selectbox("Company *", all_companies, format_func=lambda c: c.name, key=key)
 
 
-tab_manual, tab_tds, tab_import = st.tabs(
-    ["Manual entry", "Add from TDS", "CSV / Excel import"]
+tab_manual, tab_tds, tab_docs, tab_import = st.tabs(
+    ["Manual entry", "Add from TDS", "Documents", "CSV / Excel import"]
 )
 
+# Whether a safety data sheet is required to create a raw material here. Only
+# for a company that has opted into CertiPUR Readiness: the criteria are read
+# out of the SDS, so without one the function cannot be provided at all
+# (Stefan, 20 Aug 2026). Every other customer is unaffected.
+_sds_required = document_store.certipur_required(company_filter)
+
+
+def _sds_upload_controls(key_prefix):
+    """The SDS uploader shown on the two create paths. Returns the uploaded
+    file or None. Says plainly whether it is required and why."""
+    if _sds_required:
+        st.markdown("**Safety data sheet (SDS) \u2013 required**")
+        st.caption(
+            "%s has CertiPUR Readiness, and the readiness assessment is read out of the "
+            "safety data sheet - the hazard classification in section 2 and the composition "
+            "in section 3. A material cannot be added without one."
+            % (company_filter.name if company_filter is not None else "This company")
+        )
+    else:
+        st.markdown("**Safety data sheet (SDS) \u2013 optional**")
+        st.caption(
+            "Stored against the material with its hazard classification and composition. "
+            "Not required today; it becomes required if CertiPUR Readiness is switched on."
+        )
+    return st.file_uploader(
+        "Safety data sheet (PDF)", type=["pdf"], key="%s_sds" % key_prefix,
+    )
+
+
+def _store_uploaded_sds(material, uploaded, uploaded_by):
+    """Read, store and extract one uploaded SDS. Returns a status line, or
+    None when there was nothing to store. Never raises."""
+    if uploaded is None:
+        return None
+    try:
+        uploaded.seek(0)
+        raw_bytes = uploaded.read()
+        uploaded.seek(0)
+        text = _extract_pdf_text(uploaded)
+        doc = document_store.store_document(
+            session, material, raw_bytes, uploaded.name, DOCUMENT_TYPE_SDS,
+            uploaded_by=uploaded_by, extracted_text=text,
+        )
+        return document_store.extraction_summary(doc)
+    except ValueError as exc:
+        return "The safety data sheet was not stored: %s" % exc
+    except Exception:
+        return (
+            "The safety data sheet could not be stored. The material was saved; attach the "
+            "sheet again on the Documents tab."
+        )
+
 with tab_manual:
+    show_pending_banner("rawmat_manual_msg")
     if not page_usable:
         st.caption("View-only access - adding a raw material is restricted for your role.")
     else:
@@ -164,6 +233,7 @@ with tab_manual:
         add_supplier_choice = _supplier_picker(
             session, manual_target_company.id if manual_target_company else None, key_prefix="add_rawmat"
         )
+        manual_sds = _sds_upload_controls("add_rawmat")
         with st.form("add_raw_material"):
             name = st.text_input("Raw material name *")
             c1, c3 = st.columns(2)
@@ -184,33 +254,58 @@ with tab_manual:
                     st.error("Raw material name is required.")
                 elif not manual_target_company:
                     st.error("Pick a company for this raw material.")
+                elif _sds_required and manual_sds is None:
+                    # Refused rather than saved-and-flagged. A material created
+                    # without its sheet is a compliance gap that looks like a
+                    # complete record, and the whole point of the requirement is
+                    # that the evidence arrives with the material.
+                    st.error(
+                        "A safety data sheet is required for this company. Attach it above, or "
+                        "ask your administrator to turn CertiPUR Readiness off if this material "
+                        "genuinely has no sheet."
+                    )
                 else:
                     _ensure_supplier_exists(session, manual_target_company.id, add_supplier_choice)
-                    session.add(
-                        RawMaterial(
-                            company_id=manual_target_company.id,
-                            name=name.strip(),
-                            category=category,
-                            default_supplier=add_supplier_choice,
-                            cost_per_kg=cost_per_kg or None,
-                            notes=notes,
-                            active=active,
-                        )
+                    material = RawMaterial(
+                        company_id=manual_target_company.id,
+                        name=name.strip(),
+                        category=category,
+                        default_supplier=add_supplier_choice,
+                        cost_per_kg=cost_per_kg or None,
+                        notes=notes,
+                        active=active,
+                    )
+                    session.add(material)
+                    session.flush()
+                    sds_note = _store_uploaded_sds(
+                        material, manual_sds, user.get("display_name") or user.get("username")
                     )
                     session.commit()
-                    st.success(f"Raw material '{name}' added.")
+                    set_pending_banner(
+                        "rawmat_manual_msg",
+                        "Raw material '%s' added." % name + ((" " + sds_note) if sds_note else ""),
+                    )
                     st.rerun()
 
 with tab_tds:
+    show_pending_banner("rawmat_tds_msg")
     if not page_usable:
         st.caption("View-only access - adding a raw material is restricted for your role.")
     else:
         st.caption(
             "Upload a supplier technical data sheet (TDS) to prefill the fields below instead of "
-            "retyping them. An SDS is optional and only adds handling/hazard notes."
+            "retyping them. Both documents are stored against the material once it is saved."
         )
         tds_file = st.file_uploader("Technical data sheet (PDF) *", type=["pdf"], key="tds_upload")
-        sds_file = st.file_uploader("Safety data sheet (PDF, optional)", type=["pdf"], key="sds_upload")
+        sds_file = st.file_uploader(
+            "Safety data sheet (PDF) *" if _sds_required else "Safety data sheet (PDF, optional)",
+            type=["pdf"], key="sds_upload",
+        )
+        if _sds_required:
+            st.caption(
+                "The safety data sheet is required for this company: CertiPUR Readiness reads the "
+                "hazard classification from its section 2 and the composition from its section 3."
+            )
 
         if tds_file is not None:
             if st.button("Extract from document(s)", key="extract_tds_btn"):
@@ -269,23 +364,200 @@ with tab_tds:
                     st.error("Raw material name is required.")
                 elif not tds_target_company:
                     st.error("Pick a company for this raw material.")
+                elif _sds_required and sds_file is None:
+                    st.error(
+                        "A safety data sheet is required for this company. Attach it above before "
+                        "saving."
+                    )
                 else:
                     _ensure_supplier_exists(session, tds_target_company.id, t_supplier)
-                    session.add(
-                        RawMaterial(
-                            company_id=tds_target_company.id,
-                            name=t_name.strip(),
-                            category=t_category,
-                            default_supplier=t_supplier,
-                            cost_per_kg=t_cost or None,
-                            notes=t_notes,
-                            active=t_active,
-                        )
+                    material = RawMaterial(
+                        company_id=tds_target_company.id,
+                        name=t_name.strip(),
+                        category=t_category,
+                        default_supplier=t_supplier,
+                        cost_per_kg=t_cost or None,
+                        notes=t_notes,
+                        active=t_active,
                     )
+                    session.add(material)
+                    session.flush()
+                    who = user.get("display_name") or user.get("username")
+                    notes_out = []
+                    # The TDS is kept too. It prefilled the fields above, and
+                    # until now that was all it did - the document itself was
+                    # discarded, so nothing could later show where a value came
+                    # from.
+                    if tds_file is not None:
+                        try:
+                            tds_file.seek(0)
+                            document_store.store_document(
+                                session, material, tds_file.read(), tds_file.name,
+                                DOCUMENT_TYPE_TDS, uploaded_by=who,
+                                extracted_text=_extract_pdf_text(tds_file), extract=False,
+                            )
+                        except Exception:
+                            notes_out.append("The technical data sheet could not be stored.")
+                    sds_note = _store_uploaded_sds(material, sds_file, who)
+                    if sds_note:
+                        notes_out.append(sds_note)
                     session.commit()
                     st.session_state.pop("tds_extracted", None)
-                    st.success(f"Raw material '{t_name}' added.")
+                    set_pending_banner(
+                        "rawmat_tds_msg",
+                        "Raw material '%s' added. %s" % (t_name, " ".join(notes_out)),
+                    )
                     st.rerun()
+
+with tab_docs:
+    # The backfill worklist, and the only place a document can be attached to a
+    # material that already exists. A company that enables CertiPUR after its
+    # raw materials are on the system needs exactly this - the mandatory rule on
+    # the create paths governs new materials and can do nothing about old ones.
+    show_pending_banner("rawmat_docs_msg")
+    st.caption(
+        "Safety data sheets, technical data sheets and supplier declarations held against each "
+        "raw material. A new revision is stored beside the old one rather than replacing it, so "
+        "an assessment made last month still points at the sheet it actually read."
+    )
+
+    doc_materials = (
+        session.query(RawMaterial)
+        .filter(RawMaterial.company_id == company_filter.id)
+        .order_by(RawMaterial.name)
+        .all()
+        if company_filter is not None else []
+    )
+
+    if company_filter is None:
+        st.info("Pick a single company above to work with its documents.")
+    elif not doc_materials:
+        st.info("No raw materials recorded for %s yet." % company_filter.name)
+    else:
+        with_sds = document_store.material_ids_with_document(
+            session, [m.id for m in doc_materials], DOCUMENT_TYPE_SDS
+        )
+        missing = [m for m in doc_materials if m.id not in with_sds]
+        if missing:
+            st.warning(
+                "%d of %d raw materials have no safety data sheet: %s"
+                % (len(missing), len(doc_materials), ", ".join(m.name for m in missing))
+            )
+        else:
+            st.success("Every raw material has a current safety data sheet.")
+
+        st.dataframe(
+            [
+                {
+                    "Raw material": m.name,
+                    "Category": m.category or "\u2014",
+                    "Supplier": m.default_supplier or "\u2014",
+                    "SDS": "Held" if m.id in with_sds else "Missing",
+                }
+                for m in doc_materials
+            ],
+            hide_index=True, use_container_width=True,
+        )
+
+        st.divider()
+        chosen = st.selectbox(
+            "Raw material", doc_materials, format_func=lambda m: m.name, key="docs_material",
+        )
+        if chosen is not None:
+            held = document_store.documents_for(session, chosen.id)
+            if held:
+                st.markdown("**Documents held**")
+                for d in held:
+                    label = "%s \u00b7 %s" % (d.document_type, d.file_name or "(no file name)")
+                    if not d.is_current:
+                        label += "  \u2014 superseded"
+                    with st.expander(label, expanded=bool(d.is_current and d.document_type == DOCUMENT_TYPE_SDS)):
+                        st.caption(
+                            "Uploaded %s by %s\u2003\u00b7\u2003%.0f KB\u2003\u00b7\u2003sha256 %s"
+                            % (
+                                d.created_at.strftime("%Y-%m-%d %H:%M UTC") if d.created_at else "\u2014",
+                                d.uploaded_by or "not recorded",
+                                (d.file_size or 0) / 1024.0,
+                                (d.file_hash or "")[:16],
+                            )
+                        )
+                        if d.document_type == DOCUMENT_TYPE_SDS:
+                            st.write(document_store.extraction_summary(d))
+                            prohibited = certipur_criteria.prohibited_hazard_codes(d.hazard_codes)
+                            if prohibited:
+                                st.error(
+                                    "CertiPUR section 3.4: this sheet carries %s, which is a CMR "
+                                    "class 1a/1b or STOT SE 1 classification. A raw material "
+                                    "carrying one may not be intentionally used in foam certified "
+                                    "under CertiPUR." % ", ".join(prohibited)
+                                )
+                            if d.substances:
+                                st.dataframe(
+                                    [
+                                        {
+                                            "Substance": sub.name or "\u2014",
+                                            "CAS": sub.cas_number or "\u2014",
+                                            "EC": sub.ec_number or "\u2014",
+                                            "Concentration": sub.concentration or "\u2014",
+                                            "Hazard codes": sub.hazard_codes or "\u2014",
+                                        }
+                                        for sub in d.substances
+                                    ],
+                                    hide_index=True, use_container_width=True,
+                                )
+                        if d.file_bytes:
+                            st.download_button(
+                                "Download the original",
+                                data=bytes(d.file_bytes),
+                                file_name=d.file_name or "document.pdf",
+                                mime=d.content_type or "application/pdf",
+                                key="dl_doc_%d" % d.id,
+                            )
+            else:
+                st.info("No documents held against %s." % chosen.name)
+
+            if page_usable:
+                st.markdown("**Attach a document**")
+                up_type = st.selectbox(
+                    "Document type",
+                    [DOCUMENT_TYPE_SDS, DOCUMENT_TYPE_TDS, DOCUMENT_TYPE_DECLARATION],
+                    key="docs_type",
+                    help=(
+                        "A supplier declaration covers what a safety data sheet does not: heavy "
+                        "metal content of colour pastes, azo dye compliance with REACH "
+                        "Restriction Entry 43, and the chlorobenzene content of a diisocyanate. "
+                        "CertiPUR names the supplier as the source for all three."
+                    ),
+                )
+                up_file = st.file_uploader(
+                    "Document (PDF)", type=["pdf"], key="docs_upload_%d" % chosen.id
+                )
+                if up_file is not None and st.button("Store against %s" % chosen.name, key="docs_store"):
+                    try:
+                        up_file.seek(0)
+                        raw_bytes = up_file.read()
+                        up_file.seek(0)
+                        doc = document_store.store_document(
+                            session, chosen, raw_bytes, up_file.name, up_type,
+                            uploaded_by=user.get("display_name") or user.get("username"),
+                            extracted_text=_extract_pdf_text(up_file),
+                            extract=(up_type == DOCUMENT_TYPE_SDS),
+                        )
+                        session.commit()
+                        set_pending_banner(
+                            "rawmat_docs_msg",
+                            "%s stored against %s. %s" % (
+                                up_type, chosen.name,
+                                document_store.extraction_summary(doc)
+                                if up_type == DOCUMENT_TYPE_SDS else "",
+                            ),
+                        )
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    except Exception:
+                        session.rollback()
+                        st.error("The document could not be stored. Try again, or ask your administrator to check the error log.")
 
 with tab_import:
     if not page_usable:
@@ -311,6 +583,25 @@ with tab_import:
                     existing_names.add(name_val.lower())
 
             st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged as duplicates: **{len(dup_rows)}**")
+            if good_rows and document_store.certipur_required(import_target_company):
+                # Bulk import is not blocked for a CertiPUR company, even though
+                # manual entry is. A customer migrating a material list from an
+                # ERP has no way to attach sixty safety data sheets one file at
+                # a time through a spreadsheet, and refusing the import would
+                # leave them unable to load their own data at all.
+                #
+                # What is not acceptable is letting it happen silently. Every
+                # material created here arrives without a sheet, and the count
+                # is stated before the button, not discovered later on the
+                # Documents tab.
+                st.warning(
+                    "%s has CertiPUR Readiness. These %d material%s will be created without a "
+                    "safety data sheet and will show as an evidence gap until one is attached on "
+                    "the Documents tab. A material added one at a time cannot be saved without "
+                    "its sheet; a bulk import can, because a spreadsheet cannot carry the "
+                    "documents."
+                    % (import_target_company.name, len(good_rows), "" if len(good_rows) == 1 else "s")
+                )
             if dup_rows:
                 st.warning("These rows match a raw material name already in the list and were skipped.")
                 render_data_table(pd.DataFrame(dup_rows), max_height="400px")

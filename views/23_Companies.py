@@ -175,6 +175,16 @@ with st.expander("Add company", expanded=False):
             else "Annual maintenance value is calculated from licence value x annual maintenance %."
         )
 
+        certipur_enabled = st.checkbox(
+            "CertiPUR Readiness",
+            value=False,
+            help=(
+                "Switches on the CertiPUR Readiness pre-audit for this customer. It also makes a "
+                "safety data sheet MANDATORY on every raw material they add from that point on, "
+                "because the assessment is read out of the SDS. Leave off unless the customer has "
+                "bought it."
+            ),
+        )
         notes = st.text_area("Notes")
         submitted = st.form_submit_button("Save company")
         if submitted:
@@ -199,6 +209,7 @@ with st.expander("Add company", expanded=False):
                     annual_maintenance_percentage=annual_maintenance_percentage,
                     maintenance_start_date=maintenance_start_date,
                     renewal_date=renewal_date,
+                    certipur_enabled=certipur_enabled,
                     notes=notes,
                     active=True,
                 )
@@ -224,6 +235,7 @@ else:
             "Country": c.country or "—",
             "Renewal": c.renewal_date.isoformat() if c.renewal_date else "—",
             "Platform owner": "Yes" if c.is_platform_owner else "",
+            "CertiPUR": "Yes" if c.certipur_enabled else "",
             "Users": session.query(User).filter(User.company_id == c.id).count(),
             "Plants": session.query(Plant).filter(Plant.company_id == c.id).count(),
             "Active": "Yes" if c.active else "No",
@@ -332,6 +344,17 @@ else:
                 else "Annual maintenance value is calculated from licence value x annual maintenance %."
             )
 
+            e_certipur = st.checkbox(
+                "CertiPUR Readiness",
+                value=bool(selected.certipur_enabled),
+                key=f"edit_co_certipur_{selected.id}",
+                help=(
+                    "Switches on the CertiPUR Readiness pre-audit for this customer, and makes a "
+                    "safety data sheet mandatory on every raw material they add from that point "
+                    "on. Existing raw materials are not affected and are listed as an evidence "
+                    "gap until their sheets are attached."
+                ),
+            )
             e_active = st.checkbox("Active", value=selected.active, key=f"edit_co_active_{selected.id}")
             e_notes = st.text_area("Notes", value=selected.notes or "", key=f"edit_co_notes_{selected.id}")
             if selected.is_platform_owner:
@@ -357,6 +380,7 @@ else:
                     selected.annual_maintenance_percentage = e_maint_pct
                     selected.maintenance_start_date = e_maint_start
                     selected.renewal_date = e_renewal
+                    selected.certipur_enabled = e_certipur
                     selected.active = e_active or selected.is_platform_owner
                     selected.notes = e_notes
                     session.commit()

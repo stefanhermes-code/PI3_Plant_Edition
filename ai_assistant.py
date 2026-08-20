@@ -72,6 +72,7 @@ problem shows a friendly st.error instead of crashing the page.
 
 import json
 import os
+import re
 import time
 
 import streamlit as st
@@ -1419,3 +1420,205 @@ def extract_raw_material_from_tds(tds_text, sds_text=None):
     except Exception:
         st.error("Could not extract raw material data from this document. Use Manual entry instead.")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Safety data sheet extraction (added 2026-08-20, for CertiPUR Readiness)
+# ---------------------------------------------------------------------------
+# extract_raw_material_from_tds() above pulls MASTER DATA out of a technical
+# data sheet - what the material is called, who supplies it, what it is for.
+# This function pulls EVIDENCE out of a safety data sheet, which is a different
+# job with a different standard of care:
+#
+#   - It reads two specific sections. Section 2 (hazard identification) for the
+#     H-codes, because CertiPUR section 3.4 prohibits a raw material whose
+#     supplier self-classifies it CMR 1a/1b (H340, H350, H360) or STOT SE 1
+#     (H370) "from the moment this appear on the SDS". Section 3 (composition)
+#     for the substance names and CAS numbers, which is how the prohibited-
+#     substance screens are run.
+#   - It must not infer. A hazard code that is not printed on the sheet is not
+#     a hazard code, and a "probably present" substance is worse than no answer
+#     at all, because it will be read later as evidence.
+#   - It reports what it could not do. A partial extraction is recorded as
+#     Partial with a note, not silently returned as if it were complete.
+#
+# The regular expression pass over H-codes runs REGARDLESS of what the model
+# returns, and the two are unioned. An H-code is a fixed token - the letter H
+# followed by three digits - so a text search finds it deterministically, and
+# there is no reason to trust a language model with a job a regex does exactly.
+# The model is there for the composition table, which has no fixed shape.
+
+SDS_EXTRACTION_PROMPT_VERSION = "PI3-SDS-v1.0"
+
+# H-codes carry an optional letter suffix and the suffix is not decorative:
+# H360D is "may damage the unborn child", a Reprotoxic 1A/1B statement, and
+# CertiPUR section 3.4 prohibits it exactly as it prohibits a bare H360. An
+# expression anchored with \b after three digits silently misses every one of
+# H350i, H360F, H360D, H360FD and H360Df - which is to say most of the codes
+# this check exists to catch, and it would have failed SILENTLY, passing a
+# prohibited raw material.
+#
+# Restricted to H2xx/H3xx/H4xx, the whole of the CLP hazard-statement range,
+# so a section number or a product code is not mistaken for one.
+_H_CODE_RE = re.compile(r"\bH([2-4]\d{2}[A-Za-z]{0,3})\b")
+
+
+def _h_codes_in_text(text):
+    """Every H-code literally printed in the text, as a sorted list.
+
+    Deterministic and independent of any model. A model is not asked to do a
+    job a regular expression does exactly."""
+    if not text:
+        return []
+    return sorted({"H" + m for m in _H_CODE_RE.findall(text)})
+
+
+def extract_sds_evidence(sds_text):
+    """Structured evidence from a safety data sheet's extracted text.
+
+    Returns a dict with:
+        hazard_codes      list of H-codes found (regex and model, unioned)
+        signal_word       "Danger" / "Warning" / "" as printed
+        supplier_name     the supplier as the sheet names itself
+        document_revision revision or version identifier printed on the sheet
+        document_date     ISO date string, or "" if not found
+        substances        list of {name, cas_number, ec_number, concentration,
+                          hazard_codes}
+        status            "Extracted" / "Partial" / "Failed" / "Not attempted"
+        notes             what could not be determined, in plain words
+        model             the model used, or "" where none was
+
+    Never returns None. A failure is a result with status "Failed" and an
+    empty payload, because the caller has to record that an extraction was
+    attempted and did not work - an SDS that could not be read is an evidence
+    gap the assessment must show, not an exception to swallow."""
+    empty = {
+        "hazard_codes": [], "signal_word": "", "supplier_name": "",
+        "document_revision": "", "document_date": "", "substances": [],
+        "status": "Not attempted", "notes": "", "model": "",
+    }
+    if not sds_text or not sds_text.strip():
+        out = dict(empty)
+        out["status"] = "Failed"
+        out["notes"] = "No text could be read from the document. A scanned sheet needs to be re-supplied as text."
+        return out
+
+    # The regex pass stands on its own and is kept even if the model call
+    # fails, so a sheet always yields its H-codes.
+    regex_codes = _h_codes_in_text(sds_text)
+
+    if not openai_key_configured():
+        out = dict(empty)
+        out["hazard_codes"] = regex_codes
+        out["status"] = "Partial"
+        out["notes"] = (
+            "Hazard codes were read from the document text. The composition table was not "
+            "extracted because PI3 is not configured for this deployment."
+        )
+        return out
+
+    try:
+        client = _client()
+        model = _get_secret("PI3_MODEL") or DEFAULT_MODEL
+        instructions = (
+            "You extract structured evidence from a SAFETY DATA SHEET for a polyurethane "
+            "foam manufacturer's compliance records. Respond with ONLY a single JSON "
+            "object, no other text and no markdown code fences, with exactly these keys:\n"
+            '"hazard_codes": array of the GHS/CLP hazard statement codes printed in '
+            "section 2 of the sheet, each as a string like \"H350\". Include only codes "
+            "actually printed. Do not infer a code from a phrase.\n"
+            '"signal_word": "Danger", "Warning", or "" as printed in section 2.\n'
+            '"supplier_name": the supplier or manufacturer named on the sheet.\n'
+            '"document_revision": the revision or version identifier printed on the '
+            "sheet, as printed.\n"
+            '"document_date": the revision date in YYYY-MM-DD form, or "" if not stated.\n'
+            '"substances": array of the components listed in section 3 (composition / '
+            "information on ingredients), each an object with \"name\", \"cas_number\", "
+            "\"ec_number\", \"concentration\" (as printed, including ranges and "
+            "inequalities such as \"1 - 5 %\" or \"< 0.1 %\"), and \"hazard_codes\" "
+            "(array, only where the sheet gives codes per component).\n"
+            '"notes": anything you could not determine, in one or two plain sentences.\n\n'
+            "Rules that matter more than completeness: use an empty string or an empty "
+            "array for anything the sheet does not state. Never invent a CAS number, a "
+            "concentration or a hazard code. Never carry a substance over from your own "
+            "knowledge of what this kind of product usually contains. This output is used "
+            "as compliance evidence, so an omission is recoverable and an invention is not."
+        )
+        response = client.responses.create(
+            model=model,
+            instructions=instructions,
+            input="SAFETY DATA SHEET TEXT:\n" + sds_text[:20000],
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        raw = (response.output_text or "").strip()
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw.lower().startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw)
+
+        model_codes = [
+            str(c).strip().upper() for c in (data.get("hazard_codes") or [])
+            if str(c).strip()
+        ]
+        codes = sorted(set(regex_codes) | {c for c in model_codes if _H_CODE_RE.fullmatch(c)})
+
+        substances = []
+        for item in (data.get("substances") or []):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            cas = str(item.get("cas_number") or "").strip()
+            if not name and not cas:
+                continue
+            sub_codes = [
+                str(c).strip().upper() for c in (item.get("hazard_codes") or [])
+                if _H_CODE_RE.fullmatch(str(c).strip().upper())
+            ]
+            substances.append({
+                "name": name,
+                "cas_number": cas,
+                "ec_number": str(item.get("ec_number") or "").strip(),
+                "concentration": str(item.get("concentration") or "").strip(),
+                "hazard_codes": ",".join(sorted(set(sub_codes))),
+            })
+
+        notes = str(data.get("notes") or "").strip()
+        # Codes the text plainly contains but the model did not return are
+        # worth saying out loud: it means the sheet is laid out in a way the
+        # extraction did not follow, and the reader should look at it.
+        missed = sorted(set(regex_codes) - set(model_codes))
+        if missed:
+            notes = (notes + " " if notes else "") + (
+                "Hazard codes %s appear in the document text but were not returned by the "
+                "extraction; they have been included from the text." % ", ".join(missed)
+            )
+
+        status = "Extracted" if substances else "Partial"
+        if not substances and not notes:
+            notes = "No composition table could be read from section 3 of this sheet."
+
+        return {
+            "hazard_codes": codes,
+            "signal_word": str(data.get("signal_word") or "").strip(),
+            "supplier_name": str(data.get("supplier_name") or "").strip(),
+            "document_revision": str(data.get("document_revision") or "").strip(),
+            "document_date": str(data.get("document_date") or "").strip(),
+            "substances": substances,
+            "status": status,
+            "notes": notes,
+            "model": model,
+        }
+    except Exception as exc:
+        _record_pi3_error("extract_sds_evidence", exc)
+        out = dict(empty)
+        out["hazard_codes"] = regex_codes
+        out["status"] = "Partial" if regex_codes else "Failed"
+        out["notes"] = (
+            "Hazard codes were read from the document text, but the composition table "
+            "could not be extracted. The document is stored and can be re-read."
+            if regex_codes else
+            "The document could not be read. It is stored and can be re-read, or the "
+            "details can be recorded by hand."
+        )
+        return out
