@@ -127,6 +127,14 @@ RAW_MATERIAL_CATEGORIES = [
     "Catalyst",
     "Surfactant",
     "Flame retardant",
+    # Added 2026-08-20 for CertiPUR. Section 3.5 of the technical requirements
+    # exempts biocides from the CMR/STOT rule in 3.4 and holds them to a
+    # different test - only biocides authorised under BPR 528/2012 for product
+    # type 9 may be used. Neither half of that can be evaluated if a biocide is
+    # indistinguishable from any other additive, and applying 3.4 to one
+    # produces a false failure. Existing materials keep whatever category they
+    # already carry; nothing is reclassified automatically.
+    "Biocide",
     "Colorant / Pigment",
     "Cross-linker / Chain extender",
     "Filler",
@@ -1614,6 +1622,187 @@ class PI3AIConnectionSetting(Base):
 # logging problem (e.g. this table not yet migrated on some environment)
 # degrades to "no data on the Performance admin page", never a crashed
 # Intelligence page.
+
+# ---------------------------------------------------------------------------
+# 17b. CertiPUR readiness - criteria master data and saved assessments
+#      (added 2026-08-20; CR of 19 Aug 2026, Europur approval 20 Aug 2026)
+# ---------------------------------------------------------------------------
+# Five tables, and the shape of them is driven by one requirement: a saved
+# assessment must be reconstructable months later (CR section 15). Everything
+# an assessment concluded from has to be pinned at the moment of saving, not
+# looked up again at reading time - the recipe version, the criteria edition,
+# the specific documents read, and the wording of the criterion as it stood.
+#
+# certipur_criteria.py is the SEED for the two master tables, not a substitute
+# for them. A constant cannot be versioned per assessment, and a later edition
+# of the technical paper has to create a NEW set rather than edit the old one,
+# or every historical assessment silently changes what it was measured against.
+
+class CertipurCriteriaSet(Base):
+    """One published edition of the CertiPUR requirements."""
+
+    __tablename__ = "certipur_criteria_sets"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    version = Column(String(50), nullable=False)
+    source = Column(String(400))          # the document this was transcribed from
+    effective_from = Column(Date)
+    # Which set a NEW assessment uses. Exactly one should be active; an older
+    # set stays in the table forever because assessments point at it.
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    criteria = relationship(
+        "CertipurCriterion", back_populates="criteria_set", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (UniqueConstraint("name", "version", name="uq_certipur_set_name_version"),)
+
+
+class CertipurCriterion(Base):
+    """One assessable requirement inside a criteria set.
+
+    criterion_key is the stable identifier (CP-3.4-HAZARD-CLASSIFICATION and
+    the like) and is what an assessment item references in words as well as by
+    id - so a result stays readable even if the row is later reorganised."""
+
+    __tablename__ = "certipur_criteria"
+
+    id = Column(Integer, primary_key=True)
+    criteria_set_id = Column(Integer, ForeignKey("certipur_criteria_sets.id"), nullable=False)
+    criterion_key = Column(String(80), nullable=False)
+    section = Column(String(20))          # the source document's own numbering
+    title = Column(String(200))
+    requirement = Column(Text)
+    # "measured" (accredited laboratory only) or "declared" (pre-auditable).
+    # See certipur_criteria.py for why this single distinction decides
+    # everything the assessment can and cannot claim.
+    determination = Column(String(20))
+    assessment_method = Column(String(120))
+    limit_text = Column(Text)
+    test_method = Column(Text)
+    note = Column(Text)
+    sort_order = Column(Integer)
+
+    criteria_set = relationship("CertipurCriteriaSet", back_populates="criteria")
+    substances = relationship(
+        "CertipurCriterionSubstance", back_populates="criterion", cascade="all, delete-orphan"
+    )
+
+
+class CertipurCriterionSubstance(Base):
+    """A substance named by a criterion, with its CAS number where the source
+    document gives one. This is what the formulation screen matches against."""
+
+    __tablename__ = "certipur_criterion_substances"
+
+    id = Column(Integer, primary_key=True)
+    criterion_id = Column(Integer, ForeignKey("certipur_criteria.id"), nullable=False)
+    name = Column(String(300))
+    cas_number = Column(String(50))
+    individual_limit = Column(String(100))
+
+    criterion = relationship("CertipurCriterion", back_populates="substances")
+
+
+class CertipurAssessment(Base):
+    """One saved pre-audit of one foam grade.
+
+    Immutable once written. Re-running after corrective action creates a new
+    row and leaves this one exactly as it was, which is the only way "we fixed
+    it" can be shown as a change rather than asserted."""
+
+    __tablename__ = "certipur_assessments"
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    plant_id = Column(Integer, ForeignKey("plants.id"))
+    foam_grade_id = Column(Integer, ForeignKey("foam_grades.id"))
+    recipe_version_id = Column(Integer, ForeignKey("recipe_versions.id"))
+    criteria_set_id = Column(Integer, ForeignKey("certipur_criteria_sets.id"))
+
+    # Name snapshots beside every id, for the same reason the AI governance
+    # trail carries them: a renamed grade or a deleted recipe version must not
+    # turn a historical assessment into a row of orphaned numbers.
+    company_name = Column(String(200))
+    plant_name = Column(String(200))
+    foam_grade_name = Column(String(200))
+    recipe_version_label = Column(String(100))
+    criteria_set_label = Column(String(200))
+    certipur_foam_family = Column(String(120))
+
+    assessed_by = Column(String(200))
+    assessed_by_user_id = Column(Integer, ForeignKey("users.id"))
+    assessed_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    # Counts stored rather than recomputed. The CR requires the summary to
+    # reconcile exactly to the item rows AS SAVED; recomputing at read time
+    # would quietly follow later edits to the criteria set.
+    count_total = Column(Integer)
+    count_meets = Column(Integer)
+    count_potential_issue = Column(Integer)
+    count_evidence_missing = Column(Integer)
+    count_testing_required = Column(Integer)
+    count_not_applicable = Column(Integer)
+
+    blocking_reason = Column(Text)   # set when the grade could not be assessed at all
+    notes = Column(Text)
+
+    items = relationship(
+        "CertipurAssessmentItem", back_populates="assessment", cascade="all, delete-orphan"
+    )
+
+
+class CertipurAssessmentItem(Base):
+    """One criterion's result inside one assessment."""
+
+    __tablename__ = "certipur_assessment_items"
+
+    id = Column(Integer, primary_key=True)
+    assessment_id = Column(Integer, ForeignKey("certipur_assessments.id"), nullable=False)
+    criterion_id = Column(Integer, ForeignKey("certipur_criteria.id"))
+    criterion_key = Column(String(80))
+    section = Column(String(20))
+    title = Column(String(200))
+    # The requirement wording AS IT STOOD. Copied, not referenced, so the saved
+    # result reads correctly against a later edition of the criteria.
+    requirement = Column(Text)
+    determination = Column(String(20))
+
+    status = Column(String(40))      # see certipur_assessment.STATUSES
+    rationale = Column(Text)         # why this status, in words
+    action = Column(Text)            # what to do about it, where anything applies
+    sort_order = Column(Integer)
+
+    assessment = relationship("CertipurAssessment", back_populates="items")
+    evidence = relationship(
+        "CertipurAssessmentEvidence", back_populates="item", cascade="all, delete-orphan"
+    )
+
+
+class CertipurAssessmentEvidence(Base):
+    """What one result was concluded from.
+
+    document_id points at the exact raw_material_documents row read - not at
+    the raw material, and not at "the current SDS" - so a supplier reissuing a
+    sheet next month leaves this assessment pointing at the sheet that was
+    actually read."""
+
+    __tablename__ = "certipur_assessment_evidence"
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(Integer, ForeignKey("certipur_assessment_items.id"), nullable=False)
+    evidence_type = Column(String(80))     # Safety Data Sheet / Formulation / Supplier Declaration / None held
+    raw_material_id = Column(Integer, ForeignKey("raw_materials.id"))
+    raw_material_name = Column(String(200))
+    document_id = Column(Integer, ForeignKey("raw_material_documents.id"))
+    document_reference = Column(String(400))   # file name, revision and date as held
+    detail = Column(Text)                      # what this evidence showed
+
+    item = relationship("CertipurAssessmentItem", back_populates="evidence")
+
+
 class PerformanceLog(Base):
     __tablename__ = "performance_logs"
 
