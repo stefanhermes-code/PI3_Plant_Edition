@@ -55,6 +55,7 @@ role = "Company Admin"
 """
 
 import datetime as dt
+import os
 from urllib.parse import quote
 
 import bcrypt
@@ -71,6 +72,17 @@ def _auth_disabled():
         return bool(st.secrets.get("AUTH_DISABLED", False))
     except Exception:
         return False
+
+
+def _get_secret_value(name, default=None):
+    """A single secret, tolerant of there being no secrets file at all (local
+    runs, CI). Same pattern as db._database_url and ai_assistant._get_secret."""
+    try:
+        if name in st.secrets:
+            return st.secrets[name]
+    except Exception:
+        pass
+    return os.environ.get(name, default)
 
 
 def _legacy_users_from_secrets():
@@ -217,8 +229,22 @@ def require_login():
     if _auth_disabled():
         st.session_state["authenticated"] = True
         st.session_state.setdefault("auth_source", "dev")
-        st.session_state.setdefault("username", "dev")
-        st.session_state.setdefault("display_name", "Dev (auth disabled)")
+        # Who was at the keyboard, for the audit trail. Set
+        # DEV_USER_DISPLAY_NAME in secrets during development and the records
+        # written in this mode carry that name instead of a generic "Dev".
+        #
+        # The "(auth disabled)" suffix is kept whatever the name says, and is
+        # not optional. A development session has no account behind it, so the
+        # name identifies but does not authenticate - and an audit record that
+        # reads like a signed-in user when nobody signed in would be worse
+        # than one that reads "Dev". The suffix is what keeps it honest.
+        dev_name = _get_secret_value("DEV_USER_DISPLAY_NAME")
+        st.session_state.setdefault("username", (dev_name or "dev").strip() or "dev")
+        st.session_state.setdefault(
+            "display_name",
+            f"{dev_name.strip()} (auth disabled)" if (dev_name or "").strip()
+            else "Dev (auth disabled)",
+        )
         # "Platform Admin", not "Company Admin": this synthetic session also
         # sets is_platform_owner=True below, and every real account with
         # that flag set (HTC Global's own) is named "Platform Admin" - see
