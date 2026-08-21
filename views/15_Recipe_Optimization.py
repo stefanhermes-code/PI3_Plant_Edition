@@ -323,7 +323,9 @@ else:
         ),
         axis=1,
     )
-    expectation_summary["tolerance"] = expectation_summary["property_name"].apply(tolerance_label)
+    expectation_summary["tolerance"] = expectation_summary.apply(
+        lambda r: tolerance_label(r["property_name"], r["avg_target"]), axis=1
+    )
 
     display_expectation = expectation_summary.copy()
     display_expectation["Runs outside tolerance"] = display_expectation.apply(

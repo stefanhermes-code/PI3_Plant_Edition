@@ -360,7 +360,7 @@ with tab_result_manual:
                     actual_value = c4.number_input("Actual value", step=0.1)
                     method_revision = c5.text_input("Method edition / revision (e.g. 2017)")
                     if property_def:
-                        st.caption(f"Industry accepted tolerance for {property_def.name}: {tolerance_label(property_def.name)}")
+                        st.caption(f"Industry accepted tolerance for {property_def.name}: {tolerance_label(property_def.name, target_value)}")
                     replicate_no = st.number_input(
                         "Replicate no.", min_value=1, step=1, value=1,
                         help=(
@@ -832,7 +832,7 @@ if selected_result:
         )
         st.caption(
             f"Industry accepted tolerance for {selected_result.property_name}: "
-            f"{tolerance_label(selected_result.property_name)}"
+            f"{tolerance_label(selected_result.property_name, selected_result.target_value)}"
         )
 
         emc1, emc2 = st.columns(2)
