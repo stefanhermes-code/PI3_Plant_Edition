@@ -1893,6 +1893,10 @@ class RegulatoryReferenceSet(Base):
     # The date somebody confirmed the file was the current official one. PI3
     # does not decide currency; it records who said so and when.
     source_checked_date = Column(Date)
+    # Who confirmed it. The person saying "this is the current official file"
+    # is making a statement PI3 relies on, and an unsigned statement is not
+    # evidence. Distinct from loaded_by, which only says who ran the load.
+    source_checked_by = Column(String(200))
     original_file_name = Column(String(300))
     file_hash = Column(String(64))          # sha256 of the file as loaded
     parser_name = Column(String(80))

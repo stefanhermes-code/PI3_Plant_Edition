@@ -44,13 +44,37 @@ META = {"name": "Candidate List", "version": "2026-06", "parser_name": "candidat
         "parser_version": "v1"}
 
 
+def storage_on():
+    os.environ["SUPABASE_URL"] = "https://example.supabase.co"
+    os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "test-service-key"
+
+
+def storage_off():
+    os.environ.pop("SUPABASE_URL", None)
+    os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
+
+
+def accepting(method, url, headers, data):
+    return 200, b""
+
+
 def load(session, slot=rr.SLOT_CANDIDATE_LIST, raw=b"official-file-bytes",
          rows=None, meta=None, who="Stefan Hermes", name="list.xlsx",
-         checked=dt.date(2026, 8, 21), **kw):
+         checked=dt.date(2026, 8, 21), checked_by="Stefan Hermes",
+         transport=accepting, storage=True, **kw):
+    """A load that is expected to succeed.
+
+    Storage is on and the transport accepts, because after the fail-closed
+    rule of 21 Aug 2026 a load with neither cannot activate anything - which
+    is the point, and is tested directly below rather than assumed here."""
+    # storage=False leaves it unconfigured, which is how the fail-closed cases
+    # are exercised - turning it on here unconditionally would defeat them.
+    storage_on() if storage else storage_off()
     return rr.load_reference(
         session, slot, ROWS if rows is None else rows, dict(META, **(meta or {})),
         raw_bytes=raw, original_file_name=name, source_checked_date=checked,
-        loaded_by=who, **kw)
+        source_checked_by=checked_by, loaded_by=who,
+        storage_transport=transport, **kw)
 
 
 print("=" * 78)
@@ -186,8 +210,14 @@ loaded, label = rr.reference_state(s, rr.SLOT_CANDIDATE_LIST)
 check("reference_state reports the slot as loaded", True, loaded)
 check("and names the version and the source-checked date", True,
       "2026-06" in label and "2026-08-21" in label, label)
-check("and says out loud that no original was retained", True,
-      "no original retained" in label, label)
+# Was: asserted the label said "no original retained". After the fail-closed
+# rule of 21 Aug 2026 an active dataset ALWAYS has its original, so the check
+# is replaced by its inverse rather than deleted - the suite should record that
+# the rule changed, and in which direction.
+check("an active dataset never reports incomplete provenance", False,
+      "provenance incomplete" in label, label)
+check("and names who confirmed the source", True,
+      "confirmed by" in label, label)
 
 print("\n" + "=" * 78)
 print("G. STORAGE OF THE ORIGINAL")
@@ -203,8 +233,7 @@ def ok_transport(method, url, headers, data):
     return 200, b""
 
 
-os.environ["SUPABASE_URL"] = "https://example.supabase.co"
-os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "test-service-key"
+storage_on()
 check("storage reports itself configured", True, rs.is_configured())
 
 raw = b"official-file-bytes"
@@ -245,33 +274,24 @@ check("a refused upload raises with the reason from Storage", True, refused)
 
 # Loading with storage configured records where the original went.
 s = fresh()
-loaded_set = load(s, raw=raw, storage_transport=ok_transport); s.commit()
+loaded_set = load(s, raw=raw, transport=ok_transport); s.commit()
 check("the dataset records the bucket", "regulatory-sources", loaded_set.storage_bucket)
 check("the dataset records the object key", True,
       digest in (loaded_set.storage_object_key or ""))
 check("reference_state no longer says the original is missing", False,
       "no original retained" in rr.reference_state(s, rr.SLOT_CANDIDATE_LIST)[1])
 
-del os.environ["SUPABASE_URL"]
-del os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+storage_off()
 check("storage reports itself unconfigured again", False, rs.is_configured())
-
-s = fresh()
-unstored = load(s); s.commit()
-check("a load still succeeds with storage unconfigured", True, unstored.is_active)
-check("and records that no original was retained", "none", unstored.storage_backend)
 
 print("\n" + "=" * 78)
 print("H. A STORAGE FAILURE LEAVES NOTHING BEHIND")
 print("=" * 78)
-os.environ["SUPABASE_URL"] = "https://example.supabase.co"
-os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "test-service-key"
 s = fresh()
-existing = load(s, raw=b"already-here", storage_transport=ok_transport); s.commit()
+existing = load(s, raw=b"already-here", transport=ok_transport); s.commit()
 existing_id = existing.id
 try:
-    load(s, raw=b"new-file",
-         storage_transport=lambda **kw: (500, b'{"message":"storage down"}'))
+    load(s, raw=b"new-file", transport=lambda **kw: (500, b'{"message":"storage down"}'))
     stored = True
 except rs.StorageError:
     s.rollback()
@@ -280,8 +300,113 @@ check("a storage failure aborts the load", False, stored)
 check("no partial dataset row is left", 1, s.query(m.RegulatoryReferenceSet).count())
 check("the previous dataset is untouched and still active", True,
       bool(s.get(m.RegulatoryReferenceSet, existing_id).is_active))
-del os.environ["SUPABASE_URL"]
-del os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+
+print("\n" + "=" * 78)
+print("I. FAIL CLOSED AT ACTIVATION (Charlie, 21 Aug 2026)")
+print("=" * 78)
+# The five controls he named, each with its inverse, because a rule that only
+# ever blocks is indistinguishable from a rule that always blocks.
+
+
+def try_load(session, **kw):
+    """(activated, exception) - never raises, so a case can assert either."""
+    try:
+        return load(session, **kw), None
+    except Exception as exc:
+        session.rollback()
+        return None, exc
+
+
+print("\nI1. Storage unavailable blocks activation")
+s = fresh()
+seed = load(s, raw=b"the-incumbent"); s.commit()
+seed_id = seed.id
+got, exc = try_load(s, raw=b"newcomer", transport=None, storage=False)
+check("with storage unconfigured, nothing is activated", None, got)
+check("and the reason is an activation block", True,
+      isinstance(exc, rr.ActivationBlocked), type(exc).__name__)
+check("the message names the missing configuration", True,
+      "SUPABASE_URL" in str(exc), str(exc)[:200])
+check("no row was written", 1, s.query(m.RegulatoryReferenceSet).count())
+check("the previous dataset is STILL ACTIVE", True,
+      bool(s.get(m.RegulatoryReferenceSet, seed_id).is_active))
+check("and still the active set for its slot", seed_id,
+      rr.active_set(s, rr.SLOT_CANDIDATE_LIST).id)
+
+print("\nI2. Upload failure blocks activation and preserves the incumbent")
+s = fresh()
+seed = load(s, raw=b"the-incumbent"); s.commit()
+seed_id = seed.id
+got, exc = try_load(s, raw=b"newcomer",
+                    transport=lambda **kw: (500, b'{"message":"storage down"}'))
+check("an upload failure activates nothing", None, got)
+check("and surfaces as a storage error", True,
+      isinstance(exc, rs.StorageError), type(exc).__name__)
+check("no row was written", 1, s.query(m.RegulatoryReferenceSet).count())
+check("the previous dataset is STILL ACTIVE", True,
+      bool(s.get(m.RegulatoryReferenceSet, seed_id).is_active))
+
+print("\nI3. Successful storage allows activation")
+s = fresh()
+seed = load(s, raw=b"the-incumbent"); s.commit()
+seed_id = seed.id
+got, exc = try_load(s, raw=b"newcomer")
+s.commit()
+check("with the original retained, the dataset activates", True, bool(got and got.is_active))
+check("its original is recorded", True, bool(got and got.storage_object_key))
+check("and the previous one is superseded", "superseded",
+      s.get(m.RegulatoryReferenceSet, seed_id).status)
+
+print("\nI4. Missing source-checked confirmation blocks activation")
+s = fresh()
+got, exc = try_load(s, checked=None)
+check("no source-checked DATE, nothing activated", None, got)
+check("and the message says the date is missing", True,
+      "date the source was confirmed" in str(exc), str(exc)[:200])
+check("no row was written", 0, s.query(m.RegulatoryReferenceSet).count())
+
+s = fresh()
+got, exc = try_load(s, checked_by=None)
+check("no source checker named, nothing activated", None, got)
+check("and the message says the check must be attributable", True,
+      "attributable" in str(exc), str(exc)[:200])
+
+s = fresh()
+got, exc = try_load(s, checked_by="   ")
+check("a blank name is not a signature", None, got)
+
+_, exc_all = try_load(fresh(), checked=None, checked_by=None,
+                      transport=None, storage=False)
+check("every blocker is named at once, not one at a time", 3,
+      sum(1 for phrase in ("SUPABASE_URL", "date the source was confirmed",
+                           "attributable") if phrase in str(exc_all)),
+      str(exc_all)[:300])
+
+print("\nI5. A completed source check allows activation")
+s = fresh()
+got, exc = try_load(s, checked=dt.date(2026, 8, 21), checked_by="Stefan Hermes")
+s.commit()
+check("with the check complete, the dataset activates", True, bool(got and got.is_active))
+check("who confirmed the source is retained", "Stefan Hermes",
+      got.source_checked_by if got else None)
+check("and when", dt.date(2026, 8, 21), got.source_checked_date if got else None)
+loaded, label = rr.reference_state(s, rr.SLOT_CANDIDATE_LIST)
+check("reference_state names who confirmed it", True,
+      "confirmed by Stefan Hermes" in label, label)
+check("and no longer warns about provenance", False,
+      "provenance incomplete" in label, label)
+
+print("\nI6. The database refuses an incomplete active dataset too")
+# Belt and braces: the application guard above is the readable one, but a row
+# inserted by any other route must still be refused. SQLite does not enforce
+# the CHECK added by migration 0006, so this asserts the model carries the
+# field the constraint depends on rather than re-testing Postgres here.
+check("the model carries source_checked_by", True,
+      "source_checked_by" in m.RegulatoryReferenceSet.__table__.columns)
+check("and storage_object_key", True,
+      "storage_object_key" in m.RegulatoryReferenceSet.__table__.columns)
+
+storage_off()
 
 print("\n" + "=" * 78)
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")

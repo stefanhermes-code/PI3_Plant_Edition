@@ -213,11 +213,15 @@ def reference_state(session, slot):
     parts = [s.version or "unversioned"]
     if s.source_checked_date:
         parts.append("source checked %s" % s.source_checked_date.isoformat())
+    if s.source_checked_by:
+        parts.append("confirmed by %s" % s.source_checked_by)
     if not s.storage_object_key:
-        # Said out loud rather than left to be discovered. A dataset whose
-        # original was never retained is still usable, but it cannot be proved
-        # against the file it came from.
-        parts.append("no original retained")
+        # Since the fail-closed rule this cannot happen through load_reference,
+        # and the database refuses it too. It is reported rather than assumed
+        # away because a row that reached this state came from somewhere other
+        # than the loader, and a report that quietly omitted it would be the
+        # worst possible outcome for a regulatory reference.
+        parts.append("WARNING: no original retained - provenance incomplete")
     return True, "%s (%s)" % (s.name or slot_label(slot), ", ".join(parts))
 
 
@@ -305,9 +309,51 @@ def find_by_hash(session, slot, file_hash):
     )
 
 
+class ActivationBlocked(RuntimeError):
+    """A dataset cannot become the active one for its slot yet.
+
+    Charlie's stop-point review, 21 Aug 2026: an official regulatory dataset
+    may become active only once its immutable original has been retained and
+    its source-check provenance is complete.
+
+    The reasoning, because it is worth keeping next to the code that enforces
+    it. A supplier document that cannot be retained is an inconvenience. A
+    regulatory dataset that cannot be traced back to the exact file it came
+    from is a dataset that cannot support a compliance conclusion - so the
+    original is not a companion to the records, it is a precondition of their
+    being usable. Failing closed keeps a valid source file from controlling an
+    assessment before its provenance is complete."""
+
+
+def activation_blockers(*, source_checked_date, source_checked_by,
+                        storage_configured):
+    """Everything standing between this file and activation, named.
+
+    A single "cannot activate" is useless to somebody holding a valid official
+    file. Each blocker says what is missing and who fixes it."""
+    blockers = []
+    if not storage_configured:
+        blockers.append(
+            "Supabase Storage is not configured, so the original source file "
+            "cannot be retained. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY "
+            "and create the private %s bucket." % regulatory_storage.BUCKET
+        )
+    if source_checked_date is None:
+        blockers.append(
+            "The date the source was confirmed as the current official file is "
+            "not recorded."
+        )
+    if not (source_checked_by or "").strip():
+        blockers.append(
+            "Nobody is recorded as having confirmed the source. The check must "
+            "be attributable."
+        )
+    return blockers
+
+
 def load_reference(session, slot, records, meta, *, raw_bytes,
-                   original_file_name, source_checked_date, loaded_by,
-                   storage_transport=None, retain_original=True):
+                   original_file_name, source_checked_date, source_checked_by,
+                   loaded_by, storage_transport=None):
     """Store one parsed official file as the new ACTIVE dataset in its slot.
 
     The sequence matters and is deliberate:
@@ -316,8 +362,11 @@ def load_reference(session, slot, records, meta, *, raw_bytes,
          reaches the database;
       2. the file hash is checked against this slot - the same official file
          loaded twice is refused, not silently duplicated;
-      3. the original is uploaded to Supabase Storage BEFORE any row is
-         written, so a storage failure leaves nothing behind to tidy up;
+      3. the activation preconditions are checked and the original is
+         uploaded to Supabase Storage BEFORE any row is written. Nothing is
+         written unless the dataset can actually be activated, so a storage
+         failure or an incomplete source check leaves the previous active
+         dataset exactly as it was;
       4. the previous active dataset is superseded rather than deleted, and it
          records what replaced it. An assessment that cited it keeps citing it,
          which is the discipline a superseded safety data sheet already follows;
@@ -335,13 +384,28 @@ def load_reference(session, slot, records, meta, *, raw_bytes,
     if existing is not None:
         raise DuplicateDataset(existing)
 
-    storage = {"storage_backend": regulatory_storage.BACKEND_NONE,
-               "storage_bucket": None, "storage_object_key": None,
-               "file_size": len(raw_bytes)}
-    if retain_original and regulatory_storage.is_configured():
-        storage = regulatory_storage.put_original(
-            slot, raw_bytes, original_file_name, transport=storage_transport
+    # Fail closed, and fail before anything is written. A file may be parsed
+    # and validated without storage - that is the importer's job - but it
+    # cannot become the dataset an assessment reads from until its provenance
+    # is complete.
+    blockers = activation_blockers(
+        source_checked_date=source_checked_date,
+        source_checked_by=source_checked_by,
+        storage_configured=regulatory_storage.is_configured(),
+    )
+    if blockers:
+        raise ActivationBlocked(
+            "This file was not activated for the %s slot, and the dataset "
+            "already active there is unchanged. %s"
+            % (slot_label(slot), " ".join(blockers))
         )
+
+    # Raises StorageError on failure, which reaches the caller before any row
+    # exists. The previous active dataset is untouched by design rather than by
+    # rollback.
+    storage = regulatory_storage.put_original(
+        slot, raw_bytes, original_file_name, transport=storage_transport
+    )
 
     now = _dt.datetime.now(_dt.timezone.utc)
 
@@ -359,6 +423,7 @@ def load_reference(session, slot, records, meta, *, raw_bytes,
         source=(meta.get("disclaimer") or "")[:400] or None,
         source_url=entry["source"],
         source_checked_date=source_checked_date,
+        source_checked_by=source_checked_by,
         original_file_name=original_file_name,
         file_hash=file_hash,
         parser_name=meta.get("parser_name"),
