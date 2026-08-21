@@ -329,11 +329,16 @@ CRITERIA = (
         "note": (
             "The criterion is written by reference to the SDS itself - 'from the moment "
             "this appear on the SDS' - so it is answered by reading section 2 of each raw "
-            "material's safety data sheet. This is the one criterion PI3 can settle "
-            "deterministically rather than indicatively. Section 3.5 exempts biocides. "
-            "The source document also notes that a label holder who receives an SDS with "
-            "such a classification and has no drop-in substitute may request a transition "
-            "period from the EUROPUR secretariat."
+            "material's safety data sheet. That is the limb PI3 evaluates here, and it is "
+            "the one PI3 can settle deterministically rather than indicatively. "
+            "The harmonised-classification limb of the requirement is a regulatory-list "
+            "question and is not evaluated by CertiPUR Readiness; screening substances "
+            "against Annex VI to CLP belongs to REACH Readiness, so that PI3's CertiPUR "
+            "module stays usable without a REACH subscription. This module neither claims "
+            "that check has been done nor reports its absence as a CertiPUR gap. "
+            "Section 3.5 exempts biocides. The source document also notes that a label "
+            "holder who receives an SDS with such a classification and has no drop-in "
+            "substitute may request a transition period from the EUROPUR secretariat."
         ),
     },
     {

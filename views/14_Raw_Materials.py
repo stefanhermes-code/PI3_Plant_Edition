@@ -566,10 +566,14 @@ with tab_docs:
                         st.error("The document could not be stored. Try again, or ask your administrator to check the error log.")
 
             # --- the controlled identity route (2026-08-21) -----------------
-            # For a raw material no supplier issues a sheet for. Water is the
-            # case that forced it: a known identity, no hazard classification,
-            # no supplier, and previously a permanent evidence gap on four
-            # CertiPUR criteria with no honest way to close it.
+            # For a raw material where no supplier safety data sheet is held.
+            # Water is the case that forced it: a known identity, no sheet in
+            # the customer dataset, and previously a permanent gap on the
+            # composition screens with no honest way to close it.
+            #
+            # It answers COMPOSITION questions - what the material contains -
+            # and nothing else. It is not a classification and does not answer
+            # criterion 3.4, which reads the classification a supplier states.
             held_comp = (
                 session.query(RawMaterialComposition)
                 .filter(RawMaterialComposition.raw_material_id == chosen.id,
@@ -583,10 +587,11 @@ with tab_docs:
                 expanded=False,
             ):
                 st.caption(
-                    "For a raw material no supplier issues a safety data sheet for - water is the "
-                    "usual one. The composition screens read this where no readable sheet is held, "
-                    "and every assessment records which of the two routes it used. This does not "
-                    "replace a supplier sheet where one exists."
+                    "For a raw material where no supplier safety data sheet is held - water is "
+                    "the usual one. The composition screens read this where no readable sheet is "
+                    "available, and every assessment records which of the two routes it used. It "
+                    "states what the material is, not how it is classified, so it does not "
+                    "replace a supplier sheet where one exists and does not answer criterion 3.4."
                 )
                 if held_comp:
                     st.dataframe(

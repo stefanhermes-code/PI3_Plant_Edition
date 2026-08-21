@@ -31,8 +31,6 @@ import streamlit as st
 
 import audit_log
 import certipur_assessment as ca
-import regulatory_import as ri
-import regulatory_reference as rr
 import certipur_criteria as cc
 import document_store
 import reports
@@ -130,83 +128,6 @@ else:
     # It is not decoration. Five criteria are satisfied BY this declaration,
     # with PI3's screening supporting it - so without it on record those five
     # cannot read as met however clean the screen is.
-    # --- the controlled regulatory reference library (2026-08-21) ----------
-    # Platform owner only. This is not customer data: it is the published
-    # regulatory reference PI3 looks substances up in, and it is loaded from
-    # the official file rather than typed or transcribed. Sitting on this page
-    # because this is where its absence is reported - criterion 3.4 cannot
-    # return a positive conclusion while the harmonised classification
-    # reference is not loaded.
-    if user["is_platform_owner"]:
-        _refs = [
-            (rr.REFERENCE_HARMONISED_CLP, "Annex VI to CLP", "xlsx",
-             "Criterion 3.4, second limb. Without it 3.4 cannot read Meets requirement."),
-            (rr.REFERENCE_RESTRICTED_AZO, "REACH Entry 43 appendices", "csv",
-             "Criterion 3.2, the CAS identity step. Its absence adds no finding and removes none."),
-        ]
-        _loaded = {t: rr.reference_state(session, t) for t, _l, _e, _w in _refs}
-        with st.expander(
-            "Controlled regulatory reference library — %d of %d loaded"
-            % (sum(1 for t in _loaded if _loaded[t][0]), len(_refs)),
-            expanded=not all(_loaded[t][0] for t in _loaded),
-        ):
-            st.caption(
-                "The published regulatory data PI3 resolves a CAS number against. Loaded from "
-                "the official file, versioned and hashed, with the date somebody confirmed the "
-                "source. PI3 does not decide whether a file is current; it records who said so "
-                "and when, and every conclusion drawn from it names the version it used."
-            )
-            for _type, _label, _ext, _why in _refs:
-                _ok, _state = _loaded[_type]
-                st.markdown("**%s** — %s" % (_label, _state))
-                st.caption("%s  ·  Source: %s" % (_why, rr.REFERENCE_SOURCES[_type]))
-                if _type == rr.REFERENCE_RESTRICTED_AZO:
-                    _app = st.selectbox(
-                        "Which appendix", (ri.APPENDIX_8, ri.APPENDIX_9),
-                        key="ref_app_%s" % _type,
-                    )
-                else:
-                    _app = None
-                _up = st.file_uploader(
-                    "Official file (%s)" % _ext, type=[_ext], key="ref_up_%s" % _type
-                )
-                _checked = st.date_input(
-                    "Date you confirmed this is the current official file",
-                    value=dt.date.today(), key="ref_date_%s" % _type,
-                )
-                if _up is not None and st.button("Load %s" % _label, key="ref_go_%s" % _type):
-                    try:
-                        _up.seek(0)
-                        _raw = _up.read()
-                        if _type == rr.REFERENCE_HARMONISED_CLP:
-                            _records, _meta = ri.parse_annex_vi(_raw)
-                        else:
-                            _records, _meta = ri.parse_entry_43(_raw, _app)
-                        _added = rr.load_reference(
-                            session, _type, _records, _meta, raw_bytes=_raw,
-                            original_file_name=_up.name, source_checked_date=_checked,
-                            loaded_by=user.get("display_name") or user.get("username"),
-                        )
-                        session.commit()
-                        set_pending_banner(
-                            "certipur_msg",
-                            "%s loaded: %d records from %s, active as version %s. Any earlier "
-                            "version is superseded and the assessments that used it are "
-                            "unchanged." % (_label, _added.record_count, _up.name, _added.version),
-                        )
-                        st.rerun()
-                    except ri.ImportRejected as exc:
-                        # The whole point of the signature check: say what was
-                        # wrong with the file, and store nothing.
-                        st.error(str(exc))
-                    except Exception:
-                        session.rollback()
-                        st.error(
-                            "The file could not be loaded. Nothing has been stored. Ask your "
-                            "administrator to check the error log."
-                        )
-                st.divider()
-
     _declaration = document_store.current_company_document(
         session, company.id, DOCUMENT_TYPE_APPLICANT_DECLARATION
     )

@@ -40,7 +40,6 @@ import datetime as dt
 
 import certipur_criteria as cc
 import document_store
-import regulatory_reference as rr
 from db import (
     DOCUMENT_TYPE_APPLICANT_DECLARATION,
     DOCUMENT_TYPE_SDS,
@@ -355,48 +354,26 @@ def _measured(criterion):
     return _result(STATUS_TESTING, rationale, action)
 
 
-def _disclosed_cas(session, resolved, materials):
-    """Every CAS number disclosed in the compositions of these materials,
-    with the material and document each came from.
-
-    Only CAS numbers that survive normalisation AND the check digit are used
-    for a regulatory lookup. A number that fails the check digit is not
-    silently dropped - it is returned separately so the caller can report it,
-    because a mistyped identifier that nobody notices is how a prohibited
-    substance passes."""
-    good, malformed = [], []
-    for material in materials:
-        subs, _route, doc = _composition_for(session, material, resolved)
-        if not subs:
-            continue
-        for sub in subs:
-            if not sub.cas_number:
-                continue
-            norm = rr.normalise_cas(sub.cas_number)
-            if norm and rr.cas_check_digit_ok(norm):
-                good.append((material, doc, sub, norm))
-            else:
-                malformed.append((material, doc, sub))
-    return good, malformed
-
-
 def _hazard_classification(session, criterion, resolved):
-    """Section 3.4 - the one criterion answered deterministically, and after
-    Charlie's review of 21 Aug 2026 it is answered from TWO sources.
+    """Section 3.4 - answered from the supplier's own classification.
 
-    The CertiPUR requirement has two limbs and they are not the same fact:
+    CertiPUR prohibits a raw material carrying a CMR category 1A/1B or STOT
+    SE 1 classification "from the moment this appear on the SDS". That is what
+    this criterion reads: the classification the supplier states on the safety
+    data sheet, plus any other CertiPUR evidence held for the material.
 
-      the SUPPLIER SELF-CLASSIFICATION printed on the safety data sheet, which
-      prohibits use "from the moment this appear on the SDS"; and
+    It does NOT read Annex VI to CLP. Harmonised-classification screening is a
+    REACH Readiness matter (Charlie's scope instruction of 21 Aug 2026), and
+    CertiPUR must stay fully usable for a company that has no REACH Readiness
+    subscription. A missing regulatory dataset is therefore never reported here
+    as a CertiPUR evidence gap.
 
-      the HARMONISED CLASSIFICATION under CLP Regulation 1272/2008, which
-      prohibits use from the date it enters into application regardless of what
-      any supplier happened to write on any sheet.
-
-    A supplier can be behind. The harmonised list is the fact that does not
-    depend on them, so a clean sheet alone is not an answer - it is half of
-    one. Where the harmonised reference is not loaded, this criterion cannot
-    return Meets requirement and says so.
+    A material with no supplier sheet cannot be answered by a controlled
+    composition record either. That record carries an IDENTITY, not a
+    classification, and treating identity as though it answered a
+    classification question would report a screen that never happened. Such a
+    material is named as a genuine evidence gap, closable with a supplier
+    declaration or statement.
 
     Biocides are excluded here, not overlooked: section 3.5 says the 3.4 rule
     does not apply to them, so including a biocide would produce a failure the
@@ -411,39 +388,39 @@ def _hazard_classification(session, criterion, resolved):
             "biocides from this criterion.",
         )
 
-    evidence, hits, missing, forthcoming = [], [], [], []
+    evidence, hits, missing = [], [], []
 
     # --- limb 1: the supplier self-classification on the sheet --------------
-    covered_by_identity = []
     for material in in_scope:
         doc = resolved["sds_by_material"].get(material.id)
         if doc is None:
-            # No supplier sheet. A controlled composition record does not carry
-            # a supplier self-classification and never will - the point of the
-            # route is that no supplier issues a sheet for this material. What
-            # it does carry is an identity, and the harmonised limb below is
-            # exactly the check that answers the question for such a material.
-            # Recorded as its own route rather than counted as a gap, so the
-            # report says which materials were answered which way.
+            # No supplier sheet, so there is no supplier self-classification to
+            # read. A controlled composition record does NOT close this: it
+            # states what the material is, not how it is classified, and
+            # letting an identity stand in for a classification would report a
+            # check that never ran. The material is named as a gap, and the
+            # evidence register says which of the two situations it is in so
+            # the reader can tell "nothing held at all" from "identity held,
+            # classification not evidenced".
             rows = (resolved.get("composition_by_material") or {}).get(material.id) or []
+            missing.append(material)
             if rows:
-                covered_by_identity.append(material)
                 evidence.append(_ev(
                     ROUTE_CONTROLLED,
-                    "No supplier issues a safety data sheet for this raw material. Its identity "
-                    "is held as a controlled composition record (%s) and is answered by the "
-                    "harmonised classification check below."
+                    "No safety data sheet is held for this raw material. A controlled "
+                    "composition record is held (%s), which establishes its identity but does "
+                    "not state a hazard classification, so this criterion is not answered for "
+                    "it."
                     % "; ".join(sorted({(r.source or "recorded identity") for r in rows})),
                     material,
                 ))
-                continue
-            missing.append(material)
-            evidence.append(_ev(
-                "None held",
-                "No safety data sheet and no controlled composition record are held for this "
-                "raw material.",
-                material,
-            ))
+            else:
+                evidence.append(_ev(
+                    "None held",
+                    "No safety data sheet and no controlled composition record are held for this "
+                    "raw material.",
+                    material,
+                ))
             continue
         prohibited = cc.prohibited_hazard_codes(doc.hazard_codes)
         if prohibited:
@@ -461,69 +438,6 @@ def _hazard_classification(session, criterion, resolved):
                 material, doc,
             ))
 
-    # --- limb 2: the harmonised classification under CLP --------------------
-    loaded, ref_label = rr.reference_state(session, rr.REFERENCE_HARMONISED_CLP)
-    screened_cas, malformed = _disclosed_cas(session, resolved, in_scope)
-    for material, doc, sub in malformed:
-        evidence.append(_ev(
-            DOCUMENT_TYPE_SDS,
-            "CAS number %r could not be read as a valid CAS registry number, so this substance "
-            "was not looked up against the harmonised classification."
-            % (sub.cas_number or ""),
-            material, doc,
-        ))
-    if loaded:
-        by_cas = {}
-        for record in rr.lookup(session, rr.REFERENCE_HARMONISED_CLP,
-                                [c for _m, _d, _s, c in screened_cas]):
-            by_cas.setdefault(record.cas_normalised, []).append(record)
-        # A harmonised classification binds from the date it ENTERS INTO
-        # APPLICATION. One that applies from a future date is not a finding
-        # today - reporting it as one would fail foam against a rule that is
-        # not yet in force - but it is worth knowing about, so it is recorded
-        # as a forthcoming change rather than dropped.
-        as_at = dt.date.today()
-        for material, doc, sub, norm in screened_cas:
-            for record in by_cas.get(norm, []):
-                prohibited = cc.prohibited_hazard_codes(record.classification_codes)
-                if not prohibited:
-                    continue
-                applies = record.in_application_date
-                name = record.substance_name or sub.name or "substance"
-                if applies is not None and applies > as_at:
-                    forthcoming.append((material, prohibited, applies))
-                    evidence.append(_ev(
-                        "Harmonised classification (Annex VI to CLP)",
-                        "%s (CAS %s) has a harmonised classification of %s entering into "
-                        "application on %s. Not yet in force, so not a finding today. Source: "
-                        "%s, row %s."
-                        % (name, record.cas_number, ", ".join(prohibited),
-                           applies.isoformat(), ref_label, record.source_row_number),
-                        material, doc,
-                    ))
-                    continue
-                hits.append((material, prohibited, doc, "harmonised classification"))
-                evidence.append(_ev(
-                    "Harmonised classification (Annex VI to CLP)",
-                    "%s (CAS %s) carries the harmonised classification %s%s. Source: %s, row %s."
-                    % (name, record.cas_number, ", ".join(prohibited),
-                       (", in application since " + applies.isoformat()) if applies else "",
-                       ref_label, record.source_row_number),
-                    material, doc,
-                ))
-        evidence.append(_ev(
-            "Harmonised classification (Annex VI to CLP)",
-            "%d disclosed CAS number%s screened against %s."
-            % (len(screened_cas), "" if len(screened_cas) == 1 else "s", ref_label),
-        ))
-    else:
-        evidence.append(_ev(
-            "None held",
-            "The harmonised classification reference (Annex VI to CLP) is not loaded, so the "
-            "second limb of this criterion could not be checked. %d disclosed CAS number%s "
-            "available to screen." % (len(screened_cas), " was" if len(screened_cas) == 1 else "s were"),
-        ))
-
     if excluded:
         evidence.append(_ev(
             "Formulation",
@@ -532,9 +446,8 @@ def _hazard_classification(session, criterion, resolved):
         ))
 
     if hits:
-        # A prohibition takes precedence over a missing document or an
-        # unloaded reference: a known failure is not softened by an
-        # incomplete file.
+        # A prohibition takes precedence over a missing document: a known
+        # failure is not softened by an incomplete file.
         named = "; ".join("%s (%s, from the %s)" % (m.name, ", ".join(codes), source)
                           for m, codes, _d, source in hits)
         rationale = (
@@ -558,54 +471,20 @@ def _hazard_classification(session, criterion, resolved):
         return _result(
             STATUS_MISSING,
             "%d of %d raw materials have no safety data sheet, so their hazard classification "
-            "is unknown: %s" % (len(missing), len(in_scope), ", ".join(m.name for m in missing)),
-            "Attach the safety data sheet for each named raw material on the Raw Materials "
-            "Documents tab. Where no supplier issues a sheet - water, for instance - record the "
-            "material's controlled composition there instead.",
+            "is not evidenced: %s" % (len(missing), len(in_scope), ", ".join(m.name for m in missing)),
+            "Attach the supplier safety data sheet for each named raw material on the Raw "
+            "Materials Documents tab. Where the supplier does not provide one, a supplier "
+            "declaration or written statement of the material's classification is acceptable "
+            "evidence for this criterion. A controlled composition record does not close it: "
+            "it establishes identity, not classification.",
             evidence,
         )
 
-    if not loaded:
-        # Charlie, 21 Aug 2026: "A clean SDS alone cannot return Meets
-        # requirement while the harmonised-classification check is absent."
-        return _result(
-            STATUS_MISSING,
-            "No safety data sheet among the %d raw materials in scope carries H340, H350, H360 "
-            "or H370. That answers the supplier self-classification limb of this criterion. The "
-            "harmonised classification limb could not be answered: the Annex VI to CLP reference "
-            "is not loaded, and CertiPUR prohibits a substance carrying a harmonised CMR 1A/1B or "
-            "STOT SE 1 classification whatever the supplier's own sheet says."
-            % len(in_scope),
-            "Load the current official Annex VI to CLP table as the harmonised classification "
-            "reference, then reassess. Source: %s"
-            % rr.REFERENCE_SOURCES[rr.REFERENCE_HARMONISED_CLP],
-            evidence,
-        )
-
-    sheets = len(in_scope) - len(covered_by_identity)
-    by_sheet = ("All %d raw materials in scope hold a current safety data sheet and none carries "
-                "H340, H350, H360 or H370." % len(in_scope)) if not covered_by_identity else (
-        "%d of %d raw materials in scope hold a current safety data sheet and none carries H340, "
-        "H350, H360 or H370. The remaining %d %s answered through the controlled identity route, "
-        "no supplier issuing a sheet for %s: %s."
-        % (sheets, len(in_scope), len(covered_by_identity),
-           "is" if len(covered_by_identity) == 1 else "are",
-           "it" if len(covered_by_identity) == 1 else "them",
-           ", ".join(m.name for m in covered_by_identity)))
-    tail = ""
-    if forthcoming:
-        tail = ("\n%d raw material%s carr%s a harmonised classification that is not yet in "
-                "force: %s. Not a finding today, and worth planning for."
-                % (len(forthcoming), "" if len(forthcoming) == 1 else "s",
-                   "ies" if len(forthcoming) == 1 else "y",
-                   "; ".join("%s (%s from %s)" % (m.name, ", ".join(c), d.isoformat())
-                             for m, c, d in forthcoming)))
     return _result(
         STATUS_MEETS,
-        "%s %d disclosed CAS number%s screened against %s, and none carries a harmonised "
-        "CMR 1A/1B or STOT SE 1 classification in force today.%s"
-        % (by_sheet, len(screened_cas), " was" if len(screened_cas) == 1 else "s were",
-           ref_label, tail),
+        "All %d raw materials in scope hold a current safety data sheet and none carries H340, "
+        "H350, H360 or H370, so none is classified CMR category 1A/1B or STOT SE 1 by its "
+        "supplier." % len(in_scope),
         None, evidence,
     )
 
@@ -696,8 +575,9 @@ def _substance_screen(session, criterion, resolved, applies_to_categories=None):
             "%d of %d raw materials could not be screened because no composition is held for "
             "them: %s" % (len(missing), len(materials), ", ".join(m.name for m in missing)),
             "Attach the safety data sheet for each named raw material on the Raw Materials "
-            "Documents tab. Where no supplier issues a sheet for a material - water, for "
-            "instance - record its controlled composition there instead.",
+            "Documents tab. Where no supplier sheet is held for a material, record its "
+            "controlled composition there instead - that is enough for a composition screen, "
+            "which reads what the material contains.",
             evidence,
         )
 
@@ -879,79 +759,6 @@ _CHLOROBENZENE_STATEMENT = (
 
 
 
-def _azo_colourants(session, criterion, resolved):
-    """Section 3.2 - CAS identity first, supplier statement second.
-
-    Returns a Potential issue on a positive identity match. Otherwise defers
-    entirely to _supplier_statement, adding what the CAS step did or could not
-    do to the evidence register so the report never implies a screen happened
-    that did not."""
-    colourants = [m for m in resolved["materials"] if (m.category or "") == CATEGORY_COLOURANT]
-    if not colourants:
-        return _supplier_statement(session, criterion, resolved, {CATEGORY_COLOURANT}, _AZO_STATEMENT)
-
-    loaded, ref_label = rr.reference_state(session, rr.REFERENCE_RESTRICTED_AZO)
-    screened, malformed = _disclosed_cas(session, resolved, colourants)
-    extra = []
-    for material, doc, sub in malformed:
-        extra.append(_ev(
-            DOCUMENT_TYPE_SDS,
-            "CAS number %r could not be read as a valid CAS registry number, so this substance "
-            "was not looked up against the restricted azo colourant reference."
-            % (sub.cas_number or ""),
-            material, doc,
-        ))
-
-    if loaded:
-        by_cas = {}
-        for record in rr.lookup(session, rr.REFERENCE_RESTRICTED_AZO,
-                                [c for _m, _d, _s, c in screened]):
-            by_cas.setdefault(record.cas_normalised, []).append(record)
-        found = []
-        for material, doc, sub, norm in screened:
-            for record in by_cas.get(norm, []):
-                found.append((material, record))
-                extra.append(_ev(
-                    "Restricted azo colourants (REACH Annex XVII Entry 43)",
-                    "%s (CAS %s) is listed under %s. Source: %s, row %s."
-                    % (record.substance_name or sub.name or "substance", record.cas_number,
-                       record.entry_reference or "Restriction Entry 43", ref_label,
-                       record.source_row_number),
-                    material, doc,
-                ))
-        if found:
-            named = "; ".join("%s contains %s" % (m.name, r.substance_name or r.cas_number)
-                              for m, r in found)
-            return _result(
-                STATUS_POTENTIAL,
-                "A colourant in this formulation discloses a substance listed under REACH "
-                "Restriction Entry 43: %s" % named,
-                "Confirm with the colourant supplier whether the substance is present as "
-                "supplied, and substitute the colourant if it is.",
-                extra,
-            )
-        extra.append(_ev(
-            "Restricted azo colourants (REACH Annex XVII Entry 43)",
-            "%d disclosed CAS number%s screened against %s, none listed. A clean screen does "
-            "not clear this criterion: Entry 43 restricts the aromatic amines a colourant may "
-            "release, which a safety data sheet need not disclose."
-            % (len(screened), "" if len(screened) == 1 else "s", ref_label),
-        ))
-    else:
-        extra.append(_ev(
-            "None held",
-            "The restricted azo colourant reference is not loaded, so the CAS identity step did "
-            "not run. It could only have raised a finding, never cleared the criterion, so the "
-            "conclusion below is unaffected.",
-        ))
-
-    result = _supplier_statement(session, criterion, resolved, {CATEGORY_COLOURANT}, _AZO_STATEMENT)
-    merged = dict(result)
-    merged["evidence"] = extra + list(result.get("evidence") or [])
-    return merged
-
-
-
 def _apply_declaration_requirement(criterion, resolved, result):
     """A criterion that rests on the applicant's declaration cannot read Meets
     requirement on screening alone (Charlie's review, 21 Aug 2026).
@@ -1051,7 +858,16 @@ def evaluate_criterion(session, criterion, resolved):
         # RELEASE, which a safety data sheet is under no obligation to disclose.
         # So the CAS step can only ever ADD a Potential issue; it can never
         # produce a pass, and its absence cannot produce one either.
-        return _azo_colourants(session, criterion, resolved)
+        # Supplier evidence plus the applicant declaration. CertiPUR does not
+        # load or evaluate the REACH Entry 43 dataset (Charlie's scope
+        # instruction, 21 Aug 2026): Entry 43 restricts the aromatic amines a
+        # colourant may RELEASE, which is a supplier-attested fact about the
+        # colourant, not something a CAS identity list can settle. Any
+        # regulatory-list screening of these substances belongs to REACH
+        # Readiness.
+        return _supplier_statement(
+            session, criterion, resolved, {CATEGORY_COLOURANT}, _AZO_STATEMENT
+        )
     if key == "CP-3.5-BIOCIDES":
         return _supplier_statement(session, criterion, resolved, {CATEGORY_BIOCIDE}, _BIOCIDE_STATEMENT)
     if key == "CP-3.7-CHLOROBENZENES":
