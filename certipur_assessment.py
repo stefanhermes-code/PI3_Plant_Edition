@@ -41,6 +41,7 @@ import datetime as dt
 import certipur_criteria as cc
 import document_store
 from db import (
+    DOCUMENT_TYPE_APPLICANT_DECLARATION,
     DOCUMENT_TYPE_SDS,
     SUPPLIER_EVIDENCE_TYPES,
     CertipurAssessment,
@@ -153,7 +154,7 @@ def _active_recipe_version(foam_grade):
     return next((v for v in versions if v.is_active), versions[-1])
 
 
-def resolve_grade(session, foam_grade):
+def resolve_grade(session, foam_grade, company=None):
     """Everything the assessment needs about one foam grade, and everything it
     could not find.
 
@@ -170,8 +171,13 @@ def resolve_grade(session, foam_grade):
         "sds_by_material": {},
         "supplier_evidence_by_material": {},
         "materials_without_sds": [],
+        "applicant_declaration": None,
         "blocking": None,
     }
+    if company is not None:
+        out["applicant_declaration"] = document_store.current_company_document(
+            session, company.id, DOCUMENT_TYPE_APPLICANT_DECLARATION
+        )
 
     version = _active_recipe_version(foam_grade)
     if version is None:
@@ -261,6 +267,11 @@ def _normalise_cas(value):
 # ---------------------------------------------------------------------------
 # The per-criterion rules
 # ---------------------------------------------------------------------------
+
+def _sentence(text):
+    """Capitalise the first character and leave every other one alone."""
+    return (text[:1].upper() + text[1:]) if text else text
+
 
 def _result(status, rationale, action=None, evidence=None):
     return {"status": status, "rationale": rationale, "action": action, "evidence": evidence or []}
@@ -508,45 +519,119 @@ def _supplier_statement(session, criterion, resolved, categories, what_is_needed
             % " or ".join(c.lower() for c in categories),
         )
 
-    evidence, missing = [], []
+    rule = cc.content_rule(criterion.criterion_key) or {}
+    terms = rule.get("terms") or []
+    limit = rule.get("limit")
+    states = rule.get("states") or what_is_needed
+
+    evidence, no_document, unsupported, over_limit, supported = [], [], [], [], []
     for material in materials:
         held = [
             d for d in (resolved["supplier_evidence_by_material"].get(material.id) or [])
             if d.document_type in accepted
         ]
         if not held:
-            missing.append(material)
+            no_document.append(material)
             evidence.append(_ev(
                 "None held",
-                "No supplier evidence of an accepted kind is held for this raw material. "
-                "Accepted: %s." % ", ".join(accepted),
+                "No supplier evidence of an accepted kind is held. Accepted: %s."
+                % ", ".join(accepted),
                 material,
             ))
-        else:
-            doc = held[0]
+            continue
+
+        # The document is READ, not merely counted. A file that never mentions
+        # the substance in question supports nothing, however correctly it is
+        # typed and filed.
+        best = None
+        for doc in held:
+            ok, found, missing_terms = document_store.read_for_terms(doc.extracted_text, terms)
+            value, passage = (None, None)
+            if limit:
+                value, passage = document_store.read_limit(
+                    doc.extracted_text, terms, limit.get("unit", "ppm")
+                )
+            candidate = (doc, ok, found, missing_terms, value, passage)
+            if best is None or (ok and not best[1]):
+                best = candidate
+            if ok and (not limit or value is not None):
+                best = candidate
+                break
+
+        doc, ok, found, missing_terms, value, passage = best
+
+        if limit and value is not None:
+            detail = "States %s %s %s." % (limit["label"], value, limit.get("unit", ""))
+            if value > limit["max"]:
+                over_limit.append((material, value, doc))
+                evidence.append(_ev(doc.document_type,
+                                    detail + " The limit is %s %s. %s"
+                                    % (limit["max"], limit.get("unit", ""), passage or ""),
+                                    material, doc))
+            else:
+                supported.append(material)
+                evidence.append(_ev(doc.document_type,
+                                    detail + " Within the %s %s limit. %s"
+                                    % (limit["max"], limit.get("unit", ""), passage or ""),
+                                    material, doc))
+            continue
+
+        if ok and not limit:
+            supported.append(material)
             evidence.append(_ev(
                 doc.document_type,
-                "A %s is held. Its contents are not read by PI3 - what is recorded is that the "
-                "evidence exists and where." % doc.document_type.lower(),
+                "Addresses " + "; ".join("%s (%s)" % (k, v) for k, v in found.items()),
                 material, doc,
             ))
+        else:
+            unsupported.append((material, doc, missing_terms, bool(limit)))
+            if limit and value is None:
+                why = ("The document is held but no %s figure could be read from it."
+                       % limit["label"])
+            else:
+                why = ("The document is held but does not mention %s."
+                       % ", ".join(missing_terms))
+            evidence.append(_ev(doc.document_type, why, material, doc))
 
-    if missing:
+    if over_limit:
         return _result(
-            STATUS_MISSING,
-            "Supplier evidence is needed for %d raw material%s and none of an accepted kind is "
-            "held: %s. %s"
-            % (len(missing), "" if len(missing) == 1 else "s",
-               ", ".join(m.name for m in missing), what_is_needed),
-            "Ask the supplier for it and attach it on the Raw Materials Documents tab, typed as "
-            "what it actually is. Any of these satisfies this criterion: %s." % ", ".join(accepted),
+            STATUS_POTENTIAL,
+            "Supplier evidence states a figure above the CertiPUR limit: %s"
+            % "; ".join("%s at %s %s" % (m.name, v, limit.get("unit", ""))
+                        for m, v, _ in over_limit),
+            "Ask the supplier whether a grade within the limit is available, or substitute the "
+            "raw material.",
             evidence,
         )
+
+    if no_document or unsupported:
+        parts = []
+        if no_document:
+            parts.append(
+                "no supplier evidence is held for %s" % ", ".join(m.name for m in no_document)
+            )
+        if unsupported:
+            parts.append(
+                "evidence is held for %s but does not carry what the criterion needs"
+                % ", ".join(m.name for m, _, _, _ in unsupported)
+            )
+        return _result(
+            STATUS_MISSING,
+            "%s. %s What is needed: %s."
+            # First character only. str.capitalize() lowercases the rest, which
+            # turns a raw material called "CP TDI" into "cp tdi" in the middle
+            # of a compliance finding.
+            % (_sentence(" and ".join(parts)), what_is_needed, states),
+            "Ask the supplier for evidence stating %s, and attach it on the Raw Materials "
+            "Documents tab typed as what it actually is. Any of these is accepted: %s."
+            % (states, ", ".join(accepted)),
+            evidence,
+        )
+
     return _result(
         STATUS_MEETS,
-        "Supplier evidence of an accepted kind is held for all %d relevant raw material%s. The "
-        "content of that evidence is not read by PI3 - what is recorded is that it exists and "
-        "where." % (len(materials), "" if len(materials) == 1 else "s"),
+        "Supplier evidence was read for all %d relevant raw material%s and states %s."
+        % (len(materials), "" if len(materials) == 1 else "s", states),
         None, evidence,
     )
 
@@ -568,6 +653,62 @@ _CHLOROBENZENE_STATEMENT = (
     "CertiPUR states the evidence may be obtained from the raw material supplier: a limit of "
     "20 ppm total chlorobenzenes in the diisocyanate."
 )
+
+
+def _apply_declaration_requirement(criterion, resolved, result):
+    """A criterion that rests on the applicant's declaration cannot read Meets
+    requirement on screening alone (Charlie's review, 21 Aug 2026).
+
+    PI3 screening SUPPORTS the declaration. It does not replace it. A clean
+    screen with nothing signed is a well-prepared application that has not been
+    signed yet, and reporting that as met would misstate what is in place.
+
+    Only ever downgrades. A screen that found a prohibited substance stays a
+    Potential issue - a missing signature does not soften a real finding."""
+    if criterion.criterion_key not in cc.DECLARATION_BACKED:
+        return result
+    if result["status"] != STATUS_MEETS:
+        return result
+
+    declaration = resolved.get("applicant_declaration")
+    evidence = list(result.get("evidence") or [])
+    if declaration is None:
+        evidence.append({
+            "evidence_type": "None held",
+            "raw_material_id": None, "raw_material_name": None,
+            "document_id": None, "document_reference": None,
+            "detail": "No CertiPUR applicant declaration is recorded for this company.",
+        })
+        return _result(
+            STATUS_MISSING,
+            result["rationale"]
+            + " That supports the declaration but does not stand in for it: this criterion is "
+              "satisfied by the applicant's declaration that the substances are not intentionally "
+              "added, and no such declaration is recorded.",
+            "Record the signed CertiPUR applicant declaration (application form, section 6) "
+            "against the company on the CertiPUR Readiness page.",
+            evidence,
+        )
+
+    evidence.append({
+        "evidence_type": DOCUMENT_TYPE_APPLICANT_DECLARATION,
+        "raw_material_id": None, "raw_material_name": None,
+        "document_id": None,
+        "document_reference": "%s%s" % (
+            declaration.file_name or "(no file name)",
+            (" · " + declaration.document_date.isoformat()) if declaration.document_date else "",
+        ),
+        "detail": "The signed applicant declaration is on record%s."
+                  % ((", signed by " + declaration.signed_by) if declaration.signed_by else ""),
+    })
+    out = dict(result)
+    out["evidence"] = evidence
+    out["rationale"] = (
+        result["rationale"]
+        + " The applicant's signed declaration is on record, which is the formal evidence for "
+          "this criterion; the screening above supports it."
+    )
+    return out
 
 
 def evaluate_criterion(session, criterion, resolved):
@@ -615,13 +756,20 @@ def evaluate_criterion(session, criterion, resolved):
     return _substance_screen(session, criterion, resolved)
 
 
-def assess(session, foam_grade, criteria_set=None):
+def evaluate(session, criterion, resolved):
+    """evaluate_criterion plus the applicant-declaration requirement."""
+    return _apply_declaration_requirement(
+        criterion, resolved, evaluate_criterion(session, criterion, resolved)
+    )
+
+
+def assess(session, foam_grade, criteria_set=None, company=None):
     """The whole pre-audit for one foam grade, unsaved.
 
     Returns {"resolved": ..., "criteria_set": ..., "items": [...],
     "counts": {...}, "blocking": str or None}."""
     criteria_set = criteria_set or ensure_criteria_set(session)
-    resolved = resolve_grade(session, foam_grade)
+    resolved = resolve_grade(session, foam_grade, company=company)
     criteria = criteria_for(session, criteria_set)
 
     if resolved["blocking"]:
@@ -632,7 +780,7 @@ def assess(session, foam_grade, criteria_set=None):
 
     items = []
     for criterion in criteria:
-        result = evaluate_criterion(session, criterion, resolved)
+        result = evaluate(session, criterion, resolved)
         items.append({"criterion": criterion, **result})
 
     counts = {s: 0 for s in STATUSES}
@@ -723,16 +871,21 @@ def readiness_headline(counts, blocking=None):
     missing = counts.get(STATUS_MISSING, 0)
     testing = counts.get(STATUS_TESTING, 0)
     meets = counts.get(STATUS_MEETS, 0)
+    # Wording per Charlie's review of 21 Aug 2026. "No compliance concern was
+    # found" claims more than the assessment establishes when criteria are still
+    # unanswered - absence of a finding in evidence that was never examined is
+    # not absence of a concern. The line now says what was actually looked at.
     if issues:
         lead = "%d criterion%s indicate%s a compliance concern" % (
             issues, "" if issues == 1 else "s", "s" if issues == 1 else ""
         )
     elif missing:
-        lead = "No compliance concern found, but %d criteri%s cannot be answered yet" % (
-            missing, "on" if missing == 1 else "a"
+        lead = (
+            "No potential issue was identified in the evidence assessed, and %d criteri%s "
+            "cannot be answered yet" % (missing, "on" if missing == 1 else "a")
         )
     else:
-        lead = "Every criterion PI3 can assess is supported by evidence"
+        lead = "No potential issue was identified, and every criterion PI3 assesses is supported by evidence"
     return (
         "%s. %d met, %d awaiting evidence, %d requiring independent laboratory testing."
         % (lead, meets, missing, testing)

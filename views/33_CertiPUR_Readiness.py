@@ -30,10 +30,19 @@ import streamlit as st
 import audit_log
 import certipur_assessment as ca
 import certipur_criteria as cc
+import document_store
 import reports
 from access_control import can_use_page
 from auth import current_user, logout_button, require_login
-from db import CertipurAssessment, Company, FoamGrade, Plant, get_session, init_db
+from db import (
+    DOCUMENT_TYPE_APPLICANT_DECLARATION,
+    CertipurAssessment,
+    Company,
+    FoamGrade,
+    Plant,
+    get_session,
+    init_db,
+)
 from helpers import (
     page_setup,
     render_function_action_intro,
@@ -106,6 +115,85 @@ else:
     criteria_set = ca.ensure_criteria_set(session)
     session.commit()
 
+    # --- the applicant's own declaration ---------------------------------
+    # Section 6 of the CertiPUR application form: the legal entity declares
+    # that the prohibited substances are not intentionally added. It is signed
+    # once and covers every foam family applied for, so it belongs to the
+    # company rather than to a grade or a raw material.
+    #
+    # It is not decoration. Five criteria are satisfied BY this declaration,
+    # with PI3's screening supporting it - so without it on record those five
+    # cannot read as met however clean the screen is.
+    _declaration = document_store.current_company_document(
+        session, company.id, DOCUMENT_TYPE_APPLICANT_DECLARATION
+    )
+    with st.expander(
+        "CertiPUR applicant declaration — %s"
+        % ("on record" if _declaration is not None else "not recorded"),
+        expanded=_declaration is None,
+    ):
+        st.caption(
+            "The declaration signed on section 6 of the CertiPUR application form, that the "
+            "prohibited substances in section 3 of the technical requirements are not "
+            "intentionally added. Five criteria are satisfied by this declaration; PI3's "
+            "screening of recipes, compositions and supplier documents supports it rather than "
+            "replacing it."
+        )
+        if _declaration is not None:
+            st.success(
+                "Held: %s%s%s"
+                % (
+                    _declaration.file_name or "(no file name)",
+                    (" · signed by %s" % _declaration.signed_by) if _declaration.signed_by else "",
+                    (" · %s" % _declaration.document_date.isoformat())
+                    if _declaration.document_date else "",
+                )
+            )
+            if _declaration.file_bytes:
+                st.download_button(
+                    "Download the declaration on record",
+                    data=bytes(_declaration.file_bytes),
+                    file_name=_declaration.file_name or "applicant_declaration.pdf",
+                    mime=_declaration.content_type or "application/pdf",
+                    key="certipur_decl_dl",
+                )
+        else:
+            st.warning(
+                "Not recorded. The five declaration-backed criteria will report as an evidence "
+                "gap until it is."
+            )
+        if page_usable:
+            dc1, dc2 = st.columns(2)
+            decl_signed_by = dc1.text_input("Signed by", key="certipur_decl_by")
+            decl_date = dc2.date_input("Date signed", value=None, key="certipur_decl_date")
+            decl_file = st.file_uploader(
+                "Signed declaration (PDF)", type=["pdf"], key="certipur_decl_file"
+            )
+            if decl_file is not None and st.button("Record the declaration", key="certipur_decl_save"):
+                try:
+                    decl_file.seek(0)
+                    raw = decl_file.read()
+                    decl_file.seek(0)
+                    document_store.store_company_document(
+                        session, company, raw, decl_file.name,
+                        DOCUMENT_TYPE_APPLICANT_DECLARATION,
+                        uploaded_by=user.get("display_name") or user.get("username"),
+                        extracted_text=None,
+                        signed_by=decl_signed_by.strip() or None,
+                        document_date=decl_date,
+                    )
+                    session.commit()
+                    set_pending_banner(
+                        "certipur_banner",
+                        "CertiPUR applicant declaration recorded for %s." % company.name,
+                    )
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+                except Exception:
+                    session.rollback()
+                    st.error("The declaration could not be stored. Try again.")
+
     grade_ids = grade_ids_for_company(session, company.id)
     grades = (
         apply_scope(session.query(FoamGrade), FoamGrade.id, grade_ids)
@@ -132,7 +220,7 @@ else:
                     % grade.grade_name
                 )
 
-            outcome = ca.assess(session, grade, criteria_set)
+            outcome = ca.assess(session, grade, criteria_set, company=company)
             resolved = outcome["resolved"]
 
             if outcome["blocking"]:

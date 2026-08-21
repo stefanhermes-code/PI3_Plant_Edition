@@ -494,6 +494,95 @@ ACCEPTED_EVIDENCE = {
 }
 
 
+# What a document has to SAY before it supports a criterion (Charlie's review
+# of 21 Aug 2026).
+#
+# The rule his review corrected: a document being present is not evidence. The
+# earlier engine returned Meets requirement because a document of an accepted
+# type existed, and said in its own wording that the contents were not read -
+# which reaches beyond what was actually established. A supplier declaration
+# filed against a colour paste proves a file was uploaded. It proves nothing
+# about cadmium until somebody reads the cadmium figure.
+#
+# So each criterion that rests on supplier evidence carries:
+#   terms       every concept the document must mention, each given as a group
+#               of alternative spellings - ALL groups must appear
+#   limit       an optional numeric ceiling to find and compare, with the unit
+#               to look for. Where a limit is set, the number is extracted and
+#               compared; a document that names the substance but states a
+#               figure over the limit is a Potential issue, not a gap.
+#   states      a plain-language description of what the reader should expect
+#               to find, used verbatim in the gap message so the customer can
+#               ask their supplier for the right thing.
+#
+# The matching is deliberately shallow - it establishes that the document
+# addresses the question and, where a number is involved, what that number is.
+# It is not a claim to have understood the document, and the evidence register
+# records the passage found so a human can check it.
+
+CONTENT_RULES = {
+    "CP-3.1-HEAVY-METALS": {
+        "terms": [
+            ["cadmium", "cd "],
+            ["lead", "pb "],
+            ["chromium", "chrome", "cr "],
+        ],
+        "limit": None,
+        "states": (
+            "the cadmium, chromium and lead concentrations the supplier delivers in the paste"
+        ),
+    },
+    "CP-3.2-AZO-DYES": {
+        "terms": [
+            ["azo", "azocolourant", "azocolorant", "azodye"],
+            ["restriction entry 43", "entry 43", "reach", "1907/2006", "aromatic amine"],
+        ],
+        "limit": None,
+        "states": (
+            "a statement that the colourant does not release any of the aromatic amines "
+            "restricted under REACH Restriction Entry 43"
+        ),
+    },
+    "CP-3.5-BIOCIDES": {
+        "terms": [
+            ["biocid", "product type 9", "pt9", "pt 9"],
+            ["528/2012", "biocidal products regulation", "bpr", "authoris", "authoriz"],
+        ],
+        "limit": None,
+        "states": (
+            "confirmation that the biocide is authorised under Regulation 528/2012 for product "
+            "type 9"
+        ),
+    },
+    "CP-3.7-CHLOROBENZENES": {
+        "terms": [["chlorobenzene"]],
+        "limit": {"max": 20.0, "unit": "ppm", "label": "total chlorobenzenes"},
+        "states": "the total chlorobenzene content of the diisocyanate, against a 20 ppm limit",
+    },
+}
+
+
+def content_rule(criterion_key):
+    return CONTENT_RULES.get(criterion_key)
+
+
+# Criteria whose positive conclusion rests on the applicant's own declaration -
+# section 6 of the CertiPUR application form, where the legal entity states that
+# the prohibited substances are not intentionally added.
+#
+# PI3's screening of recipes, compositions and supplier documents SUPPORTS that
+# declaration; it does not replace it. A clean screen with no declaration on
+# file is a well-prepared application that has not been signed, and reporting it
+# as Meets requirement would misrepresent what is actually in place.
+DECLARATION_BACKED = (
+    "CP-3.1-HEAVY-METALS",
+    "CP-3.2-AZO-DYES",
+    "CP-3.3-PHTHALATE-PROHIBITION",
+    "CP-3.6-BLOWING-AGENTS",
+    "CP-3.8-BROMINATED-DIPHENYL-ETHERS",
+)
+
+
 def accepted_evidence(criterion_key):
     """Document types that satisfy this criterion, or () where the criterion is
     answered from the formulation rather than from a document."""

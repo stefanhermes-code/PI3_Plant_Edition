@@ -4285,11 +4285,12 @@ def _certipur_headline(counts, blocking=None):
     if issues:
         lead = "%d criterion%s indicated a compliance concern" % (issues, "" if issues == 1 else "s")
     elif missing:
-        lead = "No compliance concern was found, but %d criteri%s could not be answered" % (
-            missing, "on" if missing == 1 else "a"
+        lead = (
+            "No potential issue was identified in the evidence assessed, and %d criteri%s "
+            "could not be answered" % (missing, "on" if missing == 1 else "a")
         )
     else:
-        lead = "Every criterion assessed was supported by evidence"
+        lead = "No potential issue was identified, and every criterion assessed was supported by evidence"
     return (
         "%s. %d met, %d awaiting evidence, %d requiring independent laboratory testing."
         % (lead, meets, missing, testing)

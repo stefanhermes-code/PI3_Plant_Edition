@@ -955,6 +955,46 @@ class RawMaterialSubstance(Base):
     document = relationship("RawMaterialDocument", back_populates="substances")
 
 
+# ---------------------------------------------------------------------------
+# 5c. company_documents - evidence held at company level (added 2026-08-21)
+# ---------------------------------------------------------------------------
+# Some CertiPUR evidence does not belong to a raw material. The applicant's own
+# declaration - section 6 of the application form, where the company states
+# that prohibited substances are not intentionally added - is signed once by
+# the legal entity and covers every foam family it applies for.
+#
+# Charlie's review of 21 Aug 2026 made this load-bearing rather than
+# decorative: where the CertiPUR requirements rest on an applicant declaration,
+# a positive readiness conclusion needs the declaration RECORDED, together with
+# the screening evidence that supports it. Without somewhere to record it, the
+# assessment was concluding from the screen alone - which is the finding that
+# sent the pre-audit sample back.
+#
+# Deliberately narrow. This is not a general document manager: same shape as
+# RawMaterialDocument, one row per document, superseded rather than replaced,
+# so the two behave alike and an assessment can cite either.
+class CompanyDocument(Base):
+    __tablename__ = "company_documents"
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    document_type = Column(String(50), nullable=False)  # see DOCUMENT_TYPES
+    file_name = Column(String(300))
+    content_type = Column(String(100))
+    file_bytes = Column(LargeBinary)
+    file_size = Column(Integer)
+    file_hash = Column(String(64))
+    extracted_text = Column(Text)
+    document_reference = Column(String(200))   # e.g. the CertiPUR reference number
+    document_date = Column(Date)
+    signed_by = Column(String(200))
+    is_current = Column(Boolean, default=True)
+    uploaded_by = Column(String(200))
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    company = relationship("Company")
+
+
 class RecipeComponent(Base):
     __tablename__ = "recipe_components"
 

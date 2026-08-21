@@ -29,9 +29,11 @@ Three rules are enforced here rather than left to each caller:
 
 import datetime as dt
 import hashlib
+import re
 
 import ai_assistant
 from db import (
+    CompanyDocument,
     DOCUMENT_TYPE_SDS,
     DOCUMENT_TYPES,
     MAX_DOCUMENT_BYTES,
@@ -244,3 +246,138 @@ def extraction_summary(doc):
     if doc.extraction_notes:
         line += " " + doc.extraction_notes
     return line
+
+
+# ---------------------------------------------------------------------------
+# Reading a document, rather than noting that one exists
+# ---------------------------------------------------------------------------
+# Charlie's review of 21 Aug 2026: "A document being present is not sufficient
+# evidence for a positive result. PI3 must read the content needed by the
+# criterion."
+#
+# What these two functions do is establish that a document ADDRESSES the
+# question, and where a number is involved, what that number is. They are not a
+# claim to have understood the document - which is why every result carries the
+# passage found, so a person can check it against the source in one look.
+#
+# What they will not do is guess. A term that is absent is absent; a figure that
+# cannot be parsed is reported as unread rather than assumed compliant. The
+# whole point of the correction is that silence must not read as a pass.
+
+_NUMBER_NEAR = 60          # characters either side of a term to look for a figure
+_NUM_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:ppm|mg/kg|mg\s*/\s*kg)", re.I)
+
+
+def _passage(text, index, width=110):
+    """A readable window around a match, for the evidence register."""
+    start = max(0, index - width // 2)
+    snippet = " ".join(text[start:start + width].split())
+    return ("..." if start else "") + snippet + "..."
+
+
+def read_for_terms(text, term_groups):
+    """Does the text mention every concept the criterion needs?
+
+    term_groups is a list of alternative-spelling groups; EVERY group must
+    match, any one alternative within it will do. Returns
+    (all_found, found_map, missing_labels) where found_map is
+    group_label -> passage."""
+    if not text:
+        return False, {}, [grp[0] for grp in term_groups]
+    low = text.lower()
+    found, missing = {}, []
+    for group in term_groups:
+        hit = None
+        for term in group:
+            idx = low.find(term.lower())
+            if idx >= 0:
+                hit = _passage(text, idx)
+                break
+        if hit is None:
+            missing.append(group[0])
+        else:
+            found[group[0]] = hit
+    return (not missing), found, missing
+
+
+def read_limit(text, term_groups, unit_hint="ppm"):
+    """The figure a quantitative criterion needs, and the passage it came from.
+
+    Looks for a number carrying a ppm-style unit near one of the criterion's
+    own terms, rather than anywhere in the document - a safety data sheet is
+    full of numbers, and the nearest one to the word that matters is the only
+    one worth reading. Returns (value or None, passage or None)."""
+    if not text:
+        return None, None
+    low = text.lower()
+    for group in term_groups:
+        for term in group:
+            for m in re.finditer(re.escape(term.lower()), low):
+                window_start = max(0, m.start() - _NUMBER_NEAR)
+                window = text[window_start:m.end() + _NUMBER_NEAR]
+                num = _NUM_RE.search(window)
+                if num:
+                    try:
+                        return float(num.group(1).replace(",", ".")), _passage(text, m.start())
+                    except ValueError:
+                        continue
+    return None, None
+
+
+def current_company_document(session, company_id, document_type):
+    """The current company-level document of this type, or None."""
+    if not company_id:
+        return None
+    return (
+        session.query(CompanyDocument)
+        .filter(
+            CompanyDocument.company_id == company_id,
+            CompanyDocument.document_type == document_type,
+            CompanyDocument.is_current.is_(True),
+        )
+        .order_by(CompanyDocument.created_at.desc())
+        .first()
+    )
+
+
+def store_company_document(
+    session, company, file_bytes, file_name, document_type, uploaded_by=None,
+    extracted_text=None, document_reference=None, document_date=None, signed_by=None,
+    content_type="application/pdf",
+):
+    """Company-level equivalent of store_document. Same rules: keep the file,
+    supersede rather than overwrite, refuse what should not be stored."""
+    if document_type not in DOCUMENT_TYPES:
+        raise ValueError("%s is not a document type this application stores." % document_type)
+    if not file_bytes:
+        raise ValueError("The file is empty.")
+    if len(file_bytes) > MAX_DOCUMENT_BYTES:
+        raise ValueError(
+            "The file is %.1f MB. The limit is %d MB."
+            % (len(file_bytes) / (1024 * 1024), MAX_DOCUMENT_BYTES // (1024 * 1024))
+        )
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
+    existing = current_company_document(session, company.id, document_type)
+    if existing is not None and existing.file_hash == file_hash:
+        return existing
+
+    doc = CompanyDocument(
+        company_id=company.id,
+        document_type=document_type,
+        file_name=(file_name or "")[:300],
+        content_type=content_type,
+        file_bytes=file_bytes,
+        file_size=len(file_bytes),
+        file_hash=file_hash,
+        extracted_text=extracted_text or None,
+        document_reference=(document_reference or None),
+        document_date=document_date,
+        signed_by=(signed_by or None),
+        is_current=True,
+        uploaded_by=uploaded_by,
+    )
+    session.add(doc)
+    session.flush()
+    if existing is not None:
+        existing.is_current = False
+    return doc
