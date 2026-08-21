@@ -83,13 +83,33 @@ class Sandbox:
                 "where migration_name = :n"), {"n": name}).first()
 
     def close(self):
-        migrate.MIGRATIONS_DIR = self._saved_dir
-        self.engine.dispose()
-        shutil.rmtree(self.dir, ignore_errors=True)
-        admin = sa.create_engine(BASE_URL + "/postgres", isolation_level="AUTOCOMMIT")
-        with admin.connect() as conn:
-            conn.execute(sa.text('drop database if exists "%s"' % self.db))
-        admin.dispose()
+        # Restore FIRST and unconditionally. A case that failed before its
+        # cleanup used to leave migrate.MIGRATIONS_DIR pointing at a temporary
+        # directory for the rest of the process. It could never write into the
+        # live directory, but a later case would then read migrations that had
+        # just been deleted - a confusing failure with an unrelated cause.
+        try:
+            migrate.MIGRATIONS_DIR = self._saved_dir
+        finally:
+            try:
+                self.engine.dispose()
+                shutil.rmtree(self.dir, ignore_errors=True)
+                admin = sa.create_engine(BASE_URL + "/postgres",
+                                         isolation_level="AUTOCOMMIT")
+                with admin.connect() as conn:
+                    conn.execute(sa.text('drop database if exists "%s"' % self.db))
+                admin.dispose()
+            except Exception:
+                # Cleanup of a throwaway database must never mask the real
+                # failure that brought us here.
+                pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
 
 def seeded(box):
@@ -279,6 +299,35 @@ except ValueError as exc:
     malformed = "malformed @expect" in str(exc)
 check("a malformed @expect line is rejected", True, malformed)
 box.close()
+
+print("\n" + "=" * 78)
+print("I. TEST FIXTURES ARE ISOLATED FROM THE LIVE MIGRATIONS DIRECTORY")
+print("=" * 78)
+# Charlie's R-A1 release, 21 Aug 2026: the deliberately broken and
+# wrong-assertion migrations used to prove rollback must remain test fixtures
+# only, and must never be capable of appearing in a production sequence.
+live = migrate.MIGRATIONS_DIR
+check("the tests restored the live migrations directory", True,
+      os.path.isdir(live) and "pi3mig_" not in live, live)
+
+live_files = sorted(f for f in os.listdir(live) if f.endswith(".sql"))
+check("every file in the live directory is a numbered migration", True,
+      all(migrate.FILENAME_RE.match(f) for f in live_files), live_files)
+for banned in ("deliberately_broken", "wrong_assertion", "broken", "fixture"):
+    check(f'no live migration is named "{banned}"', [],
+          [f for f in live_files if banned in f])
+check("the live directory loads cleanly", True,
+      len(migrate.load_migrations()) == len(live_files), live_files)
+
+# The fixtures the tests DO create must be somewhere else entirely.
+probe = Sandbox()
+check("a test's migrations directory is a fresh temporary one", True,
+      probe.dir != live and "pi3mig_" in probe.dir, probe.dir)
+probe.write("0001_deliberately_broken.sql", "select * from nowhere;")
+check("writing a fixture does not touch the live directory", live_files,
+      sorted(f for f in os.listdir(live) if f.endswith(".sql")))
+probe.close()
+check("and the live directory is restored afterwards", live, migrate.MIGRATIONS_DIR)
 
 print("\n" + "=" * 78)
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")

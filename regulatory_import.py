@@ -105,7 +105,7 @@ def parse_annex_vi(file_bytes):
     except Exception:
         raise ImportRejected(
             "This file could not be opened as an Excel workbook. Download the table again "
-            "from %s and upload it unchanged." % rr.REFERENCE_SOURCES[rr.REFERENCE_HARMONISED_CLP]
+            "from %s and upload it unchanged." % rr.REFERENCE_SOURCES[rr.SLOT_ANNEX_VI_CLP]
         )
 
     sheet = next((n for n in wb.sheetnames if re.fullmatch(r"(CLP\d*|ATP\d+)", n or "")), None)

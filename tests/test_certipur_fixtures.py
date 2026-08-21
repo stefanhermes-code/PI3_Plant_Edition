@@ -24,10 +24,10 @@ def fresh():
     m.Base.metadata.create_all(eng)
     return sessionmaker(bind=eng)()
 
-def load_reference(s, reference_type, rows, version='2026-08'):
+def load_reference(s, slot, rows, version='2026-08'):
     """A controlled reference set, as a loader would create it. Fixture data:
     the real sets are loaded from the official ECHA files."""
-    rs = m.RegulatoryReferenceSet(reference_type=reference_type, name=reference_type,
+    rs = m.RegulatoryReferenceSet(dataset_slot=slot, name=slot, status='active',
                                   version=version, source='UAT fixture', file_hash='0'*64,
                                   parser_name='fixture', parser_version='v1',
                                   record_count=len(rows), is_active=True, loaded_by='uat')
@@ -105,9 +105,9 @@ def build(s, *, colour_doc=None, iso_doc=None, sds_hazards=None, extra_subs=None
             signed_by="A. Director", is_current=True))
     s.commit()
     if clp is not None:
-        load_reference(s, rr.REFERENCE_HARMONISED_CLP, clp)
+        load_reference(s, rr.SLOT_ANNEX_VI_CLP, clp)
     if azo is not None:
-        load_reference(s, rr.REFERENCE_RESTRICTED_AZO, azo)
+        load_reference(s, rr.SLOT_ENTRY_43_AZO_DYES, azo)
     return s.get(m.FoamGrade, 1), s.get(m.Company, 1)
 
 CLEAN_COLOUR = ("Colour paste analysis. Cadmium < 1 ppm. Lead < 1 ppm. Chromium < 1 ppm. "

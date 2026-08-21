@@ -1881,7 +1881,11 @@ class RegulatoryReferenceSet(Base):
     __tablename__ = "regulatory_reference_sets"
 
     id = Column(Integer, primary_key=True)
-    reference_type = Column(String(120), nullable=False)   # see regulatory_reference.REFERENCE_TYPES
+    # The regulatory SLOT this dataset sits in - a short stable key from
+    # regulatory_reference.DATASET_SLOTS, never a display label. It is written
+    # into every dataset loaded under it, so renaming the label must not
+    # orphan the rows.
+    dataset_slot = Column(String(120), nullable=False, index=True)
     name = Column(String(200))
     version = Column(String(80))
     source = Column(String(400))
@@ -1897,6 +1901,26 @@ class RegulatoryReferenceSet(Base):
     is_active = Column(Boolean, default=False)
     loaded_by = Column(String(200))
     created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    # Where the immutable original is retained (REACH R-A1). The bytes are NOT
+    # held here: an official regulatory file is megabytes, every row of it is
+    # already parsed into regulatory_reference_records, and the original is
+    # kept to PROVE what was loaded rather than to be read back routinely.
+    # storage_object_key is null when no original was retained - the dataset is
+    # still usable and reference_state() says so out loud.
+    storage_backend = Column(String(40))
+    storage_bucket = Column(String(120))
+    storage_object_key = Column(String(400))
+    file_size = Column(Integer)
+
+    # The activation workflow. is_active alone cannot answer "who activated
+    # this, when, and what did it replace", which is what an auditor asks about
+    # a regulatory dataset.
+    status = Column(String(20), nullable=False, default="active")
+    activated_at = Column(DateTime(timezone=True))
+    activated_by = Column(String(200))
+    superseded_at = Column(DateTime(timezone=True))
+    superseded_by_set_id = Column(Integer, ForeignKey("regulatory_reference_sets.id"))
 
 
 class RegulatoryReferenceRecord(Base):
