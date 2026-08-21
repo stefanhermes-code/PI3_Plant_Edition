@@ -214,6 +214,23 @@ CUSTOMER_TYPE_GROUP = {name: group for _id, name, group in CUSTOMER_TYPES}
 
 ZONE_LABELS = ["Top", "Middle", "Bottom", "Whole sample / N/A"]
 
+# The fixed production-QC structure (Charlie's data-integrity instruction,
+# 20 Aug 2026): every production run has exactly three samples, one per zone.
+# "Whole sample / N/A" is NOT one of them - a block has a top, a middle and a
+# bottom, and a production sample that claims to be the whole block is not a
+# zone measurement at all.
+#
+# Trial samples keep the full ZONE_LABELS list above. Customer Trial and
+# Optimization Trial sample structures stay under their own workflows, and a
+# lab trial genuinely can be a single whole specimen.
+#
+# Enforced in three places on purpose: the pickers offer only these, the write
+# paths refuse anything else, and the database carries a CHECK constraint plus
+# a partial unique index on (production_run_id, zone_label) - see migration
+# pi3_production_sample_integrity. The application half stops a mistake with a
+# readable message; the database half stops one arriving by any other route.
+PRODUCTION_ZONE_LABELS = ["Top", "Middle", "Bottom"]
+
 # A sample/result/issue belongs to exactly one of these three parents -
 # never more than one, never none. Enforced at the app level
 # (sample_source_fk_field() below, used by pages 5/6/9) rather than a DB CHECK, to keep local SQLite

@@ -33,7 +33,7 @@ import reports
 from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from db import (
-    ZONE_LABELS,
+    PRODUCTION_ZONE_LABELS,
     PhysicalPropertyResult,
     ProductionPhase,
     ProductionRun,
@@ -114,8 +114,21 @@ with tab_create:
             format_func=lambda r: f"Run #{r.id} — {r.foam_grade.grade_name} · {r.run_date}",
             key="sample_run_select",
         )
+        # Which zones this run still needs. A run carries exactly three samples,
+        # so offering a zone it already has would only produce an error on save.
+        _existing_zones = {
+            z for (z,) in session.query(Sample.zone_label)
+            .filter(Sample.production_run_id == run.id).all()
+        }
+        _open_zones = [z for z in PRODUCTION_ZONE_LABELS if z not in _existing_zones]
+        if not _open_zones:
+            st.info(
+                "Run #%d already has all three production samples (Top, Middle and Bottom). "
+                "A production run carries exactly three; edit or delete one below to change it."
+                % run.id
+            )
         with st.form("add_sample"):
-            zone_label = st.selectbox("Zone *", ZONE_LABELS)
+            zone_label = st.selectbox("Zone *", _open_zones or PRODUCTION_ZONE_LABELS)
             sample_ts = combine_date_time("Sample creation time", "sample_ts")
             notes = st.text_area("Notes")
             submitted = st.form_submit_button("Save sample")
@@ -127,7 +140,17 @@ with tab_create:
                 earliest_start = min(
                     (p.phase_start for p in phases_for_run if p.phase_start), default=None
                 )
-                if earliest_start and sample_ts < earliest_start:
+                if not _open_zones:
+                    st.error(
+                        "Run #%d already has its three production samples. A fourth is not "
+                        "recorded." % run.id
+                    )
+                elif zone_label in _existing_zones:
+                    st.error(
+                        "Run #%d already has a %s sample. One sample per zone."
+                        % (run.id, zone_label)
+                    )
+                elif earliest_start and sample_ts < earliest_start:
                     st.error(
                         f"Sample creation time ({sample_ts:%Y-%m-%d %H:%M}) is before this run started "
                         f"({earliest_start:%Y-%m-%d %H:%M}). Check the date/time."
@@ -144,7 +167,8 @@ with tab_import:
     show_pending_banner("sample_import_msg")
     st.caption(
         "Required columns: production_run_id, zone_label. Optional columns: sample_ts, notes. "
-        "production_run_id must be one of your production runs."
+        "production_run_id must be one of your production runs, and zone_label must be Top, "
+        "Middle or Bottom - a production run carries exactly those three samples."
     )
     sample_df, sample_filename = csv_excel_uploader(
         SAMPLE_REQUIRED_COLUMNS, SAMPLE_OPTIONAL_COLUMNS, key="sample_upload"
@@ -158,14 +182,26 @@ with tab_import:
                 run_id_val = int(row.get("production_run_id"))
             except (TypeError, ValueError):
                 run_id_val = None
-            if run_id_val in import_run_ids and str(row.get("zone_label", "")).strip():
+            zone_val = str(row.get("zone_label", "") or "").strip()
+            # Matched case-insensitively and stored in the canonical spelling,
+            # so "top" from a spreadsheet is accepted and "Whole sample" is not.
+            zone_canon = next(
+                (z for z in PRODUCTION_ZONE_LABELS if z.lower() == zone_val.lower()), None
+            )
+            if run_id_val in import_run_ids and zone_canon:
+                row = row.copy()
+                row["zone_label"] = zone_canon
                 good_rows.append(row)
             else:
                 bad_rows.append(row)
 
         st.write(f"Rows ready to import: **{len(good_rows)}** | Rows flagged as invalid: **{len(bad_rows)}**")
         if bad_rows:
-            st.warning("These rows are missing zone_label, or production_run_id isn't one of your production runs.")
+            st.warning(
+                "These rows have a production_run_id that is not one of your production runs, or a "
+                "zone_label that is not Top, Middle or Bottom. A production run carries exactly "
+                "those three samples, so no other zone is accepted."
+            )
             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
         if good_rows and st.button("Confirm import", key="confirm_sample_import", disabled=not page_usable):
@@ -229,8 +265,11 @@ with tab_edit_delete:
             st.caption("Which run a sample belongs to can't be changed here - delete and re-add it under the correct run instead.")
             with st.form(f"edit_sample_{selected_sample.id}"):
                 e_zone = st.selectbox(
-                    "Zone *", ZONE_LABELS,
-                    index=ZONE_LABELS.index(selected_sample.zone_label) if selected_sample.zone_label in ZONE_LABELS else 0,
+                    "Zone *", PRODUCTION_ZONE_LABELS,
+                    index=(
+                        PRODUCTION_ZONE_LABELS.index(selected_sample.zone_label)
+                        if selected_sample.zone_label in PRODUCTION_ZONE_LABELS else 0
+                    ),
                     key=f"edit_sample_zone_{selected_sample.id}",
                 )
                 e_sample_ts = combine_date_time(
@@ -251,6 +290,15 @@ with tab_edit_delete:
                         st.error(
                             f"Sample creation time ({e_sample_ts:%Y-%m-%d %H:%M}) is before this run started "
                             f"({earliest_start:%Y-%m-%d %H:%M}). Check the date/time."
+                        )
+                    elif e_zone != selected_sample.zone_label and session.query(Sample).filter(
+                        Sample.production_run_id == selected_sample.production_run_id,
+                        Sample.zone_label == e_zone,
+                        Sample.id != selected_sample.id,
+                    ).first() is not None:
+                        st.error(
+                            "Run #%d already has a %s sample. Two samples cannot share a zone."
+                            % (selected_sample.production_run_id, e_zone)
                         )
                     else:
                         selected_sample.zone_label = e_zone

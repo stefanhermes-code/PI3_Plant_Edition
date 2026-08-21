@@ -280,11 +280,29 @@ with tab_result_manual:
             # above has already said what to create otherwise.
             if parent is not None:
                 samples_for_parent = _samples_for_parent(session, source_type, parent.id)
+                # Mandatory for a production run, optional for the two trial
+                # sources (Charlie's data-integrity instruction, 20 Aug 2026).
+                # A production result belongs to one of the run's three zone
+                # samples; a lab trial genuinely can have a result with no
+                # sample behind it.
+                _sample_required = source_type == "Production Run"
+                if _sample_required and not samples_for_parent:
+                    st.warning(
+                        "Run #%d has no samples recorded, so a quality result cannot be linked to "
+                        "one. Add its Top, Middle and Bottom samples on Production Samples first."
+                        % parent.id
+                    )
                 sample = st.selectbox(
-                    "Sample (optional, but recommended for comparability)",
-                    [None] + samples_for_parent,
+                    "Sample *" if _sample_required
+                    else "Sample (optional, but recommended for comparability)",
+                    ([] if _sample_required else [None]) + samples_for_parent,
                     format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
                     key="result_sample_select",
+                    help=(
+                        "Every production quality result belongs to one of the run's three zone "
+                        "samples, so the zone the measurement came from is always recorded."
+                        if _sample_required else None
+                    ),
                 )
                 property_def = st.selectbox(
                     "Property * (⭐ = most commonly tested; full list searchable below)",
@@ -348,7 +366,12 @@ with tab_result_manual:
                     if submitted:
                         final_method = method_other.strip() or (method_choice.method_code if method_choice else "")
                         final_unit = uom_other.strip() or (uom_choice.unit_label if uom_choice else "")
-                        if not property_def:
+                        if _sample_required and sample is None:
+                            st.error(
+                                "A production quality result must be linked to one of the "
+                                "run's samples, so the zone it was measured on is recorded."
+                            )
+                        elif not property_def:
                             st.error("Select a property.")
                         elif not final_method:
                             st.error("A measuring method is required — pick one or type a custom one.")
@@ -384,6 +407,8 @@ with tab_result_import:
     st.caption(
         "property_name must match a name in the physical property master list (case-insensitive). "
         "test_method and unit are stored as typed — they don't need to match an existing method/UOM. "
+        "A production_run_id row must also carry a sample_id belonging to that run - every "
+        "production quality result is measured on one of the run's three zone samples. "
         "Each row needs exactly one of production_run_id / customer_trial_id / optimization_trial_id "
         "set, matching which of the three that result belongs to."
     )
@@ -435,7 +460,22 @@ with tab_result_import:
                 prop_def = defs_by_name.get(str(row.get("property_name", "")).strip().lower())
                 fk_field, _fk_val = _row_fk(row)
                 sample_val = row.get("sample_id")
-                sample_ok = pd.isna(sample_val) or int(sample_val) in samples_all
+                sample_given = not pd.isna(sample_val) and str(sample_val).strip() != ""
+                sample_ok = (not sample_given) or int(sample_val) in samples_all
+                # A production row must carry a sample, and that sample must
+                # belong to the run the row names. The second half matters as
+                # much as the first: a sample_id that exists is not the same as
+                # a sample_id that belongs here, and a spreadsheet is exactly
+                # where a stale id gets copied from one run to another.
+                if fk_field == "production_run_id":
+                    if not sample_given:
+                        sample_ok = False
+                    elif sample_ok:
+                        linked = samples_all.get(int(sample_val))
+                        sample_ok = (
+                            linked is not None
+                            and linked.production_run_id == _fk_val
+                        )
                 has_method_unit_value = (
                     str(row.get("test_method", "")).strip()
                     and str(row.get("unit", "")).strip()
@@ -454,7 +494,8 @@ with tab_result_import:
             st.warning(
                 "Flagged rows have an unrecognized property_name, don't have exactly one in-scope "
                 "production_run_id / customer_trial_id / optimization_trial_id set, an unrecognized "
-                "sample_id, or are missing test_method / unit / actual_value."
+                "sample_id, or are missing test_method / unit / actual_value. A production_run_id "
+                "row must also carry a sample_id, and that sample must belong to the same run."
             )
             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
@@ -752,10 +793,22 @@ if selected_result:
         sample_options = [None] + samples_for_edit
         sample_default = next((i for i, s in enumerate(sample_options) if s and s.id == selected_result.sample_id), 0)
         e_sample = st.selectbox(
-            "Sample (optional)", sample_options, index=sample_default,
+            "Sample (optional)" if selected_result.sample_id is None else "Sample *",
+            sample_options, index=sample_default,
             format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
             key=f"edit_result_sample_{selected_result.id}",
         )
+        if selected_result.production_run_id is not None and selected_result.sample_id is None:
+            # Deliberately still saveable without a sample. This result predates
+            # the rule and the zone it was measured on is not recorded anywhere,
+            # so forcing one here would make somebody invent it - the exact
+            # inference the instruction says to avoid. It can be linked by
+            # anyone who knows the answer, and left alone by anyone who does not.
+            st.caption(
+                "This result was recorded before a sample link was required, and the zone it came "
+                "from is not held. Link it if you know which sample it belongs to; leave it "
+                "unlinked otherwise."
+            )
         ec1, ec2 = st.columns(2)
         e_target = ec1.number_input(
             "Target value", step=0.1, value=float(selected_result.target_value or 0.0), key=f"edit_result_target_{selected_result.id}"
