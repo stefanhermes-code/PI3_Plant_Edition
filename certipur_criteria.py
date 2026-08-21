@@ -616,6 +616,12 @@ def prohibited_hazard_codes(codes):
         # suffix casing is meaningful to a reader (H360Df is not H360DF) and a
         # report that silently re-cases the evidence is harder to check against
         # the document it came from.
+        # Anything after the four-character family is treated as a narrowing
+        # suffix, whatever it is. H350i and H360FD are the real forms, but a
+        # sheet that prints "H350-i", or an extraction that leaves a stray
+        # character, must still match: a false positive here costs somebody a
+        # minute reading the sheet, and a false negative passes a prohibited raw
+        # material with no error anywhere.
         if len(c) >= 4 and c[:4].upper() in PROHIBITED_H_CODES:
             hits.append(c)
     return sorted(set(hits))

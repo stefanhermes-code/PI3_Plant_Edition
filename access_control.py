@@ -521,8 +521,17 @@ def page_visible(page_key, *, is_platform_owner, subscription, denied_keys, is_s
     # and to the platform owner, who needs to reach it to configure and support
     # it. Checked here rather than left to the page, so the menu item does not
     # appear for a customer who has not bought the add-on.
-    if page_key == "certipur_readiness":
-        return bool(is_platform_owner or certipur_enabled)
+    #
+    # Written as a NEGATIVE gate on purpose (corrected 2026-08-21, found while
+    # building the CR section 20 evidence pack). The first version returned
+    # `bool(is_platform_owner or certipur_enabled)` directly, which ended the
+    # function - so once the add-on was on, `denied_keys` was never consulted
+    # and role permission did not apply to this page at all. A company admin
+    # could untick CertiPUR Readiness for a role, see the change saved, and
+    # have it do nothing. The add-on decides whether the page EXISTS for the
+    # company; the role still decides who inside the company may see it.
+    if page_key == "certipur_readiness" and not (is_platform_owner or certipur_enabled):
+        return False
     # Implementation scope, checked BEFORE subscription and role: a page the
     # customer was never implemented with is not a permission question, so it
     # should not be reachable by widening a role or changing a tier. Placed
