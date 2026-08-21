@@ -279,7 +279,15 @@ else:
                             (m for m in resolved["materials"] if comp.raw_material_id == m.id), None
                         )
                         sds = resolved["sds_by_material"].get(material.id) if material else None
-                        decl = resolved["declarations_by_material"].get(material.id) if material else None
+                        # supplier_evidence_by_material holds a LIST of current
+                        # documents per material, not a single one - a material
+                        # can carry a declaration and a certificate of analysis
+                        # at once. It was called declarations_by_material until
+                        # v2.22.1; this line was not renamed with it and had
+                        # been raising KeyError on this tab ever since.
+                        evidence = (
+                            resolved["supplier_evidence_by_material"].get(material.id) or []
+                        ) if material else []
                         rows.append({
                             "Component": comp.raw_material_name or "(unnamed)",
                             "Raw material": material.name if material else "not linked",
@@ -290,9 +298,14 @@ else:
                                 else ("Held" if sds is not None else "Missing")
                             ),
                             "Hazard codes": (sds.hazard_codes if sds is not None else "") or "—",
-                            "Declaration": (
+                            # Naming the document types is more use than
+                            # Held/Not held: the criterion decides which types
+                            # it will accept, so "Held" alone cannot tell the
+                            # reader whether what is held is the right thing.
+                            "Supplier evidence": (
                                 "—" if material is None
-                                else ("Held" if decl is not None else "Not held")
+                                else (", ".join(sorted({d.document_type for d in evidence}))
+                                      if evidence else "Not held")
                             ),
                         })
                     st.dataframe(rows, hide_index=True, use_container_width=True)

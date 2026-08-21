@@ -377,6 +377,45 @@ check("and defers the question to EUROPUR", True,
       "EUROPUR" in _action, _action[:200])
 
 print("\n" + "=" * 78)
+print("C5. EVERY KEY A VIEW READS FROM resolve_grade ACTUALLY EXISTS")
+print("=" * 78)
+# A live KeyError on 21 Aug 2026: the CertiPUR page read
+# resolved["declarations_by_material"], which the engine renamed to
+# supplier_evidence_by_material at v2.22.1. The view was not renamed with it and
+# had been crashing on the Composition tab ever since.
+#
+# The whole suite passed throughout, because every case here exercises the
+# ENGINE and none of them render a page. This check closes the specific gap:
+# it compares the keys the views read against the keys resolve_grade builds, so
+# the next rename fails here instead of on a customer's screen.
+import re as _re
+_engine_src = open('certipur_assessment.py').read()
+_resolve = _engine_src[_engine_src.index('def resolve_grade'):]
+_resolve = _resolve[:_resolve.index('\n    if company is not None')]
+_provided = set(_re.findall(r'"([a-z_]+)":', _resolve))
+
+_view_paths = [p for p in (
+    'views/33_CertiPUR_Readiness.py',
+) if os.path.exists(p)]
+check("the CertiPUR view is present to check", 1, len(_view_paths))
+
+_read = set()
+for _vp in _view_paths:
+    _read |= set(_re.findall(r'resolved\["([a-z_]+)"\]', open(_vp).read()))
+check("the view reads at least one resolved key", True, len(_read) > 0, sorted(_read))
+check("every key the view reads is one resolve_grade builds", [],
+      sorted(_read - _provided),
+      "provided: %s" % sorted(_provided))
+
+# The specific shape the crash also got wrong: this key holds a LIST per
+# material, so a truthiness test on it is not the same as "is not None".
+s5 = fresh(); g5, co5 = build(s5, colour_doc=CLEAN_COLOUR, iso_doc=CLEAN_ISO, declaration=True)
+_res = ca.resolve_grade(s5, g5, company=co5)
+check("supplier_evidence_by_material maps to lists, not single documents", True,
+      all(isinstance(v, list) for v in _res["supplier_evidence_by_material"].values()),
+      {k: type(v).__name__ for k, v in _res["supplier_evidence_by_material"].items()})
+
+print("\n" + "=" * 78)
 print("D. INTERNAL TEST EVIDENCE IS STRUCTURALLY SEPARATE")
 print("=" * 78)
 src = open('certipur_assessment.py').read() + open('certipur_criteria.py').read()
