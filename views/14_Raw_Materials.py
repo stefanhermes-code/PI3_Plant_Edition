@@ -12,6 +12,7 @@ import streamlit as st
 import ai_assistant
 import certipur_criteria
 import document_store
+import regulatory_reference
 from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from db import (
@@ -20,7 +21,9 @@ from db import (
     DOCUMENT_TYPE_TDS,
     RAW_MATERIAL_CATEGORIES,
     Company,
+    COMPOSITION_SOURCES,
     RawMaterial,
+    RawMaterialComposition,
     RawMaterialDocument,
     RecipeComponent,
     Supplier,
@@ -561,6 +564,94 @@ with tab_docs:
                     except Exception:
                         session.rollback()
                         st.error("The document could not be stored. Try again, or ask your administrator to check the error log.")
+
+            # --- the controlled identity route (2026-08-21) -----------------
+            # For a raw material no supplier issues a sheet for. Water is the
+            # case that forced it: a known identity, no hazard classification,
+            # no supplier, and previously a permanent evidence gap on four
+            # CertiPUR criteria with no honest way to close it.
+            held_comp = (
+                session.query(RawMaterialComposition)
+                .filter(RawMaterialComposition.raw_material_id == chosen.id,
+                        RawMaterialComposition.is_current.is_(True))
+                .order_by(RawMaterialComposition.id)
+                .all()
+            )
+            with st.expander(
+                "Controlled composition\u2003\u00b7\u2003%s"
+                % ("%d substance(s) recorded" % len(held_comp) if held_comp else "none recorded"),
+                expanded=False,
+            ):
+                st.caption(
+                    "For a raw material no supplier issues a safety data sheet for - water is the "
+                    "usual one. The composition screens read this where no readable sheet is held, "
+                    "and every assessment records which of the two routes it used. This does not "
+                    "replace a supplier sheet where one exists."
+                )
+                if held_comp:
+                    st.dataframe(
+                        [
+                            {
+                                "Substance": c.name or "\u2014",
+                                "CAS": c.cas_number or "\u2014",
+                                "EC": c.ec_number or "\u2014",
+                                "Concentration": c.concentration or "\u2014",
+                                "Source": c.source or "\u2014",
+                            }
+                            for c in held_comp
+                        ],
+                        hide_index=True, use_container_width=True,
+                    )
+                    if st.button("Remove the recorded composition", key="comp_clear_%d" % chosen.id):
+                        for c in held_comp:
+                            c.is_current = False
+                        session.commit()
+                        set_pending_banner(
+                            "rawmat_docs_msg",
+                            "The controlled composition for %s is no longer current." % chosen.name,
+                        )
+                        st.rerun()
+                    st.divider()
+                cc1, cc2, cc3 = st.columns([3, 2, 2])
+                comp_name = cc1.text_input("Substance", key="comp_name_%d" % chosen.id)
+                comp_cas = cc2.text_input("CAS number", key="comp_cas_%d" % chosen.id)
+                comp_conc = cc3.text_input("Concentration", key="comp_conc_%d" % chosen.id,
+                                           placeholder="e.g. 100 %")
+                comp_source = st.selectbox(
+                    "Where the identity comes from", COMPOSITION_SOURCES, key="comp_src_%d" % chosen.id,
+                )
+                comp_note = st.text_input(
+                    "Source note", key="comp_note_%d" % chosen.id,
+                    placeholder="e.g. CAS Registry; the reference or record this identity came from",
+                )
+                if st.button("Record against %s" % chosen.name, key="comp_add_%d" % chosen.id):
+                    if not (comp_name or "").strip() or not (comp_cas or "").strip():
+                        st.error("A substance name and a CAS number are both needed.")
+                    elif not regulatory_reference.cas_check_digit_ok(comp_cas):
+                        # Checked here as well as at the point of use: a bad
+                        # identifier caught at entry costs a retype, and one
+                        # caught during an assessment costs a wrong conclusion.
+                        st.error(
+                            "%s is not a valid CAS registry number - the check digit does not "
+                            "match. Confirm it against the source before recording it." % comp_cas
+                        )
+                    else:
+                        session.add(RawMaterialComposition(
+                            raw_material_id=chosen.id, company_id=chosen.company_id,
+                            name=comp_name.strip(),
+                            cas_number=regulatory_reference.normalise_cas(comp_cas),
+                            concentration=(comp_conc or "").strip() or None,
+                            source=comp_source, source_note=(comp_note or "").strip() or None,
+                            recorded_by=user.get("display_name") or user.get("username"),
+                            is_current=True,
+                        ))
+                        session.commit()
+                        set_pending_banner(
+                            "rawmat_docs_msg",
+                            "%s recorded against %s as a controlled composition."
+                            % (comp_name.strip(), chosen.name),
+                        )
+                        st.rerun()
 
 with tab_import:
     if not page_usable:

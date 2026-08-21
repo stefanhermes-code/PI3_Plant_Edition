@@ -52,6 +52,7 @@ from db import (
     CertipurCriterion,
     CertipurCriterionSubstance,
     RawMaterial,
+    RawMaterialComposition,
     RawMaterialDocument,
     RawMaterialSubstance,
     RecipeComponent,
@@ -170,6 +171,7 @@ def resolve_grade(session, foam_grade, company=None):
         "materials": [],
         "unmapped_components": [],
         "sds_by_material": {},
+        "composition_by_material": {},
         "supplier_evidence_by_material": {},
         "materials_without_sds": [],
         "applicant_declaration": None,
@@ -224,6 +226,16 @@ def resolve_grade(session, foam_grade, company=None):
         # See certipur_criteria.ACCEPTED_EVIDENCE: CertiPUR requires that the
         # evidence exists, and a supplier issues it as a specification, a
         # certificate of analysis or a test report just as often.
+        # The controlled identity route (Charlie, 21 Aug 2026). A material whose
+        # identity the customer maintains does not need a supplier sheet
+        # invented for it - see db.RawMaterialComposition.
+        out["composition_by_material"][material.id] = list(
+            session.query(RawMaterialComposition)
+            .filter(RawMaterialComposition.raw_material_id == material.id,
+                    RawMaterialComposition.is_current.is_(True))
+            .order_by(RawMaterialComposition.id)
+            .all()
+        )
         out["supplier_evidence_by_material"][material.id] = list(
             session.query(RawMaterialDocument)
             .filter(
@@ -289,6 +301,44 @@ def _ev(evidence_type, detail, material=None, doc=None):
     }
 
 
+# Routes a composition can come from, in the order the engine prefers them. The
+# label is used verbatim in the evidence register, because "where did this come
+# from" is the question the whole evidence model exists to answer.
+ROUTE_SDS = DOCUMENT_TYPE_SDS
+ROUTE_CONTROLLED = "Controlled composition record"
+
+
+def _composition_for(session, material, resolved):
+    """(rows, route, doc) for one material.
+
+    The safety data sheet wins where one is held AND its section 3 could be
+    read. A sheet that is held but unreadable does NOT fall through to the
+    controlled record - that would let a bad extraction be silently replaced by
+    a customer declaration, and the report would say the sheet was screened
+    when it was not. It returns no rows and the caller reports the gap.
+
+    Returns (None, None, None) where nothing at all is held."""
+    doc = resolved["sds_by_material"].get(material.id)
+    if doc is not None:
+        subs = _substances_for(session, doc)
+        return (subs or None), ROUTE_SDS, doc
+    rows = (resolved.get("composition_by_material") or {}).get(material.id) or []
+    if rows:
+        return rows, ROUTE_CONTROLLED, None
+    return None, None, None
+
+
+def _composition_route_detail(rows, route):
+    """The evidence sentence for a composition that was screened."""
+    if route == ROUTE_CONTROLLED:
+        sources = sorted({(r.source or "recorded identity") for r in rows})
+        return ("Screened from the controlled composition record held against this raw "
+                "material rather than a supplier sheet: %d substance%s, source %s."
+                % (len(rows), "" if len(rows) == 1 else "s", "; ".join(sources)))
+    return "%d substance%s screened, none matching this criterion." % (
+        len(rows), "" if len(rows) == 1 else "s")
+
+
 def _measured(criterion):
     """The four laboratory criteria. Same answer every time, by design."""
     rationale = (
@@ -316,10 +366,10 @@ def _disclosed_cas(session, resolved, materials):
     substance passes."""
     good, malformed = [], []
     for material in materials:
-        doc = resolved["sds_by_material"].get(material.id)
-        if doc is None:
+        subs, _route, doc = _composition_for(session, material, resolved)
+        if not subs:
             continue
-        for sub in _substances_for(session, doc):
+        for sub in subs:
             if not sub.cas_number:
                 continue
             norm = rr.normalise_cas(sub.cas_number)
@@ -364,11 +414,36 @@ def _hazard_classification(session, criterion, resolved):
     evidence, hits, missing = [], [], []
 
     # --- limb 1: the supplier self-classification on the sheet --------------
+    covered_by_identity = []
     for material in in_scope:
         doc = resolved["sds_by_material"].get(material.id)
         if doc is None:
+            # No supplier sheet. A controlled composition record does not carry
+            # a supplier self-classification and never will - the point of the
+            # route is that no supplier issues a sheet for this material. What
+            # it does carry is an identity, and the harmonised limb below is
+            # exactly the check that answers the question for such a material.
+            # Recorded as its own route rather than counted as a gap, so the
+            # report says which materials were answered which way.
+            rows = (resolved.get("composition_by_material") or {}).get(material.id) or []
+            if rows:
+                covered_by_identity.append(material)
+                evidence.append(_ev(
+                    ROUTE_CONTROLLED,
+                    "No supplier issues a safety data sheet for this raw material. Its identity "
+                    "is held as a controlled composition record (%s) and is answered by the "
+                    "harmonised classification check below."
+                    % "; ".join(sorted({(r.source or "recorded identity") for r in rows})),
+                    material,
+                ))
+                continue
             missing.append(material)
-            evidence.append(_ev("None held", "No safety data sheet is held for this raw material.", material))
+            evidence.append(_ev(
+                "None held",
+                "No safety data sheet and no controlled composition record are held for this "
+                "raw material.",
+                material,
+            ))
             continue
         prohibited = cc.prohibited_hazard_codes(doc.hazard_codes)
         if prohibited:
@@ -463,7 +538,8 @@ def _hazard_classification(session, criterion, resolved):
             "%d of %d raw materials have no safety data sheet, so their hazard classification "
             "is unknown: %s" % (len(missing), len(in_scope), ", ".join(m.name for m in missing)),
             "Attach the safety data sheet for each named raw material on the Raw Materials "
-            "Documents tab.",
+            "Documents tab. Where no supplier issues a sheet - water, for instance - record the "
+            "material's controlled composition there instead.",
             evidence,
         )
 
@@ -484,12 +560,21 @@ def _hazard_classification(session, criterion, resolved):
             evidence,
         )
 
+    sheets = len(in_scope) - len(covered_by_identity)
+    by_sheet = ("All %d raw materials in scope hold a current safety data sheet and none carries "
+                "H340, H350, H360 or H370." % len(in_scope)) if not covered_by_identity else (
+        "%d of %d raw materials in scope hold a current safety data sheet and none carries H340, "
+        "H350, H360 or H370. The remaining %d %s answered through the controlled identity route, "
+        "no supplier issuing a sheet for %s: %s."
+        % (sheets, len(in_scope), len(covered_by_identity),
+           "is" if len(covered_by_identity) == 1 else "are",
+           "it" if len(covered_by_identity) == 1 else "them",
+           ", ".join(m.name for m in covered_by_identity)))
     return _result(
         STATUS_MEETS,
-        "All %d raw materials in scope hold a current safety data sheet and none carries H340, "
-        "H350, H360 or H370. %d disclosed CAS number%s screened against %s, and none carries "
-        "a harmonised CMR 1A/1B or STOT SE 1 classification."
-        % (len(in_scope), len(screened_cas), " was" if len(screened_cas) == 1 else "s were", ref_label),
+        "%s %d disclosed CAS number%s screened against %s, and none carries a harmonised "
+        "CMR 1A/1B or STOT SE 1 classification."
+        % (by_sheet, len(screened_cas), " was" if len(screened_cas) == 1 else "s were", ref_label),
         None, evidence,
     )
 
@@ -519,23 +604,26 @@ def _substance_screen(session, criterion, resolved, applies_to_categories=None):
 
     evidence, hits, missing, screened = [], [], [], 0
     for material in materials:
-        doc = resolved["sds_by_material"].get(material.id)
-        if doc is None:
+        subs, route, doc = _composition_for(session, material, resolved)
+        if subs is None:
             missing.append(material)
-            evidence.append(_ev("None held", "No safety data sheet is held for this raw material.", material))
-            continue
-        subs = _substances_for(session, doc)
-        if not subs:
-            # A stored sheet whose composition could not be read is not the
-            # same as a sheet that lists nothing, and must not be counted as a
-            # clean screen.
-            missing.append(material)
-            evidence.append(_ev(
-                DOCUMENT_TYPE_SDS,
-                "The sheet is held but no composition could be read from its section 3, so this "
-                "material could not be screened.",
-                material, doc,
-            ))
+            if doc is not None:
+                # A stored sheet whose composition could not be read is not the
+                # same as a sheet that lists nothing, and must not be counted as
+                # a clean screen.
+                evidence.append(_ev(
+                    DOCUMENT_TYPE_SDS,
+                    "The sheet is held but no composition could be read from its section 3, so "
+                    "this material could not be screened.",
+                    material, doc,
+                ))
+            else:
+                evidence.append(_ev(
+                    "None held",
+                    "No safety data sheet and no controlled composition record are held for this "
+                    "raw material.",
+                    material,
+                ))
             continue
         screened += 1
         found = []
@@ -546,7 +634,7 @@ def _substance_screen(session, criterion, resolved, applies_to_categories=None):
         if found:
             hits.append((material, found, doc))
             evidence.append(_ev(
-                DOCUMENT_TYPE_SDS,
+                route,
                 "Contains " + "; ".join(
                     "%s (CAS %s)%s" % (m.name, s.cas_number, (" at %s" % s.concentration) if s.concentration else "")
                     for s, m in found
@@ -555,10 +643,7 @@ def _substance_screen(session, criterion, resolved, applies_to_categories=None):
             ))
         else:
             evidence.append(_ev(
-                DOCUMENT_TYPE_SDS,
-                "%d substance%s screened, none matching this criterion."
-                % (len(subs), "" if len(subs) == 1 else "s"),
-                material, doc,
+                route, _composition_route_detail(subs, route), material, doc,
             ))
 
     if hits:
@@ -579,8 +664,9 @@ def _substance_screen(session, criterion, resolved, applies_to_categories=None):
             STATUS_MISSING,
             "%d of %d raw materials could not be screened because no composition is held for "
             "them: %s" % (len(missing), len(materials), ", ".join(m.name for m in missing)),
-            "Attach the safety data sheet for each named raw material, or record its composition, "
-            "on the Raw Materials Documents tab.",
+            "Attach the safety data sheet for each named raw material on the Raw Materials "
+            "Documents tab. Where no supplier issues a sheet for a material - water, for "
+            "instance - record its controlled composition there instead.",
             evidence,
         )
 

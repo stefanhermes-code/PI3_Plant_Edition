@@ -956,6 +956,63 @@ class RawMaterialSubstance(Base):
 
 
 # ---------------------------------------------------------------------------
+# 5d. raw_material_compositions - the controlled identity route (2026-08-21)
+# ---------------------------------------------------------------------------
+# Charlie's CertiPUR review, third point: "Do not create or require a fictitious
+# supplier SDS to close the UAT case."
+#
+# The case that forced it is water. Water is a raw material in every flexible
+# foam recipe, it has a known identity (CAS 7732-18-5), no hazard
+# classification, and no supplier who issues a safety data sheet for it. Under
+# the previous rule it was reported as an evidence gap on four criteria for
+# ever, and the only ways to close it were both wrong: invent a sheet, or
+# accept a permanent false gap.
+#
+# So a raw material may carry a CONTROLLED COMPOSITION - the identity the
+# customer maintains in their own master data - and the composition screens use
+# it where no readable supplier sheet exists.
+#
+# WHY A SEPARATE TABLE FROM RawMaterialSubstance
+# RawMaterialSubstance is one line of section 3 of a DOCUMENT. Its whole value
+# is that it can be traced to a supplier's own paper. This is a different
+# thing: a customer's declaration about a material they buy. Putting both in
+# one table would blur exactly the provenance this feature exists to record,
+# and an assessment could no longer say which of the two it read. They stay
+# apart, and the evidence register names the route every time.
+#
+# WHAT IT DOES NOT DO
+# It does not replace the mandatory safety data sheet on a new raw material for
+# a company with CertiPUR enabled. That rule governs materials a supplier
+# actually issues a sheet for. This is for the ones where no such sheet exists.
+
+COMPOSITION_SOURCE_DECLARED = "Declared by the customer"
+COMPOSITION_SOURCE_PUBLIC = "Public chemical reference"
+COMPOSITION_SOURCES = (COMPOSITION_SOURCE_DECLARED, COMPOSITION_SOURCE_PUBLIC)
+
+
+class RawMaterialComposition(Base):
+    __tablename__ = "raw_material_compositions"
+
+    id = Column(Integer, primary_key=True)
+    raw_material_id = Column(Integer, ForeignKey("raw_materials.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    name = Column(String(300))
+    cas_number = Column(String(50))
+    ec_number = Column(String(50))
+    # Text for the same reason RawMaterialSubstance.concentration is text: a
+    # composition is stated as a range or an inequality and coercing it to a
+    # number invents precision nobody declared.
+    concentration = Column(String(100))
+    source = Column(String(80))          # see COMPOSITION_SOURCES
+    source_note = Column(String(400))    # where the identity came from, in words
+    recorded_by = Column(String(200))
+    is_current = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    raw_material = relationship("RawMaterial")
+
+
+# ---------------------------------------------------------------------------
 # 5c. company_documents - evidence held at company level (added 2026-08-21)
 # ---------------------------------------------------------------------------
 # Some CertiPUR evidence does not belong to a raw material. The applicant's own
