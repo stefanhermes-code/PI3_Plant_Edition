@@ -344,6 +344,39 @@ ca.ensure_criteria_set(s2); s2.commit()
 check("re-seeding does not create a second set", 1, s2.query(m.CertipurCriteriaSet).count())
 
 print("\n" + "=" * 78)
+print("C4. THE REPORT DOES NOT CLAIM MORE THAN THE MODULE CHECKS")
+print("=" * 78)
+# Charlie, 21 Aug 2026: the pre-audit must not say the foam "in principle
+# complies with the criteria of CertiPUR". That phrase covers the whole of
+# CertiPUR, and this module deliberately does not screen against regulatory
+# lists. These checks exist so the claim cannot creep back in later.
+import reports as _rp
+_stmt = _rp.CERTIPUR_ASSESSMENT_STATEMENT
+check("the pre-audit does not claim compliance in principle", False,
+      "in principle complies" in _stmt, _stmt[:120])
+check("it names what the module evaluated", True,
+      "evidence checks covered by this module" in _stmt)
+check("it says regulatory-list screening is out of scope", True,
+      "outside the scope of CertiPUR Readiness" in _stmt)
+check("it says the report is readiness, not compliance", True,
+      "not a conclusion about compliance with CertiPUR as a whole" in _stmt)
+
+# The same over-claim in the 3.4 action text: a written supplier statement may
+# be stored and assessed, but PI3 must not assert CertiPUR accepts it.
+s34 = fresh(); g34, co34 = build(s34, colour_doc=CLEAN_COLOUR, iso_doc=CLEAN_ISO,
+                                 declaration=True, water=[("Water", "7732-18-5")])
+_out34 = ca.assess(s34, g34, company=co34)
+_item34 = next(i for i in _out34["items"] if i["criterion"].section == "3.4")
+_st, _action = _item34["status"], _item34.get("action") or ""
+check("3.4 is Evidence missing for a material with no sheet", "Evidence missing", _st)
+check("the action does not call a statement acceptable evidence", False,
+      "is acceptable evidence for this criterion" in _action, _action[:200])
+check("the action still offers the route", True,
+      "supporting evidence" in _action, _action[:200])
+check("and defers the question to EUROPUR", True,
+      "EUROPUR" in _action, _action[:200])
+
+print("\n" + "=" * 78)
 print("D. INTERNAL TEST EVIDENCE IS STRUCTURALLY SEPARATE")
 print("=" * 78)
 src = open('certipur_assessment.py').read() + open('certipur_criteria.py').read()

@@ -472,11 +472,18 @@ def _hazard_classification(session, criterion, resolved):
             STATUS_MISSING,
             "%d of %d raw materials have no safety data sheet, so their hazard classification "
             "is not evidenced: %s" % (len(missing), len(in_scope), ", ".join(m.name for m in missing)),
+            # Charlie, 21 Aug 2026: a written supplier statement may be stored and
+            # assessed as SUPPORTING evidence, but PI3 must not present it as a
+            # formally accepted CertiPUR substitute for the safety data sheet -
+            # nothing in the CertiPUR source says it is, and EUROPUR has not been
+            # asked. The wording below offers the route without making the claim.
             "Attach the supplier safety data sheet for each named raw material on the Raw "
-            "Materials Documents tab. Where the supplier does not provide one, a supplier "
-            "declaration or written statement of the material's classification is acceptable "
-            "evidence for this criterion. A controlled composition record does not close it: "
-            "it establishes identity, not classification.",
+            "Materials Documents tab - that is the normal evidence for this criterion. Where "
+            "the supplier does not issue one, a written supplier statement or declaration that "
+            "identifies the raw material and states its classification can be stored and "
+            "assessed here as supporting evidence; whether CertiPUR accepts it in place of a "
+            "safety data sheet is a question for EUROPUR. A controlled composition record does "
+            "not close this criterion: it establishes identity, not classification.",
             evidence,
         )
 

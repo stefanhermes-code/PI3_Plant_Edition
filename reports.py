@@ -4088,14 +4088,25 @@ def read_function_availability_xlsx(file_obj):
 # assessment said in August, including where the criteria or the documents have
 # moved on since. Nothing here queries the current state of a raw material.
 #
-# Section 9 carries the assessment statement the change request requires, using
-# Europur's own phrase for the boundary.
+# Section 9 carries the assessment statement the change request requires.
+#
+# It used to carry Europur's own phrase - the foam "in principle complies with
+# the criteria of CertiPUR" - approved by Michel on 20 August 2026. Charlie
+# narrowed it on 21 August, and he is right: that phrase describes the whole of
+# CertiPUR, and after the scope separation this module deliberately does NOT
+# perform the harmonised-classification screening. Saying a grade complies in
+# principle would claim ground the module no longer stands on. The statement now
+# names what this module actually evaluated and says plainly what sits outside
+# it.
 
 CERTIPUR_ASSESSMENT_STATEMENT = (
-    "This CertiPUR Readiness Pre-Audit evaluates the selected foam grade against the "
-    "requirements that can be assessed from information held within PI3 Plant Edition - the "
-    "formulation, the raw materials and their supplier documentation. It indicates whether the "
-    "foam in principle complies with the criteria of CertiPUR. It is not a CertiPUR test, a "
+    "This CertiPUR Readiness Pre-Audit evaluates the selected foam grade against the CertiPUR "
+    "evidence checks covered by this module, using the information held within PI3 Plant "
+    "Edition - the formulation, the raw materials and their supplier documentation. Screening "
+    "substances against regulatory lists, including the harmonised classifications published "
+    "under CLP, is outside the scope of CertiPUR Readiness and is not carried out here. This "
+    "report is therefore a statement of readiness against the checks named in it, and not a "
+    "conclusion about compliance with CertiPUR as a whole. It is not a CertiPUR test, a "
     "CertiPUR application or a certification. Criteria that depend on measurement of finished "
     "foam are identified separately and require testing by one of the accredited laboratories "
     "within the formal CertiPUR certification process, which is administered by EUROPUR."

@@ -5,10 +5,15 @@ evidence the plant already holds - its recipe, its raw materials and their
 supplier documents.
 
 WHAT THIS PAGE CAN AND CANNOT SAY
-Europur approved PI3 doing this on 20 August 2026. Michel's own words for what
-it produces: whether the foam "in principle complies with the criteria of
-CertiPUR". That boundary is not a disclaimer bolted on at the end - it is the
-structure of the requirements themselves, which set criteria in two kinds:
+Europur approved PI3 doing this on 20 August 2026, and Michel's own words for
+what it produces were that the foam "in principle complies with the criteria of
+CertiPUR". That phrase is no longer used, on Charlie's instruction of 21 August:
+it describes the whole of CertiPUR, and after the scope separation this module
+deliberately does not screen substances against regulatory lists. The page now
+reports readiness against the checks it actually performs.
+
+The boundary is not a disclaimer bolted on at the end - it is the structure of
+the requirements themselves, which set criteria in two kinds:
 
   - measurable upper limits on FINISHED FOAM, determined only by one of the two
     accredited laboratories CertiPUR names; and
@@ -74,8 +79,9 @@ render_function_action_intro(
     function_text=(
         "Checks a foam grade against the CertiPUR requirements using the evidence already held "
         "in PI3 - the active recipe, the raw materials behind it, and their safety data sheets "
-        "and supplier declarations. It indicates whether the foam in principle complies, and "
-        "lists what is missing before a formal application."
+        "and supplier declarations. It reports readiness against the CertiPUR evidence checks "
+        "this module covers and lists what is missing before a formal application. Screening "
+        "against regulatory lists belongs to REACH Readiness and is not done here."
     ),
     action_steps=[
         "Pick the foam grade. Its active recipe version and CertiPUR foam family are shown.",
