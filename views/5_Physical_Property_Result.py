@@ -280,28 +280,38 @@ with tab_result_manual:
             # above has already said what to create otherwise.
             if parent is not None:
                 samples_for_parent = _samples_for_parent(session, source_type, parent.id)
-                # Mandatory for a production run, optional for the two trial
-                # sources (Charlie's data-integrity instruction, 20 Aug 2026).
-                # A production result belongs to one of the run's three zone
-                # samples; a lab trial genuinely can have a result with no
-                # sample behind it.
-                _sample_required = source_type == "Production Run"
-                if _sample_required and not samples_for_parent:
+                # Mandatory for EVERY source, not only production (Charlie's
+                # clarification of 21 Aug 2026, which fixed this as the
+                # governing rule). A quality test result is a measurement of a
+                # physical specimen, so the specimen is part of the record:
+                #
+                #   Production Run      -> Production Sample (Top/Middle/Bottom)
+                #   Customer Trial      -> Customer Trial Sample
+                #   Optimization Trial  -> Optimization Trial Sample
+                #
+                # There is no parent-sample or test-piece layer below this; the
+                # sample record IS the specimen. That suggestion was withdrawn.
+                _sample_required = True
+                if not samples_for_parent:
                     st.warning(
-                        "Run #%d has no samples recorded, so a quality result cannot be linked to "
-                        "one. Add its Top, Middle and Bottom samples on Production Samples first."
-                        % parent.id
+                        "%s has no samples recorded, so a quality result cannot be linked to one. "
+                        "Add its sample%s on the %s page first."
+                        % (
+                            ("Run #%d" % parent.id) if source_type == "Production Run"
+                            else ("Trial #%d" % parent.id),
+                            "s (Top, Middle and Bottom)" if source_type == "Production Run" else "",
+                            SOURCE_ORIGIN_PAGE.get(source_type, source_type),
+                        )
                     )
                 sample = st.selectbox(
-                    "Sample *" if _sample_required
-                    else "Sample (optional, but recommended for comparability)",
-                    ([] if _sample_required else [None]) + samples_for_parent,
+                    "Sample *",
+                    list(samples_for_parent),
                     format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
                     key="result_sample_select",
                     help=(
-                        "Every production quality result belongs to one of the run's three zone "
-                        "samples, so the zone the measurement came from is always recorded."
-                        if _sample_required else None
+                        "Every quality test result is a measurement of a physical specimen, so the "
+                        "specimen is part of the record. For a production run that is one of its "
+                        "three zone samples."
                     ),
                 )
                 property_def = st.selectbox(
@@ -366,10 +376,10 @@ with tab_result_manual:
                     if submitted:
                         final_method = method_other.strip() or (method_choice.method_code if method_choice else "")
                         final_unit = uom_other.strip() or (uom_choice.unit_label if uom_choice else "")
-                        if _sample_required and sample is None:
+                        if sample is None:
                             st.error(
-                                "A production quality result must be linked to one of the "
-                                "run's samples, so the zone it was measured on is recorded."
+                                "A quality test result must be linked to the sample it was "
+                                "measured on. Record the sample first if it does not exist yet."
                             )
                         elif not property_def:
                             st.error("Select a property.")
@@ -407,8 +417,8 @@ with tab_result_import:
     st.caption(
         "property_name must match a name in the physical property master list (case-insensitive). "
         "test_method and unit are stored as typed — they don't need to match an existing method/UOM. "
-        "A production_run_id row must also carry a sample_id belonging to that run - every "
-        "production quality result is measured on one of the run's three zone samples. "
+        "Every row must carry a sample_id belonging to the parent it names - a quality test "
+        "result is a measurement of a physical specimen, so the specimen is part of the record. "
         "Each row needs exactly one of production_run_id / customer_trial_id / optimization_trial_id "
         "set, matching which of the three that result belongs to."
     )
@@ -467,15 +477,19 @@ with tab_result_import:
                 # much as the first: a sample_id that exists is not the same as
                 # a sample_id that belongs here, and a spreadsheet is exactly
                 # where a stale id gets copied from one run to another.
-                if fk_field == "production_run_id":
-                    if not sample_given:
-                        sample_ok = False
-                    elif sample_ok:
-                        linked = samples_all.get(int(sample_val))
-                        sample_ok = (
-                            linked is not None
-                            and linked.production_run_id == _fk_val
-                        )
+                # Required on every row, and the sample must belong to the
+                # parent the row names. The second half matters as much as the
+                # first: a sample_id that exists is not the same as one that
+                # belongs here, and a spreadsheet is exactly where a stale id
+                # gets copied from one parent to another.
+                if not sample_given:
+                    sample_ok = False
+                elif sample_ok:
+                    linked = samples_all.get(int(sample_val))
+                    sample_ok = (
+                        linked is not None
+                        and getattr(linked, fk_field, None) == _fk_val
+                    )
                 has_method_unit_value = (
                     str(row.get("test_method", "")).strip()
                     and str(row.get("unit", "")).strip()
@@ -494,8 +508,8 @@ with tab_result_import:
             st.warning(
                 "Flagged rows have an unrecognized property_name, don't have exactly one in-scope "
                 "production_run_id / customer_trial_id / optimization_trial_id set, an unrecognized "
-                "sample_id, or are missing test_method / unit / actual_value. A production_run_id "
-                "row must also carry a sample_id, and that sample must belong to the same run."
+                "sample_id, or are missing test_method / unit / actual_value. EVERY row must carry a "
+                "sample_id, and that sample must belong to the parent the row names."
             )
             render_data_table(pd.DataFrame(bad_rows), max_height="300px")
 
