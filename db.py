@@ -815,15 +815,56 @@ MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 DOCUMENT_TYPE_SDS = "Safety Data Sheet"
 DOCUMENT_TYPE_TDS = "Technical Data Sheet"
 DOCUMENT_TYPE_DECLARATION = "Supplier Declaration"
-# A supplier declaration is a separate type because three CertiPUR criteria
-# cannot be answered from an SDS at all, and the source document says so: heavy
-# metals in colour pastes (3.1, "suppliers of colour pastes should be asked to
-# provide information on the concentration"), azo dyes (3.2, REACH Restriction
-# Entry 43 lists the amines a dye may RELEASE, which only the dye maker knows),
-# and chlorobenzenes in diisocyanates (3.7, "evidence may be obtained the raw
-# material supplier"). An SDS declares hazards, not a full composition, so it
-# is silent on all three by design rather than by omission.
-DOCUMENT_TYPES = (DOCUMENT_TYPE_SDS, DOCUMENT_TYPE_TDS, DOCUMENT_TYPE_DECLARATION)
+DOCUMENT_TYPE_SPECIFICATION = "Supplier Specification / Statement"
+DOCUMENT_TYPE_COA = "Certificate of Analysis"
+DOCUMENT_TYPE_TEST_REPORT = "Supplier Test Report"
+DOCUMENT_TYPE_APPLICANT_DECLARATION = "CertiPUR Applicant Declaration"
+DOCUMENT_TYPE_OTHER = "Other Supporting Evidence"
+
+# The controlled document-type list, per Charlie's position of 20 Aug 2026.
+#
+# Three CertiPUR criteria cannot be answered from a safety data sheet at all,
+# and the technical requirements say where the evidence comes from instead:
+# heavy metals in colour pastes (3.1 - "suppliers of colour pastes should be
+# asked to provide information on the concentration"), azo dyes (3.2 - REACH
+# Restriction Entry 43 lists the aromatic amines a dye may RELEASE, which only
+# the dye maker knows), and chlorobenzenes in diisocyanates (3.7 - "evidence
+# may be obtained the raw material supplier"). An SDS declares hazards, not a
+# full composition, so it is silent on all three by design.
+#
+# WHY THE LIST IS EIGHT AND NOT THREE. An earlier version had only Supplier
+# Declaration, which was wrong for a reason worth recording: CertiPUR names no
+# required document called a declaration. It requires that the EVIDENCE exists,
+# and a supplier issues that evidence in whatever form they use - a
+# specification, a certificate of analysis, a test report. Insisting on one
+# title would make a customer misfile a perfectly good certificate as a
+# "declaration" to get past the check, which corrupts the evidence register to
+# satisfy a vocabulary this application invented.
+#
+# The division of labour that follows: the document store RECORDS and
+# CLASSIFIES; the readiness logic decides which types satisfy which criterion
+# (see certipur_criteria's accepted_evidence).
+DOCUMENT_TYPES = (
+    DOCUMENT_TYPE_SDS,
+    DOCUMENT_TYPE_TDS,
+    DOCUMENT_TYPE_DECLARATION,
+    DOCUMENT_TYPE_SPECIFICATION,
+    DOCUMENT_TYPE_COA,
+    DOCUMENT_TYPE_TEST_REPORT,
+    DOCUMENT_TYPE_APPLICANT_DECLARATION,
+    DOCUMENT_TYPE_OTHER,
+)
+
+# Everything that can carry supplier-originated evidence. Excludes the SDS,
+# which has its own specific role under 3.4 and is never a substitute for a
+# supplier statement, and the TDS, which is formulation data.
+SUPPLIER_EVIDENCE_TYPES = (
+    DOCUMENT_TYPE_DECLARATION,
+    DOCUMENT_TYPE_SPECIFICATION,
+    DOCUMENT_TYPE_COA,
+    DOCUMENT_TYPE_TEST_REPORT,
+    DOCUMENT_TYPE_OTHER,
+)
 
 
 class RawMaterialDocument(Base):

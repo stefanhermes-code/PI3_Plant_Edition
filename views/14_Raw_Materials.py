@@ -15,7 +15,7 @@ import document_store
 from access_control import can_use_page
 from auth import current_user, logout_button, require_login
 from db import (
-    DOCUMENT_TYPE_DECLARATION,
+    DOCUMENT_TYPES,
     DOCUMENT_TYPE_SDS,
     DOCUMENT_TYPE_TDS,
     RAW_MATERIAL_CATEGORIES,
@@ -520,13 +520,16 @@ with tab_docs:
                 st.markdown("**Attach a document**")
                 up_type = st.selectbox(
                     "Document type",
-                    [DOCUMENT_TYPE_SDS, DOCUMENT_TYPE_TDS, DOCUMENT_TYPE_DECLARATION],
+                    list(DOCUMENT_TYPES),
                     key="docs_type",
                     help=(
-                        "A supplier declaration covers what a safety data sheet does not: heavy "
-                        "metal content of colour pastes, azo dye compliance with REACH "
-                        "Restriction Entry 43, and the chlorobenzene content of a diisocyanate. "
-                        "CertiPUR names the supplier as the source for all three."
+                        "Type the document as what it actually is. Supplier-issued evidence - a "
+                        "declaration, a specification, a certificate of analysis or a test report "
+                        "- covers what a safety data sheet does not: heavy metal content of colour "
+                        "pastes, azo dye compliance with REACH Restriction Entry 43, and the "
+                        "chlorobenzene content of a diisocyanate. CertiPUR names the supplier as "
+                        "the source for all three and requires no particular title, so record the "
+                        "form the supplier actually issued rather than relabelling it."
                     ),
                 )
                 up_file = st.file_uploader(

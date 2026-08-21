@@ -75,6 +75,28 @@ def current_document(session, raw_material_id, document_type=DOCUMENT_TYPE_SDS):
     )
 
 
+def current_document_of_any_type(session, raw_material_id, document_types):
+    """The most recent current document whose type is one the caller accepts.
+
+    Used by the readiness assessment, which asks "is there evidence of this
+    kind" rather than "is there a document with this title" - see
+    certipur_criteria.ACCEPTED_EVIDENCE for why those are different questions.
+    Newest first, so a supplier who has since issued a fuller document is the
+    one cited."""
+    if not raw_material_id or not document_types:
+        return None
+    return (
+        session.query(RawMaterialDocument)
+        .filter(
+            RawMaterialDocument.raw_material_id == raw_material_id,
+            RawMaterialDocument.document_type.in_(list(document_types)),
+            RawMaterialDocument.is_current.is_(True),
+        )
+        .order_by(RawMaterialDocument.created_at.desc())
+        .first()
+    )
+
+
 def documents_for(session, raw_material_id):
     """Every document held against a raw material, newest first, including
     superseded revisions - which are the point of keeping them."""

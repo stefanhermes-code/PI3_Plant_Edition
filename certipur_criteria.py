@@ -455,6 +455,51 @@ def prohibited_cas_numbers():
 PROHIBITED_H_CODES = ("H340", "H350", "H360", "H370")
 
 
+# Which document types satisfy which criterion (Charlie's position, 20 Aug
+# 2026). The rule he corrected, and it is the right correction: CertiPUR does
+# not require a document with a particular title. It requires that the evidence
+# exists, and a supplier issues it in whatever form they use - a specification,
+# a certificate of analysis, a test report, a declaration.
+#
+# So the acceptance rule lives here, with the criterion, and not in the
+# document store. The store's job is to record what a document IS; deciding
+# what answers a requirement is a matter of the requirement.
+#
+# 3.4 is the exception and takes only the safety data sheet, because the
+# CertiPUR requirement is tied directly to the supplier classification shown
+# there. A declaration saying a material is not a carcinogen does not satisfy a
+# criterion written as "from the moment this appear on the SDS".
+_SUPPLIER_FORMS = (
+    "Supplier Declaration",
+    "Supplier Specification / Statement",
+    "Certificate of Analysis",
+    "Supplier Test Report",
+    "Other Supporting Evidence",
+)
+
+ACCEPTED_EVIDENCE = {
+    # Colour paste metal concentrations. Any supplier-issued form carrying the
+    # cadmium, chromium and lead figures.
+    "CP-3.1-HEAVY-METALS": _SUPPLIER_FORMS,
+    # REACH Entry 43. Normally a declaration, but a test report for the
+    # restricted amines answers it at least as well.
+    "CP-3.2-AZO-DYES": _SUPPLIER_FORMS,
+    # PT9 authorisation under BPR 528/2012.
+    "CP-3.5-BIOCIDES": _SUPPLIER_FORMS,
+    # 20 ppm total chlorobenzenes. A specification or certificate of analysis is
+    # the form this most often arrives in, since it is a purity figure.
+    "CP-3.7-CHLOROBENZENES": _SUPPLIER_FORMS,
+    # Tied to the SDS by the wording of the requirement itself.
+    "CP-3.4-HAZARD-CLASSIFICATION": ("Safety Data Sheet",),
+}
+
+
+def accepted_evidence(criterion_key):
+    """Document types that satisfy this criterion, or () where the criterion is
+    answered from the formulation rather than from a document."""
+    return ACCEPTED_EVIDENCE.get(criterion_key, ())
+
+
 def prohibited_hazard_codes(codes):
     """Which of `codes` are prohibited by section 3.4, matched on the FAMILY.
 

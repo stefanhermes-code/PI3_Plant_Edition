@@ -41,8 +41,8 @@ import datetime as dt
 import certipur_criteria as cc
 import document_store
 from db import (
-    DOCUMENT_TYPE_DECLARATION,
     DOCUMENT_TYPE_SDS,
+    SUPPLIER_EVIDENCE_TYPES,
     CertipurAssessment,
     CertipurAssessmentEvidence,
     CertipurAssessmentItem,
@@ -168,7 +168,7 @@ def resolve_grade(session, foam_grade):
         "materials": [],
         "unmapped_components": [],
         "sds_by_material": {},
-        "declarations_by_material": {},
+        "supplier_evidence_by_material": {},
         "materials_without_sds": [],
         "blocking": None,
     }
@@ -213,8 +213,19 @@ def resolve_grade(session, foam_grade):
         out["sds_by_material"][material.id] = sds
         if sds is None:
             out["materials_without_sds"].append(material)
-        out["declarations_by_material"][material.id] = document_store.current_document(
-            session, material.id, DOCUMENT_TYPE_DECLARATION
+        # Every supplier-issued form, not only the one titled "declaration".
+        # See certipur_criteria.ACCEPTED_EVIDENCE: CertiPUR requires that the
+        # evidence exists, and a supplier issues it as a specification, a
+        # certificate of analysis or a test report just as often.
+        out["supplier_evidence_by_material"][material.id] = list(
+            session.query(RawMaterialDocument)
+            .filter(
+                RawMaterialDocument.raw_material_id == material.id,
+                RawMaterialDocument.document_type.in_(list(SUPPLIER_EVIDENCE_TYPES)),
+                RawMaterialDocument.is_current.is_(True),
+            )
+            .order_by(RawMaterialDocument.created_at.desc())
+            .all()
         )
     return out
 
@@ -476,7 +487,19 @@ def _substance_screen(session, criterion, resolved, applies_to_categories=None):
 def _supplier_statement(session, criterion, resolved, categories, what_is_needed):
     """3.1's colour paste half, 3.2, 3.5 and 3.7 - the criteria a safety data
     sheet is structurally silent on, where CertiPUR names the supplier as the
-    source. All that can be checked here is whether such a statement is held."""
+    source.
+
+    Satisfied by ANY of the supplier-issued forms the criterion accepts, not by
+    a document with a particular title. CertiPUR requires that the evidence
+    exists; a supplier issues it as a declaration, a specification, a
+    certificate of analysis or a test report depending on their own practice.
+    Demanding one title would make a customer misfile a perfectly good
+    certificate to get past the check, which corrupts the evidence register to
+    satisfy a vocabulary this application invented.
+
+    What is checked here is that a document of an acceptable KIND is held. Its
+    contents are not read, and the result says so rather than implying more."""
+    accepted = cc.accepted_evidence(criterion.criterion_key) or SUPPLIER_EVIDENCE_TYPES
     materials = [m for m in resolved["materials"] if (m.category or "") in categories]
     if not materials:
         return _result(
@@ -487,31 +510,43 @@ def _supplier_statement(session, criterion, resolved, categories, what_is_needed
 
     evidence, missing = [], []
     for material in materials:
-        doc = resolved["declarations_by_material"].get(material.id)
-        if doc is None:
+        held = [
+            d for d in (resolved["supplier_evidence_by_material"].get(material.id) or [])
+            if d.document_type in accepted
+        ]
+        if not held:
             missing.append(material)
-            evidence.append(_ev("None held", "No supplier declaration is held for this raw material.", material))
-        else:
             evidence.append(_ev(
-                DOCUMENT_TYPE_DECLARATION,
-                "A supplier declaration is held.", material, doc,
+                "None held",
+                "No supplier evidence of an accepted kind is held for this raw material. "
+                "Accepted: %s." % ", ".join(accepted),
+                material,
+            ))
+        else:
+            doc = held[0]
+            evidence.append(_ev(
+                doc.document_type,
+                "A %s is held. Its contents are not read by PI3 - what is recorded is that the "
+                "evidence exists and where." % doc.document_type.lower(),
+                material, doc,
             ))
 
     if missing:
         return _result(
             STATUS_MISSING,
-            "A supplier declaration is needed for %d raw material%s and is not held: %s. %s"
+            "Supplier evidence is needed for %d raw material%s and none of an accepted kind is "
+            "held: %s. %s"
             % (len(missing), "" if len(missing) == 1 else "s",
                ", ".join(m.name for m in missing), what_is_needed),
-            "Ask the supplier for the statement and attach it as a Supplier Declaration on the "
-            "Raw Materials Documents tab.",
+            "Ask the supplier for it and attach it on the Raw Materials Documents tab, typed as "
+            "what it actually is. Any of these satisfies this criterion: %s." % ", ".join(accepted),
             evidence,
         )
     return _result(
         STATUS_MEETS,
-        "A supplier declaration is held for all %d relevant raw material%s. The declaration's "
-        "CONTENT is not read by PI3 - what is recorded is that the evidence exists and where."
-        % (len(materials), "" if len(materials) == 1 else "s"),
+        "Supplier evidence of an accepted kind is held for all %d relevant raw material%s. The "
+        "content of that evidence is not read by PI3 - what is recorded is that it exists and "
+        "where." % (len(materials), "" if len(materials) == 1 else "s"),
         None, evidence,
     )
 
@@ -527,7 +562,7 @@ _AZO_STATEMENT = (
 )
 _BIOCIDE_STATEMENT = (
     "Only biocides authorised under Regulation 528/2012 for product type 9 may be used, which is "
-    "a statement the biocide supplier makes."
+    "something only the biocide supplier can confirm."
 )
 _CHLOROBENZENE_STATEMENT = (
     "CertiPUR states the evidence may be obtained from the raw material supplier: a limit of "
