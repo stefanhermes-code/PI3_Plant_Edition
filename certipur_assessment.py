@@ -40,6 +40,7 @@ import datetime as dt
 
 import certipur_criteria as cc
 import document_store
+import regulatory_reference as rr
 from db import (
     DOCUMENT_TYPE_APPLICANT_DECLARATION,
     DOCUMENT_TYPE_SDS,
@@ -304,8 +305,48 @@ def _measured(criterion):
     return _result(STATUS_TESTING, rationale, action)
 
 
+def _disclosed_cas(session, resolved, materials):
+    """Every CAS number disclosed in the compositions of these materials,
+    with the material and document each came from.
+
+    Only CAS numbers that survive normalisation AND the check digit are used
+    for a regulatory lookup. A number that fails the check digit is not
+    silently dropped - it is returned separately so the caller can report it,
+    because a mistyped identifier that nobody notices is how a prohibited
+    substance passes."""
+    good, malformed = [], []
+    for material in materials:
+        doc = resolved["sds_by_material"].get(material.id)
+        if doc is None:
+            continue
+        for sub in _substances_for(session, doc):
+            if not sub.cas_number:
+                continue
+            norm = rr.normalise_cas(sub.cas_number)
+            if norm and rr.cas_check_digit_ok(norm):
+                good.append((material, doc, sub, norm))
+            else:
+                malformed.append((material, doc, sub))
+    return good, malformed
+
+
 def _hazard_classification(session, criterion, resolved):
-    """Section 3.4 - the one criterion answered deterministically.
+    """Section 3.4 - the one criterion answered deterministically, and after
+    Charlie's review of 21 Aug 2026 it is answered from TWO sources.
+
+    The CertiPUR requirement has two limbs and they are not the same fact:
+
+      the SUPPLIER SELF-CLASSIFICATION printed on the safety data sheet, which
+      prohibits use "from the moment this appear on the SDS"; and
+
+      the HARMONISED CLASSIFICATION under CLP Regulation 1272/2008, which
+      prohibits use from the date it enters into application regardless of what
+      any supplier happened to write on any sheet.
+
+    A supplier can be behind. The harmonised list is the fact that does not
+    depend on them, so a clean sheet alone is not an answer - it is half of
+    one. Where the harmonised reference is not loaded, this criterion cannot
+    return Meets requirement and says so.
 
     Biocides are excluded here, not overlooked: section 3.5 says the 3.4 rule
     does not apply to them, so including a biocide would produce a failure the
@@ -321,6 +362,8 @@ def _hazard_classification(session, criterion, resolved):
         )
 
     evidence, hits, missing = [], [], []
+
+    # --- limb 1: the supplier self-classification on the sheet --------------
     for material in in_scope:
         doc = resolved["sds_by_material"].get(material.id)
         if doc is None:
@@ -329,7 +372,7 @@ def _hazard_classification(session, criterion, resolved):
             continue
         prohibited = cc.prohibited_hazard_codes(doc.hazard_codes)
         if prohibited:
-            hits.append((material, prohibited, doc))
+            hits.append((material, prohibited, doc, "supplier self-classification"))
             evidence.append(_ev(
                 DOCUMENT_TYPE_SDS,
                 "Carries %s - a CMR class 1a/1b or STOT SE 1 classification." % ", ".join(prohibited),
@@ -343,6 +386,47 @@ def _hazard_classification(session, criterion, resolved):
                 material, doc,
             ))
 
+    # --- limb 2: the harmonised classification under CLP --------------------
+    loaded, ref_label = rr.reference_state(session, rr.REFERENCE_HARMONISED_CLP)
+    screened_cas, malformed = _disclosed_cas(session, resolved, in_scope)
+    for material, doc, sub in malformed:
+        evidence.append(_ev(
+            DOCUMENT_TYPE_SDS,
+            "CAS number %r could not be read as a valid CAS registry number, so this substance "
+            "was not looked up against the harmonised classification."
+            % (sub.cas_number or ""),
+            material, doc,
+        ))
+    if loaded:
+        by_cas = {}
+        for record in rr.lookup(session, rr.REFERENCE_HARMONISED_CLP,
+                                [c for _m, _d, _s, c in screened_cas]):
+            by_cas.setdefault(record.cas_normalised, []).append(record)
+        for material, doc, sub, norm in screened_cas:
+            for record in by_cas.get(norm, []):
+                prohibited = cc.prohibited_hazard_codes(record.classification_codes)
+                if prohibited:
+                    hits.append((material, prohibited, doc, "harmonised classification"))
+                    evidence.append(_ev(
+                        "Harmonised classification (Annex VI to CLP)",
+                        "%s (CAS %s) carries the harmonised classification %s. Source: %s, row %s."
+                        % (record.substance_name or sub.name or "substance", record.cas_number,
+                           ", ".join(prohibited), ref_label, record.source_row_number),
+                        material, doc,
+                    ))
+        evidence.append(_ev(
+            "Harmonised classification (Annex VI to CLP)",
+            "%d disclosed CAS number%s screened against %s."
+            % (len(screened_cas), "" if len(screened_cas) == 1 else "s", ref_label),
+        ))
+    else:
+        evidence.append(_ev(
+            "None held",
+            "The harmonised classification reference (Annex VI to CLP) is not loaded, so the "
+            "second limb of this criterion could not be checked. %d disclosed CAS number%s "
+            "available to screen." % (len(screened_cas), " was" if len(screened_cas) == 1 else "s were"),
+        ))
+
     if excluded:
         evidence.append(_ev(
             "Formulation",
@@ -351,9 +435,11 @@ def _hazard_classification(session, criterion, resolved):
         ))
 
     if hits:
-        # A prohibition takes precedence over a missing document: a known
-        # failure is not softened by an incomplete file.
-        named = "; ".join("%s (%s)" % (m.name, ", ".join(codes)) for m, codes, _ in hits)
+        # A prohibition takes precedence over a missing document or an
+        # unloaded reference: a known failure is not softened by an
+        # incomplete file.
+        named = "; ".join("%s (%s, from the %s)" % (m.name, ", ".join(codes), source)
+                          for m, codes, _d, source in hits)
         rationale = (
             "%d raw material%s carr%s a prohibited hazard classification: %s"
             % (len(hits), "" if len(hits) == 1 else "s", "ies" if len(hits) == 1 else "y", named)
@@ -381,10 +467,29 @@ def _hazard_classification(session, criterion, resolved):
             evidence,
         )
 
+    if not loaded:
+        # Charlie, 21 Aug 2026: "A clean SDS alone cannot return Meets
+        # requirement while the harmonised-classification check is absent."
+        return _result(
+            STATUS_MISSING,
+            "No safety data sheet among the %d raw materials in scope carries H340, H350, H360 "
+            "or H370. That answers the supplier self-classification limb of this criterion. The "
+            "harmonised classification limb could not be answered: the Annex VI to CLP reference "
+            "is not loaded, and CertiPUR prohibits a substance carrying a harmonised CMR 1A/1B or "
+            "STOT SE 1 classification whatever the supplier's own sheet says."
+            % len(in_scope),
+            "Load the current official Annex VI to CLP table as the harmonised classification "
+            "reference, then reassess. Source: %s"
+            % rr.REFERENCE_SOURCES[rr.REFERENCE_HARMONISED_CLP],
+            evidence,
+        )
+
     return _result(
         STATUS_MEETS,
         "All %d raw materials in scope hold a current safety data sheet and none carries H340, "
-        "H350, H360 or H370." % len(in_scope),
+        "H350, H360 or H370. %d disclosed CAS number%s screened against %s, and none carries "
+        "a harmonised CMR 1A/1B or STOT SE 1 classification."
+        % (len(in_scope), len(screened_cas), " was" if len(screened_cas) == 1 else "s were", ref_label),
         None, evidence,
     )
 
@@ -655,6 +760,81 @@ _CHLOROBENZENE_STATEMENT = (
 )
 
 
+
+
+def _azo_colourants(session, criterion, resolved):
+    """Section 3.2 - CAS identity first, supplier statement second.
+
+    Returns a Potential issue on a positive identity match. Otherwise defers
+    entirely to _supplier_statement, adding what the CAS step did or could not
+    do to the evidence register so the report never implies a screen happened
+    that did not."""
+    colourants = [m for m in resolved["materials"] if (m.category or "") == CATEGORY_COLOURANT]
+    if not colourants:
+        return _supplier_statement(session, criterion, resolved, {CATEGORY_COLOURANT}, _AZO_STATEMENT)
+
+    loaded, ref_label = rr.reference_state(session, rr.REFERENCE_RESTRICTED_AZO)
+    screened, malformed = _disclosed_cas(session, resolved, colourants)
+    extra = []
+    for material, doc, sub in malformed:
+        extra.append(_ev(
+            DOCUMENT_TYPE_SDS,
+            "CAS number %r could not be read as a valid CAS registry number, so this substance "
+            "was not looked up against the restricted azo colourant reference."
+            % (sub.cas_number or ""),
+            material, doc,
+        ))
+
+    if loaded:
+        by_cas = {}
+        for record in rr.lookup(session, rr.REFERENCE_RESTRICTED_AZO,
+                                [c for _m, _d, _s, c in screened]):
+            by_cas.setdefault(record.cas_normalised, []).append(record)
+        found = []
+        for material, doc, sub, norm in screened:
+            for record in by_cas.get(norm, []):
+                found.append((material, record))
+                extra.append(_ev(
+                    "Restricted azo colourants (REACH Annex XVII Entry 43)",
+                    "%s (CAS %s) is listed under %s. Source: %s, row %s."
+                    % (record.substance_name or sub.name or "substance", record.cas_number,
+                       record.entry_reference or "Restriction Entry 43", ref_label,
+                       record.source_row_number),
+                    material, doc,
+                ))
+        if found:
+            named = "; ".join("%s contains %s" % (m.name, r.substance_name or r.cas_number)
+                              for m, r in found)
+            return _result(
+                STATUS_POTENTIAL,
+                "A colourant in this formulation discloses a substance listed under REACH "
+                "Restriction Entry 43: %s" % named,
+                "Confirm with the colourant supplier whether the substance is present as "
+                "supplied, and substitute the colourant if it is.",
+                extra,
+            )
+        extra.append(_ev(
+            "Restricted azo colourants (REACH Annex XVII Entry 43)",
+            "%d disclosed CAS number%s screened against %s, none listed. A clean screen does "
+            "not clear this criterion: Entry 43 restricts the aromatic amines a colourant may "
+            "release, which a safety data sheet need not disclose."
+            % (len(screened), "" if len(screened) == 1 else "s", ref_label),
+        ))
+    else:
+        extra.append(_ev(
+            "None held",
+            "The restricted azo colourant reference is not loaded, so the CAS identity step did "
+            "not run. It could only have raised a finding, never cleared the criterion, so the "
+            "conclusion below is unaffected.",
+        ))
+
+    result = _supplier_statement(session, criterion, resolved, {CATEGORY_COLOURANT}, _AZO_STATEMENT)
+    merged = dict(result)
+    merged["evidence"] = extra + list(result.get("evidence") or [])
+    return merged
+
+
+
 def _apply_declaration_requirement(criterion, resolved, result):
     """A criterion that rests on the applicant's declaration cannot read Meets
     requirement on screening alone (Charlie's review, 21 Aug 2026).
@@ -745,7 +925,16 @@ def evaluate_criterion(session, criterion, resolved):
         merged["rationale"] = screen["rationale"] + " " + paste["rationale"]
         return merged
     if key == "CP-3.2-AZO-DYES":
-        return _supplier_statement(session, criterion, resolved, {CATEGORY_COLOURANT}, _AZO_STATEMENT)
+        # Charlie's review of 21 Aug 2026: try CAS identity FIRST, then the
+        # supplier statement. The order matters and the asymmetry matters more.
+        # A recognised restricted azo colourant in the composition is a finding
+        # that should be raised immediately, without waiting for anybody to
+        # read a supplier letter. A clean screen clears nothing at all, because
+        # Restriction Entry 43 is about the aromatic amines a colourant may
+        # RELEASE, which a safety data sheet is under no obligation to disclose.
+        # So the CAS step can only ever ADD a Potential issue; it can never
+        # produce a pass, and its absence cannot produce one either.
+        return _azo_colourants(session, criterion, resolved)
     if key == "CP-3.5-BIOCIDES":
         return _supplier_statement(session, criterion, resolved, {CATEGORY_BIOCIDE}, _BIOCIDE_STATEMENT)
     if key == "CP-3.7-CHLOROBENZENES":

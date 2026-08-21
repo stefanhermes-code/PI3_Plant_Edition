@@ -1722,6 +1722,73 @@ class PI3AIConnectionSetting(Base):
 # Intelligence page.
 
 # ---------------------------------------------------------------------------
+# 11c. regulatory_reference_sets / regulatory_reference_records
+#      Controlled regulatory reference data (added 2026-08-21)
+# ---------------------------------------------------------------------------
+# Charlie's CertiPUR review of 21 Aug 2026: criterion 3.4 must check the
+# harmonised classification under CLP Regulation 1272/2008 as well as the
+# supplier self-classification on the safety data sheet, and criterion 3.2 must
+# try a CAS identity step before it reads a supplier letter.
+#
+# Both need reference data that is published, amended regularly and owned by
+# nobody in this building. It is therefore LOADED FROM THE OFFICIAL FILE rather
+# than transcribed into a module - see regulatory_reference.py for why that
+# differs from how the CertiPUR criteria themselves are held.
+#
+# Deliberately shaped like the REACH Regulatory Data Library described in the
+# REACH CR, because Annex VI to CLP is the same dataset that CR calls an
+# optional supporting cross-check. One mechanism, two consumers: a CertiPUR
+# assessment and a REACH assessment look the substance up in the same place and
+# both name the exact version they used.
+class RegulatoryReferenceSet(Base):
+    __tablename__ = "regulatory_reference_sets"
+
+    id = Column(Integer, primary_key=True)
+    reference_type = Column(String(120), nullable=False)   # see regulatory_reference.REFERENCE_TYPES
+    name = Column(String(200))
+    version = Column(String(80))
+    source = Column(String(400))
+    source_url = Column(String(400))
+    # The date somebody confirmed the file was the current official one. PI3
+    # does not decide currency; it records who said so and when.
+    source_checked_date = Column(Date)
+    original_file_name = Column(String(300))
+    file_hash = Column(String(64))          # sha256 of the file as loaded
+    parser_name = Column(String(80))
+    parser_version = Column(String(20))
+    record_count = Column(Integer)
+    is_active = Column(Boolean, default=False)
+    loaded_by = Column(String(200))
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+
+class RegulatoryReferenceRecord(Base):
+    """One parsed row of an official reference file.
+
+    source_row_number and the identifiers together are what make a conclusion
+    traceable back to the line of the file it came from."""
+
+    __tablename__ = "regulatory_reference_records"
+
+    id = Column(Integer, primary_key=True)
+    reference_set_id = Column(Integer, ForeignKey("regulatory_reference_sets.id"), nullable=False)
+    cas_number = Column(String(50))
+    # Normalised form used for matching - digits and hyphens, leading zeros
+    # stripped. Held as a column rather than computed at query time so the
+    # lookup can use an index.
+    cas_normalised = Column(String(50), index=True)
+    ec_number = Column(String(50))
+    index_number = Column(String(50))
+    substance_name = Column(String(400))
+    # For Annex VI: the harmonised hazard classification codes, comma joined.
+    # For Entry 43: left blank; the entry reference carries the meaning.
+    classification_codes = Column(String(500))
+    entry_reference = Column(String(120))
+    note = Column(Text)
+    source_row_number = Column(Integer)
+
+
+# ---------------------------------------------------------------------------
 # 17b. CertiPUR readiness - criteria master data and saved assessments
 #      (added 2026-08-20; CR of 19 Aug 2026, Europur approval 20 Aug 2026)
 # ---------------------------------------------------------------------------
