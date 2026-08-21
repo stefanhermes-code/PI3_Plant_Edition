@@ -411,7 +411,7 @@ def _hazard_classification(session, criterion, resolved):
             "biocides from this criterion.",
         )
 
-    evidence, hits, missing = [], [], []
+    evidence, hits, missing, forthcoming = [], [], [], []
 
     # --- limb 1: the supplier self-classification on the sheet --------------
     covered_by_identity = []
@@ -477,18 +477,40 @@ def _hazard_classification(session, criterion, resolved):
         for record in rr.lookup(session, rr.REFERENCE_HARMONISED_CLP,
                                 [c for _m, _d, _s, c in screened_cas]):
             by_cas.setdefault(record.cas_normalised, []).append(record)
+        # A harmonised classification binds from the date it ENTERS INTO
+        # APPLICATION. One that applies from a future date is not a finding
+        # today - reporting it as one would fail foam against a rule that is
+        # not yet in force - but it is worth knowing about, so it is recorded
+        # as a forthcoming change rather than dropped.
+        as_at = dt.date.today()
         for material, doc, sub, norm in screened_cas:
             for record in by_cas.get(norm, []):
                 prohibited = cc.prohibited_hazard_codes(record.classification_codes)
-                if prohibited:
-                    hits.append((material, prohibited, doc, "harmonised classification"))
+                if not prohibited:
+                    continue
+                applies = record.in_application_date
+                name = record.substance_name or sub.name or "substance"
+                if applies is not None and applies > as_at:
+                    forthcoming.append((material, prohibited, applies))
                     evidence.append(_ev(
                         "Harmonised classification (Annex VI to CLP)",
-                        "%s (CAS %s) carries the harmonised classification %s. Source: %s, row %s."
-                        % (record.substance_name or sub.name or "substance", record.cas_number,
-                           ", ".join(prohibited), ref_label, record.source_row_number),
+                        "%s (CAS %s) has a harmonised classification of %s entering into "
+                        "application on %s. Not yet in force, so not a finding today. Source: "
+                        "%s, row %s."
+                        % (name, record.cas_number, ", ".join(prohibited),
+                           applies.isoformat(), ref_label, record.source_row_number),
                         material, doc,
                     ))
+                    continue
+                hits.append((material, prohibited, doc, "harmonised classification"))
+                evidence.append(_ev(
+                    "Harmonised classification (Annex VI to CLP)",
+                    "%s (CAS %s) carries the harmonised classification %s%s. Source: %s, row %s."
+                    % (name, record.cas_number, ", ".join(prohibited),
+                       (", in application since " + applies.isoformat()) if applies else "",
+                       ref_label, record.source_row_number),
+                    material, doc,
+                ))
         evidence.append(_ev(
             "Harmonised classification (Annex VI to CLP)",
             "%d disclosed CAS number%s screened against %s."
@@ -570,11 +592,20 @@ def _hazard_classification(session, criterion, resolved):
            "is" if len(covered_by_identity) == 1 else "are",
            "it" if len(covered_by_identity) == 1 else "them",
            ", ".join(m.name for m in covered_by_identity)))
+    tail = ""
+    if forthcoming:
+        tail = ("\n%d raw material%s carr%s a harmonised classification that is not yet in "
+                "force: %s. Not a finding today, and worth planning for."
+                % (len(forthcoming), "" if len(forthcoming) == 1 else "s",
+                   "ies" if len(forthcoming) == 1 else "y",
+                   "; ".join("%s (%s from %s)" % (m.name, ", ".join(c), d.isoformat())
+                             for m, c, d in forthcoming)))
     return _result(
         STATUS_MEETS,
         "%s %d disclosed CAS number%s screened against %s, and none carries a harmonised "
-        "CMR 1A/1B or STOT SE 1 classification."
-        % (by_sheet, len(screened_cas), " was" if len(screened_cas) == 1 else "s were", ref_label),
+        "CMR 1A/1B or STOT SE 1 classification in force today.%s"
+        % (by_sheet, len(screened_cas), " was" if len(screened_cas) == 1 else "s were",
+           ref_label, tail),
         None, evidence,
     )
 

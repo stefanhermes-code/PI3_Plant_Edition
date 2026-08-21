@@ -1841,6 +1841,13 @@ class RegulatoryReferenceRecord(Base):
     # For Entry 43: left blank; the entry reference carries the meaning.
     classification_codes = Column(String(500))
     entry_reference = Column(String(120))
+    # When this classification ENTERS INTO APPLICATION. Annex VI carries it per
+    # entry and it is load-bearing for CertiPUR section 3.4, which prohibits a
+    # substance "from the date of entry into application" - so a harmonised CMR
+    # classification that applies from February 2027 is not a finding today.
+    # 14 of the 1,174 prohibited entries in ATP23 are in that position.
+    # NULL where the source does not state one, which is every Entry 43 record.
+    in_application_date = Column(Date)
     note = Column(Text)
     source_row_number = Column(Integer)
 

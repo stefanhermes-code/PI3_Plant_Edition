@@ -137,3 +137,41 @@ def lookup(session, reference_type, cas_numbers):
         .order_by(RegulatoryReferenceRecord.id)
         .all()
     )
+
+
+def load_reference(session, reference_type, records, meta, *, raw_bytes,
+                   original_file_name, source_checked_date, loaded_by):
+    """Store one parsed file as the new ACTIVE set of its type.
+
+    The previous active set of the same type is marked superseded rather than
+    deleted, and its records stay. An assessment that cited it keeps citing it,
+    which is the same discipline a superseded safety data sheet follows.
+
+    Does not commit - the caller does, so a failed parse leaves nothing."""
+    import hashlib
+
+    previous = active_set(session, reference_type)
+    if previous is not None:
+        previous.is_active = False
+        session.flush()
+
+    new = RegulatoryReferenceSet(
+        reference_type=reference_type,
+        name=meta.get("name") or reference_type,
+        version=meta.get("version"),
+        source=(meta.get("disclaimer") or "")[:400] or None,
+        source_url=REFERENCE_SOURCES.get(reference_type),
+        source_checked_date=source_checked_date,
+        original_file_name=original_file_name,
+        file_hash=hashlib.sha256(raw_bytes).hexdigest(),
+        parser_name=meta.get("parser_name"),
+        parser_version=meta.get("parser_version"),
+        record_count=len(records),
+        is_active=True,
+        loaded_by=loaded_by,
+    )
+    session.add(new)
+    session.flush()
+    for r in records:
+        session.add(RegulatoryReferenceRecord(reference_set_id=new.id, **r))
+    return new
