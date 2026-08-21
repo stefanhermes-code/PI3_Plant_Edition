@@ -1655,7 +1655,11 @@ class PhysicalPropertyResult(Base):
     production_run_id = Column(Integer, ForeignKey("production_runs.id"))
     customer_trial_id = Column(Integer, ForeignKey("customer_trials.id"))
     optimization_trial_id = Column(Integer, ForeignKey("optimization_trials.id"))
-    sample_id = Column(Integer, ForeignKey("samples.id"))  # nullable: older rows predate sample tracking
+    # Mandatory. Every quality test result is a measurement of a physical
+    # specimen, so the specimen is part of the record. The database enforces
+    # this with a NOT NULL plus a composite foreign key per source type, so a
+    # result can never name a sample belonging to a different run or trial.
+    sample_id = Column(Integer, ForeignKey("samples.id"), nullable=False)
     property_definition_id = Column(Integer, ForeignKey("physical_property_definitions.id"))  # nullable for legacy/"Other"
     property_method_id = Column(Integer, ForeignKey("physical_property_methods.id"))  # nullable
     property_name = Column(String(200), nullable=False)  # snapshot text, auto-filled from the chosen definition
@@ -1673,6 +1677,82 @@ class PhysicalPropertyResult(Base):
     production_run = relationship("ProductionRun")
     customer_trial = relationship("CustomerTrial")
     optimization_trial = relationship("OptimizationTrial")
+
+
+# ---------------------------------------------------------------------------
+# Same-source sample integrity for quality test results.
+#
+# Charlie's rule of 21 Aug 2026: a quality test result must always reference a
+# sample, and that sample must belong to the SAME source record as the result -
+# for all three source types, not just production runs.
+#
+# The database enforces this itself (NOT NULL on sample_id, a check constraint
+# for exactly-one-source, and one composite foreign key per source type). This
+# function is the application's copy of the same rule, so manual entry, editing
+# and CSV/Excel import all give the same answer the database would give. It is
+# the single place the rule is written for the application - if the two ever
+# disagree, that is a defect.
+#
+# Returns None when the result is valid, otherwise the reason as plain text.
+# ---------------------------------------------------------------------------
+QUALITY_RESULT_SOURCE_FIELDS = (
+    ("production_run_id", "production run"),
+    ("customer_trial_id", "customer trial"),
+    ("optimization_trial_id", "optimization trial"),
+)
+
+
+def validate_quality_result_sample(
+    session,
+    sample_id,
+    production_run_id=None,
+    customer_trial_id=None,
+    optimization_trial_id=None,
+):
+    """Validate the sample relationship of one quality test result.
+
+    Returns None if it is acceptable, else a human-readable reason.
+    """
+    named = {
+        "production_run_id": production_run_id,
+        "customer_trial_id": customer_trial_id,
+        "optimization_trial_id": optimization_trial_id,
+    }
+    set_fields = [(f, label) for f, label in QUALITY_RESULT_SOURCE_FIELDS if named[f] is not None]
+
+    if len(set_fields) != 1:
+        return (
+            "A quality test result must belong to exactly one of a production run, "
+            "a customer trial or an optimization trial."
+        )
+
+    if sample_id is None:
+        return "A quality test result must be linked to the sample it was measured on."
+
+    sample = session.get(Sample, sample_id)
+    if sample is None:
+        return "Sample #%s does not exist." % sample_id
+
+    field, label = set_fields[0]
+    sample_owner = getattr(sample, field, None)
+    if sample_owner != named[field]:
+        # Name where the sample actually belongs, so the message tells the
+        # person what is wrong rather than only that something is.
+        belongs_to = next(
+            (
+                "%s #%s" % (other_label, getattr(sample, other_field))
+                for other_field, other_label in QUALITY_RESULT_SOURCE_FIELDS
+                if getattr(sample, other_field, None) is not None
+            ),
+            "no source",
+        )
+        return (
+            "Sample #%s belongs to %s, but this result names %s #%s. "
+            "A result and its sample must belong to the same record."
+            % (sample_id, belongs_to, label, named[field])
+        )
+
+    return None
 
 
 # ---------------------------------------------------------------------------

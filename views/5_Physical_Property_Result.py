@@ -51,6 +51,7 @@ from db import (
     get_session,
     init_db,
     sample_source_fk_field,
+    validate_quality_result_sample,
 )
 from helpers import (
     clickable_table,
@@ -306,7 +307,7 @@ with tab_result_manual:
                 sample = st.selectbox(
                     "Sample *",
                     list(samples_for_parent),
-                    format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
+                    format_func=lambda s: f"Sample #{s.id} — {s.zone_label}",
                     key="result_sample_select",
                     help=(
                         "Every quality test result is a measurement of a physical specimen, so the "
@@ -376,11 +377,13 @@ with tab_result_manual:
                     if submitted:
                         final_method = method_other.strip() or (method_choice.method_code if method_choice else "")
                         final_unit = uom_other.strip() or (uom_choice.unit_label if uom_choice else "")
-                        if sample is None:
-                            st.error(
-                                "A quality test result must be linked to the sample it was "
-                                "measured on. Record the sample first if it does not exist yet."
-                            )
+                        sample_problem = validate_quality_result_sample(
+                            session,
+                            sample.id if sample else None,
+                            **{sample_source_fk_field(source_type): parent.id},
+                        )
+                        if sample_problem:
+                            st.error(sample_problem)
                         elif not property_def:
                             st.error("Select a property.")
                         elif not final_method:
@@ -388,7 +391,7 @@ with tab_result_manual:
                         else:
                             pass_fail = compute_pass_fail(property_def.name, target_value, actual_value)
                             new_result = PhysicalPropertyResult(
-                                sample_id=sample.id if sample else None,
+                                sample_id=sample.id,
                                 property_definition_id=property_def.id,
                                 property_method_id=method_choice.id if (method_choice and not method_other.strip()) else None,
                                 property_name=property_def.name,
@@ -472,23 +475,27 @@ with tab_result_import:
                 sample_val = row.get("sample_id")
                 sample_given = not pd.isna(sample_val) and str(sample_val).strip() != ""
                 sample_ok = (not sample_given) or int(sample_val) in samples_all
-                # A production row must carry a sample, and that sample must
-                # belong to the run the row names. The second half matters as
-                # much as the first: a sample_id that exists is not the same as
-                # a sample_id that belongs here, and a spreadsheet is exactly
-                # where a stale id gets copied from one run to another.
-                # Required on every row, and the sample must belong to the
-                # parent the row names. The second half matters as much as the
-                # first: a sample_id that exists is not the same as one that
-                # belongs here, and a spreadsheet is exactly where a stale id
-                # gets copied from one parent to another.
-                if not sample_given:
+                # Two separate gates, both required.
+                #
+                # First, tenancy: the sample must be one of THIS company's, or
+                # a CSV row could attach a result to another company's sample.
+                # samples_all is already scoped to this company's parents.
+                #
+                # Second, the same-source relationship, checked by the shared
+                # validator so the import gives exactly the answer manual entry
+                # and the database would give. A sample_id that exists is not
+                # the same as one that belongs here, and a spreadsheet is
+                # exactly where a stale id gets copied from one parent to
+                # another.
+                if not sample_given or not sample_ok:
                     sample_ok = False
-                elif sample_ok:
-                    linked = samples_all.get(int(sample_val))
+                else:
                     sample_ok = (
-                        linked is not None
-                        and getattr(linked, fk_field, None) == _fk_val
+                        int(sample_val) in samples_all
+                        and validate_quality_result_sample(
+                            session, int(sample_val), **{fk_field: _fk_val}
+                        )
+                        is None
                     )
                 has_method_unit_value = (
                     str(row.get("test_method", "")).strip()
@@ -561,7 +568,7 @@ with tab_result_import:
                 tested_val = pd.to_datetime(row.get("tested_at"), errors="coerce")
                 fk_field, fk_val = _row_fk(row)
                 new_result = PhysicalPropertyResult(
-                    sample_id=int(sample_val) if not pd.isna(sample_val) else None,
+                    sample_id=int(sample_val),
                     property_definition_id=prop_def.id,
                     property_method_id=method_match.id if method_match else None,
                     property_name=prop_def.name,
@@ -804,24 +811,28 @@ if selected_result:
             session, edit_source_label,
             selected_result.production_run_id or selected_result.customer_trial_id or selected_result.optimization_trial_id,
         ) if edit_source_label in SAMPLE_SOURCE_TYPES else []
-        sample_options = [None] + samples_for_edit
-        sample_default = next((i for i, s in enumerate(sample_options) if s and s.id == selected_result.sample_id), 0)
+        # No "not linked" option. A sample is mandatory on every quality test
+        # result, whatever its source, and the list is scoped to the parent this
+        # result names - so a sample can never be moved to a foreign run or
+        # trial from here. The database enforces the same rule.
+        sample_options = list(samples_for_edit)
+        sample_default = next(
+            (i for i, s in enumerate(sample_options) if s.id == selected_result.sample_id), 0
+        )
         e_sample = st.selectbox(
-            "Sample (optional)" if selected_result.sample_id is None else "Sample *",
+            "Sample *",
             sample_options, index=sample_default,
-            format_func=lambda s: "— not linked to a sample —" if s is None else f"Sample #{s.id} — {s.zone_label}",
+            format_func=lambda s: f"Sample #{s.id} — {s.zone_label}",
             key=f"edit_result_sample_{selected_result.id}",
         )
-        if selected_result.production_run_id is not None and selected_result.sample_id is None:
-            # Deliberately still saveable without a sample. This result predates
-            # the rule and the zone it was measured on is not recorded anywhere,
-            # so forcing one here would make somebody invent it - the exact
-            # inference the instruction says to avoid. It can be linked by
-            # anyone who knows the answer, and left alone by anyone who does not.
-            st.caption(
-                "This result was recorded before a sample link was required, and the zone it came "
-                "from is not held. Link it if you know which sample it belongs to; leave it "
-                "unlinked otherwise."
+        if not sample_options:
+            st.warning(
+                "This result's %s has no samples recorded, so the sample link cannot be set here. "
+                "Add its sample on the %s page first."
+                % (
+                    edit_source_label.lower(),
+                    SOURCE_ORIGIN_PAGE.get(edit_source_label, edit_source_label),
+                )
             )
         ec1, ec2 = st.columns(2)
         e_target = ec1.number_input(
@@ -879,11 +890,20 @@ if selected_result:
         if st.form_submit_button("Save changes", disabled=not page_usable) and page_usable:
             e_method = e_method_other.strip() or (e_method_choice.method_code if e_method_choice else "")
             e_unit = e_uom_other.strip() or (e_uom_choice.unit_label if e_uom_choice else "")
-            if not e_method:
+            e_sample_problem = validate_quality_result_sample(
+                session,
+                e_sample.id if e_sample else None,
+                production_run_id=selected_result.production_run_id,
+                customer_trial_id=selected_result.customer_trial_id,
+                optimization_trial_id=selected_result.optimization_trial_id,
+            )
+            if e_sample_problem:
+                st.error(e_sample_problem)
+            elif not e_method:
                 st.error("A measuring method is required.")
             else:
                 pass_fail = compute_pass_fail(selected_result.property_name, e_target, e_actual)
-                selected_result.sample_id = e_sample.id if e_sample else None
+                selected_result.sample_id = e_sample.id
                 selected_result.target_value = e_target or None
                 selected_result.actual_value = e_actual or None
                 selected_result.unit = e_unit
