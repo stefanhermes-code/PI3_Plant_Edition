@@ -104,7 +104,7 @@ aborted. A safety mechanism nobody has watched fail is not evidence.
 | `tests/unit/` | Runs with no external service. In-memory SQLite is allowed. |
 | `tests/integration/` | Needs a real service. Today that means PostgreSQL. |
 | `tests/pages/` | Streamlit page-render checks. Empty until work package 6. |
-| `tests/fixtures/` | Builders shared by more than one area. |
+| `tests/fixtures/` | Builders shared by more than one area: in-memory databases, tenant contexts, the two-company world. |
 | `tests/checks/` | The pre-CR scripts, carried across. See below. |
 | `tests/_recorder.py` | The machinery that replays them. |
 | `tests/isolation.py` | The fail-closed guard described above. |
@@ -150,6 +150,26 @@ not there.
 `integration/` or `pages/`, using the fixtures in `tests/fixtures/`. As each
 area is rewritten that way, its check module and its wrapper are deleted, and
 `tests/checks/` shrinks toward nothing.
+
+## Isolation tests need two companies
+
+`tests/fixtures/world.py` builds two fully populated companies - plant, product
+family, foam grade, recipe version, production run, customer trial,
+optimization trial - plus a third with nothing in it. The `world` fixture hands
+it to a test.
+
+One company is never enough. With only company A in the database, a query that
+ignores the company filter altogether returns exactly what a correctly scoped
+query returns, and the test passes while proving nothing.
+
+So every isolation test asserts **both halves**: what the company may see, and
+what it may not. A test that only asserts the first half is not an isolation
+test, and will be treated as a defect.
+
+The third company covers the case that is easiest to get wrong: `None` means
+*unfiltered* and `[]` means *this company has none of these yet*. Treating the
+second as the first would show a brand-new company every other company's
+production runs on its first login.
 
 ## Adding a test
 

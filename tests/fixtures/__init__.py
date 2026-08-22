@@ -7,6 +7,7 @@ each area is rewritten as ordinary pytest tests.
 """
 
 from .database import sqlite_session
+from .world import CompanyRows, World, two_company_world
 from .tenancy import (
     TenantContext,
     UnfilteredScope,
@@ -15,9 +16,12 @@ from .tenancy import (
 )
 
 __all__ = [
+    "CompanyRows",
     "TenantContext",
     "UnfilteredScope",
     "platform_owner_all_companies",
     "sqlite_session",
     "tenant",
+    "two_company_world",
+    "World",
 ]

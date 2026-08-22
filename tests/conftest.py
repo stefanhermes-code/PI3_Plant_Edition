@@ -167,6 +167,32 @@ def sqlite_session():
         session.close()
 
 
+@pytest.fixture(autouse=True)
+def _clear_streamlit_caches():
+    """Empty st.cache_data around every test.
+
+    Several access-control and scope helpers are decorated with
+    ``@st.cache_data`` and keyed on ``company_id`` or ``role_id`` alone - the
+    session is underscore-prefixed so Streamlit does not try to hash it. Two
+    tests that both use company 1, against two different in-memory databases,
+    would otherwise see each other's answers. Autouse because remembering it
+    per test is exactly the kind of thing nobody remembers.
+    """
+    import streamlit as st
+
+    st.cache_data.clear()
+    yield
+    st.cache_data.clear()
+
+
+@pytest.fixture
+def world(sqlite_session):
+    """Two fully populated companies plus one with nothing in it."""
+    from tests.fixtures import two_company_world
+
+    return two_company_world(sqlite_session)
+
+
 @pytest.fixture
 def tenant():
     """Build a company-scoped context. Refuses to build an unfiltered one.
