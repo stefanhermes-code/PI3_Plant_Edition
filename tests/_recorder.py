@@ -118,6 +118,18 @@ class _Recorder:
             self.section = match.group(1)
 
 
+# Exceptions that must never be recorded as a failed check. A session that is
+# being torn down deliberately - the isolation guard refusing a database, a
+# Ctrl-C - has to reach pytest, not be logged as check number 41.
+_ALWAYS_PROPAGATE: tuple = (KeyboardInterrupt, SystemExit)
+try:  # pragma: no cover - pytest is always present when the suite runs
+    from _pytest.outcomes import Exit as _PytestExit
+
+    _ALWAYS_PROPAGATE = _ALWAYS_PROPAGATE + (_PytestExit,)
+except Exception:  # noqa: BLE001 - the recorder works without pytest too
+    pass
+
+
 _current: _Recorder | None = None
 _loaded: dict[str, Recording] = {}
 
@@ -163,6 +175,11 @@ def replay(module: str, expected_checks: int) -> Recording:
         importlib.import_module(f"tests.checks.{module}")
     except SkipChecks as reason:
         recording.skipped = str(reason)
+    except _ALWAYS_PROPAGATE:
+        # The isolation guard aborts the session by raising. A check module
+        # must not swallow that and report it as a failed check - the whole run
+        # is supposed to stop.
+        raise
     except BaseException:  # noqa: BLE001 - a broken module must not stop collection
         recording.error = traceback.format_exc()
     finally:
