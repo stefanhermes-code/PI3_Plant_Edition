@@ -1,0 +1,12 @@
+# Development and test dependencies for PI3 Plant Edition - Flexible Foam.
+#
+# The production pins live in requirements.txt and are not repeated here.
+# Install both to run the suite:
+#
+#     pip install -r requirements.txt -r requirements-dev.txt
+#
+# Pinned exactly, for the same reason the production file is: a suite that
+# passes on one machine and fails on another because a tool moved underneath it
+# is not a regression suite.
+
+pytest==9.1.1

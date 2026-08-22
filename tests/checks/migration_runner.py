@@ -10,31 +10,40 @@ that variable is absent.
 
 Run with `python3 test_migration_runner.py`.
 """
+# ---------------------------------------------------------------------------
+# Moved into the permanent suite on 22 August 2026 under the Permanent
+# Automated Regression Test Suite CR. The body below is the original script,
+# unchanged except for this header, the removal of the local check() helper and
+# the print-and-exit summary, and paths made repository-relative instead of
+# cwd-relative. The check() statements themselves were not retyped.
+#
+# Replayed by tests/_recorder.py. Not importable on its own.
+# ---------------------------------------------------------------------------
+from tests._recorder import PROJECT_ROOT, check, print  # noqa: A004
+import os as _os
+
+
+def _root(*parts):
+    """A path inside the repository, wherever pytest was started from."""
+    return _os.path.join(PROJECT_ROOT, *parts)
+
+from tests._recorder import SkipChecks
+
 import os
-import sys
 import tempfile
 import shutil
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 import sqlalchemy as sa
 
-PASS, FAIL = [], []
-
-
-def check(case, expect, got, detail=""):
-    ok = expect == got
-    (PASS if ok else FAIL).append(case)
-    print(f'  [{"PASS" if ok else "FAIL"}] {case}\n         expected {expect!r}, got {got!r}'
-          + (f'\n         {detail}' if detail else ''))
 
 
 BASE_URL = os.environ.get("PI3_TEST_DB_URL")
 if not BASE_URL:
-    print("SKIPPED: PI3_TEST_DB_URL is not set.")
-    print("These tests need a real Postgres - the runner relies on transactional DDL,")
-    print("dollar-quoted function bodies and to_regclass, none of which SQLite has.")
-    sys.exit(0)
+    raise SkipChecks(
+        "PI3_TEST_DB_URL is not set. These checks need a real Postgres - the "
+        "runner relies on transactional DDL, dollar-quoted function bodies and "
+        "to_regclass, none of which SQLite has."
+    )
 
 import migrate
 
@@ -328,11 +337,3 @@ check("writing a fixture does not touch the live directory", live_files,
       sorted(f for f in os.listdir(live) if f.endswith(".sql")))
 probe.close()
 check("and the live directory is restored afterwards", live, migrate.MIGRATIONS_DIR)
-
-print("\n" + "=" * 78)
-print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
-if FAIL:
-    print("FAILED:")
-    [print("  -", f) for f in FAIL]
-print("=" * 78)
-sys.exit(1 if FAIL else 0)

@@ -7,11 +7,25 @@ Every case states its input and its expected outcome. Deterministic: no
 network, no credentials, no model call. Run with
 `python3 tests/test_regulatory_library.py`.
 """
+# ---------------------------------------------------------------------------
+# Moved into the permanent suite on 22 August 2026 under the Permanent
+# Automated Regression Test Suite CR. The body below is the original script,
+# unchanged except for this header, the removal of the local check() helper and
+# the print-and-exit summary, and paths made repository-relative instead of
+# cwd-relative. The check() statements themselves were not retyped.
+#
+# Replayed by tests/_recorder.py. Not importable on its own.
+# ---------------------------------------------------------------------------
+from tests._recorder import PROJECT_ROOT, check, print  # noqa: A004
+import os as _os
+
+
+def _root(*parts):
+    """A path inside the repository, wherever pytest was started from."""
+    return _os.path.join(PROJECT_ROOT, *parts)
+
 import datetime as dt
 import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
@@ -21,14 +35,6 @@ import db as m
 import regulatory_reference as rr
 import regulatory_storage as rs
 
-PASS, FAIL = [], []
-
-
-def check(case, expect, got, detail=""):
-    ok = expect == got
-    (PASS if ok else FAIL).append(case)
-    print(f'  [{"PASS" if ok else "FAIL"}] {case}\n         expected {expect!r}, got {got!r}'
-          + (f'\n         {detail}' if detail else ''))
 
 
 def fresh():
@@ -407,11 +413,3 @@ check("and storage_object_key", True,
       "storage_object_key" in m.RegulatoryReferenceSet.__table__.columns)
 
 storage_off()
-
-print("\n" + "=" * 78)
-print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
-if FAIL:
-    print("FAILED:")
-    [print("  -", f) for f in FAIL]
-print("=" * 78)
-sys.exit(1 if FAIL else 0)

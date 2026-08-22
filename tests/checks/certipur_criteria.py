@@ -3,18 +3,30 @@
 Every case states its input and its expected outcome. Deterministic: no model
 call, no network. Run with `python3 fixtures.py`.
 """
-import sys, os, datetime as dt, hashlib
-sys.path.insert(0, '.')
+# ---------------------------------------------------------------------------
+# Moved into the permanent suite on 22 August 2026 under the Permanent
+# Automated Regression Test Suite CR. The body below is the original script,
+# unchanged except for this header, the removal of the local check() helper and
+# the print-and-exit summary, and paths made repository-relative instead of
+# cwd-relative. The check() statements themselves were not retyped.
+#
+# Replayed by tests/_recorder.py. Not importable on its own.
+# ---------------------------------------------------------------------------
+from tests._recorder import PROJECT_ROOT, check, print  # noqa: A004
+import os as _os
+
+
+def _root(*parts):
+    """A path inside the repository, wherever pytest was started from."""
+    return _os.path.join(PROJECT_ROOT, *parts)
+
+import os
+import datetime as dt, hashlib
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
 import db as m, certipur_assessment as ca, certipur_criteria as cc, document_store as ds
 import regulatory_reference as rr
 
-PASS, FAIL = [], []
-def check(case, expect, got, detail=""):
-    ok = expect == got
-    (PASS if ok else FAIL).append(case)
-    print(f'  [{"PASS" if ok else "FAIL"}] {case}\n         expected {expect!r}, got {got!r}' + (f'\n         {detail}' if detail else ''))
 
 from sqlalchemy.pool import StaticPool
 def fresh():
@@ -276,7 +288,7 @@ s2 = fresh(); g2, c2 = build(s2, colour_doc=CLEAN_COLOUR, iso_doc=CLEAN_ISO, dec
 check("every criterion returns the same status with and without the references",
       _all_statuses(s1, g1, c1), _all_statuses(s2, g2, c2))
 
-src_all = open('certipur_assessment.py').read() + open('certipur_criteria.py').read()
+src_all = open(_root('certipur_assessment.py')).read() + open(_root('certipur_criteria.py')).read()
 check("the CertiPUR engine cannot read the reference tables", 0,
       src_all.count("regulatory_reference") + src_all.count("RegulatoryReference"))
 for term in ("Candidate List", "Annex XIV", "Annex XVII"):
@@ -389,13 +401,13 @@ print("=" * 78)
 # it compares the keys the views read against the keys resolve_grade builds, so
 # the next rename fails here instead of on a customer's screen.
 import re as _re
-_engine_src = open('certipur_assessment.py').read()
+_engine_src = open(_root('certipur_assessment.py')).read()
 _resolve = _engine_src[_engine_src.index('def resolve_grade'):]
 _resolve = _resolve[:_resolve.index('\n    if company is not None')]
 _provided = set(_re.findall(r'"([a-z_]+)":', _resolve))
 
 _view_paths = [p for p in (
-    'views/33_CertiPUR_Readiness.py',
+    _root('views', '33_CertiPUR_Readiness.py'),
 ) if os.path.exists(p)]
 check("the CertiPUR view is present to check", 1, len(_view_paths))
 
@@ -418,16 +430,9 @@ check("supplier_evidence_by_material maps to lists, not single documents", True,
 print("\n" + "=" * 78)
 print("D. INTERNAL TEST EVIDENCE IS STRUCTURALLY SEPARATE")
 print("=" * 78)
-src = open('certipur_assessment.py').read() + open('certipur_criteria.py').read()
+src = open(_root('certipur_assessment.py')).read() + open(_root('certipur_criteria.py')).read()
 for name in ("PhysicalPropertyResult", "physical_property_results", "QualityObservation", "ProductionRun"):
     check(f'the engine cannot read {name}', 0, src.count(name))
 check("the four measured criteria are the only Testing required results", 4,
       len([c for c in cc.CRITERIA if c["determination"] == cc.DETERMINATION_MEASURED]))
 check("two accredited laboratories are named", 2, len(cc.ACCREDITED_LABORATORIES))
-
-print("\n" + "=" * 78)
-print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
-if FAIL:
-    print("FAILED:"); [print("  -", f) for f in FAIL]
-print("=" * 78)
-sys.exit(1 if FAIL else 0)

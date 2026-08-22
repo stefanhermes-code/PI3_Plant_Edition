@@ -8,19 +8,28 @@ These cases are the six he listed, plus the import path and the exactly-one-
 source rule. Deterministic: no model call, no network. Run with
 `python3 sample_integrity.py`.
 """
-import sys
-sys.path.insert(0, '.')
+# ---------------------------------------------------------------------------
+# Moved into the permanent suite on 22 August 2026 under the Permanent
+# Automated Regression Test Suite CR. The body below is the original script,
+# unchanged except for this header, the removal of the local check() helper and
+# the print-and-exit summary, and paths made repository-relative instead of
+# cwd-relative. The check() statements themselves were not retyped.
+#
+# Replayed by tests/_recorder.py. Not importable on its own.
+# ---------------------------------------------------------------------------
+from tests._recorder import PROJECT_ROOT, check, print  # noqa: A004
+import os as _os
+
+
+def _root(*parts):
+    """A path inside the repository, wherever pytest was started from."""
+    return _os.path.join(PROJECT_ROOT, *parts)
+
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 import db as m
 
-PASS, FAIL = [], []
-def check(case, expect, got, detail=""):
-    ok = expect == got
-    (PASS if ok else FAIL).append(case)
-    print(f'  [{"PASS" if ok else "FAIL"}] {case}\n         expected {expect!r}, got {got!r}'
-          + (f'\n         {detail}' if detail else ''))
 
 
 def fresh():
@@ -123,7 +132,7 @@ check("the database refuses a result with no sample", False, inserted)
 print("\n" + "=" * 78)
 print("E. IMPORT USES THE SAME RULE — no second opinion")
 print("=" * 78)
-src = open('views/5_Physical_Property_Result.py').read()
+src = open(_root('views', '5_Physical_Property_Result.py')).read()
 check("the add form calls the shared validator", True,
       src.count("validate_quality_result_sample") >= 3,
       "add, edit and import must all route through it")
@@ -132,16 +141,9 @@ check("no 'not linked to a sample' option survives anywhere", 0,
 check("the edit form no longer offers an optional sample", 0,
       src.count("Sample (optional)"))
 check("the validator is the only place the rule is written for the app", 1,
-      open('db.py').read().count("def validate_quality_result_sample"))
+      open(_root('db.py')).read().count("def validate_quality_result_sample"))
 
 # The import path builds its own scope dict then defers to the validator; prove
 # both gates are present rather than one having replaced the other.
 check("import keeps the tenancy gate as well as the relationship gate", True,
       "in samples_all" in src and "validate_quality_result_sample" in src)
-
-print("\n" + "=" * 78)
-print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
-if FAIL:
-    print("FAILED:"); [print("  -", f) for f in FAIL]
-print("=" * 78)
-sys.exit(1 if FAIL else 0)
