@@ -83,7 +83,46 @@ _PROCESS_NOUNS = (
     "machine setting", "line speed", "conveyor", "throughput", "output",
     "temperature", "mixer speed", "pressure", "trough", "fall plate",
     "cream time", "rise time", "gel time", "cure",
+    # Added 22 August 2026 with the "compression set" correction. The pairing
+    # rule needs a change verb AND a process noun, and neither "compression"
+    # nor "target" was in either list - so "set the compression target to 8%",
+    # which Charlie named as a request that must escalate, never did. Blanking
+    # the property phrase fixes the descriptive half; this fixes the
+    # instruction half. Both of his paired cases now behave as he specified.
+    "compression",
 )
+
+
+# Property phrases whose own words would otherwise read as a change command.
+#
+# "Compression set" is the name of a foam physical property. The "set" in it
+# belongs to the property, not to the person asking - "show me the compression
+# set trend for this recipe" is a request to look at a chart, and escalating it
+# to Process / Safety Relevant costs a reviewer's attention for nothing. A
+# reviewer buried in confirmations that did not need one stops reading them,
+# and the one that mattered goes through with the rest.
+#
+# Charlie's instruction of 22 August 2026 was deliberately narrow: leave "set"
+# in the general change-command logic, and exclude it only where the token
+# belongs to the recognised phrase. So this is a phrase list, not a change to
+# _CHANGE_VERBS, and it is applied only to verb matching.
+PROPERTY_PHRASES = (
+    "compression set",
+)
+
+_PROPERTY_PHRASE_RE = re.compile(
+    "|".join(re.escape(phrase) for phrase in PROPERTY_PHRASES)
+)
+
+
+def _without_property_phrases(text):
+    """The text with recognised property phrases blanked out.
+
+    Used for change-verb matching only, so that a word inside a property's name
+    is not read as an instruction. Replaced with spaces rather than removed, so
+    every other word keeps its position and its word boundaries.
+    """
+    return _PROPERTY_PHRASE_RE.sub(lambda m: " " * len(m.group(0)), text)
 
 
 def _matches_any(text, terms):
@@ -114,7 +153,15 @@ def classify(call_site, question_text=None):
         # Match at a word start. Plain substring matching read the verb stem
         # "optimiz" out of the middle of nouns, which is how a page name
         # ("Recipe Optimization") escalated an innocent question.
-        if _matches_any(text, _CHANGE_VERBS) and _matches_any(text, _PROCESS_NOUNS):
+        #
+        # Verbs are matched against the text with property phrases blanked out,
+        # so a word that is part of a property's name cannot be read as an
+        # instruction. Nouns are matched against the original text, because a
+        # property phrase is still a thing the question is about.
+        if (
+            _matches_any(_without_property_phrases(text), _CHANGE_VERBS)
+            and _matches_any(text, _PROCESS_NOUNS)
+        ):
             classification = PROCESS_SAFETY_RELEVANT
             source = SOURCE_APPLICATION_RULE
 

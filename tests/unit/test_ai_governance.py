@@ -115,14 +115,76 @@ def test_the_same_terms_used_as_a_real_request_still_escalate(question):
     assert source == gov.SOURCE_APPLICATION_RULE
 
 
-# NOT TESTED ON PURPOSE, and raised with Charlie on 22 August 2026:
-# "show me the compression set trend for this recipe" escalates to Process /
-# Safety Relevant. "set" is a change verb in the term list, and in "compression
-# set" it is a word start, so the pairing rule fires on a purely descriptive
-# question. That is a term-list judgement and the term list is a governance
-# decision, not an engineering one - so it is reported rather than changed
-# here, and deliberately not pinned by a test that would argue against
-# whatever is decided.
+# --- "compression set": the property name, not an instruction ---------------
+#
+# Charlie's correction of 22 August 2026, after this was reported to him.
+# "Compression set" is the name of a foam physical property; the "set" in it
+# belongs to the property. His instruction was narrow: leave "set" in the
+# general change-command logic, exclude it only where the token belongs to the
+# recognised phrase, and prove both sides.
+#
+# These two blocks are that pair. Neither is useful without the other: the
+# first alone could be satisfied by deleting "set" from the verb list, and the
+# second alone by changing nothing.
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "show me the compression set trend for this recipe",
+        "what is the compression set on this grade",
+        "compare the compression set of these two grades",
+    ],
+    ids=["trend", "value", "comparison"],
+)
+def test_a_descriptive_question_about_compression_set_does_not_escalate(question):
+    """The word "set" here is half a property name, not a change command.
+
+    Over-escalation is not a safe failure. A reviewer buried in confirmations
+    that did not need one stops reading them, and the one that mattered goes
+    through with the rest.
+    """
+    classification, source = gov.classify("ask_assistant", question)
+    assert classification == gov.TECHNICAL_ADVISORY
+    assert source == gov.SOURCE_FIXED_CALL_SITE
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "set the compression target to 8%",
+        "reduce the compression set",
+        "can we set the recipe index to 105",
+    ],
+    ids=["set a target", "change the property", "set something else"],
+)
+def test_a_real_instruction_using_set_still_escalates(question):
+    """"set" is untouched in the general change-command logic.
+
+    The exclusion is phrase-specific. Outside the property name, and inside it
+    when the sentence is actually asking for a change, the verb still counts.
+    """
+    classification, source = gov.classify("ask_assistant", question)
+    assert classification == gov.PROCESS_SAFETY_RELEVANT
+    assert source == gov.SOURCE_APPLICATION_RULE
+
+
+def test_the_exclusion_is_a_phrase_list_not_a_change_to_the_verb_list():
+    """The shape of the fix, asserted so it cannot drift into the easy version.
+
+    Deleting "set" from _CHANGE_VERBS would pass the descriptive tests above
+    and quietly stop escalating every real instruction that uses it.
+    """
+    assert "set" in gov._CHANGE_VERBS
+    assert "compression set" in gov.PROPERTY_PHRASES
+
+
+def test_blanking_a_phrase_leaves_the_rest_of_the_sentence_where_it_was():
+    """Same length, so no two words are pushed together into a false match."""
+    masked = gov._without_property_phrases("show the compression set trend")
+    assert len(masked) == len("show the compression set trend")
+    assert "compression" not in masked
+    assert masked.startswith("show the ")
+    assert masked.endswith(" trend")
 
 
 def test_the_scan_is_case_insensitive():
