@@ -10,6 +10,26 @@
 # without a PostgreSQL to talk to. A green run that skipped them is not a green
 # run, so this workflow checks that they actually executed and fails if they
 # did not - see the last step.
+#
+# PYTHON VERSION - corrected 22 August 2026, and worth reading before changing.
+#
+# The first version of this workflow gated on Python 3.11, because that is what
+# .devcontainer/devcontainer.json pins. It failed in 27 seconds, at pip install:
+#
+#     ERROR: Ignored the following versions that require a different python
+#     version: ... 2.5.1 Requires-Python >=3.12
+#     ERROR: No matching distribution found for numpy==2.5.1
+#
+# requirements.txt has moved past 3.11 and nobody noticed, because nothing
+# installed it on 3.11 until this workflow did. The same run passed the whole
+# suite on 3.14 - the version Streamlit Community Cloud actually runs - so the
+# gate now uses 3.14, which is both the only version the pins install on and
+# the version customers are served by.
+#
+# The stale 3.11 pin in .devcontainer/devcontainer.json is a separate defect:
+# that container cannot install this application's own requirements. It is
+# reported, not fixed here, because a devcontainer image bump should be made by
+# someone who can confirm the image exists and rebuild it.
 
 name: Regression suite
 
@@ -62,10 +82,10 @@ jobs:
       - name: Check out the commit under test
         uses: actions/checkout@v4
 
-      - name: Python 3.11
+      - name: Python 3.14, the version this application is deployed on
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.14'
           cache: pip
           cache-dependency-path: |
             requirements.txt
@@ -99,53 +119,3 @@ jobs:
           name: junit-${{ github.run_id }}
           path: junit.xml
           if-no-files-found: warn
-
-  deployment-target:
-    # INFORMATIONAL ONLY - this job cannot fail the gate.
-    #
-    # The application is deployed on Streamlit Community Cloud, which forces
-    # its own Python version and had moved to 3.14 by July 2026 (see the
-    # history in requirements.txt). The repository's own devcontainer pins
-    # 3.11, and that is what the gate above runs, because it is the version
-    # this suite has been proved against.
-    #
-    # So the deployed version is not currently gated. This job reports on it
-    # without blocking, and it should be promoted into the gate above - or the
-    # gap closed some other way - once someone has confirmed the pins resolve
-    # cleanly on 3.14. Leaving it silent would be the worse option: a suite
-    # that never runs on the version customers use is a suite with a hole in
-    # it, and the hole should be visible.
-    name: Python 3.14 (deployment target, informational)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 30
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: pi3
-          POSTGRES_PASSWORD: pi3
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U pi3"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-
-    env:
-      PI3_TEST_DB_URL: postgresql+psycopg2://pi3:pi3@localhost:5432
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.14'
-      - name: Install the pinned dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
-      - name: Run the suite
-        run: python -m pytest

@@ -52,15 +52,28 @@ it. **The build fails if the PostgreSQL-marked checks did not actually run** -
 rather than leaving it to whoever reads the log. "The log said skipped" is not
 a control if nobody reads the log.
 
-One job is informational and cannot fail the gate: the suite on Python 3.14.
-The application is deployed on Streamlit Community Cloud, which forces its own
-Python version and had moved to 3.14 by July 2026, while this repository's
-devcontainer pins 3.11 - and 3.11 is what the gate runs, because it is the
-version the suite has been proved against. So the deployed version is not
-currently gated. That job reports on it without blocking, and should be
-promoted into the gate once someone has confirmed the pins resolve cleanly on
-3.14. A suite that never runs on the version customers use has a hole in it,
-and the hole should be visible rather than silent.
+### Which Python CI runs, and why
+
+**3.14** - the version Streamlit Community Cloud actually serves this
+application on, and the only version `requirements.txt` installs on.
+
+The first version of this workflow gated on 3.11, because that is what
+`.devcontainer/devcontainer.json` pins. It failed in 27 seconds, at
+`pip install`:
+
+```
+ERROR: Ignored the following versions that require a different python version:
+       ... 2.5.1 Requires-Python >=3.12
+ERROR: No matching distribution found for numpy==2.5.1
+```
+
+`requirements.txt` had moved past 3.11 and nobody had noticed, because nothing
+installed it on 3.11 until this workflow did.
+
+> **Known defect, reported not fixed:** `.devcontainer/devcontainer.json` still
+> pins `python:1-3.11-bookworm`. That container cannot install this
+> application's own requirements. Bumping the image should be done by someone
+> who can confirm the image exists and rebuild it.
 
 ## Isolation — the suite refuses to run against anything real
 
