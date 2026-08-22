@@ -1154,11 +1154,25 @@ def control_chart_analysis(series_df, min_points=5):
             if run_len >= 8:
                 _record("Sustained shift (8+ consecutive points on one side)", i)
 
+        # trend_len counts POINTS in the run, not the intervals between them,
+        # so that "6+ consecutive points trending" means what it says and what
+        # Nelson rule 3 says: six points, five intervals. Corrected 22 Aug 2026
+        # - the previous version reset the counter to 1 on the very first
+        # interval, when no direction had been established yet, so it counted
+        # intervals and needed seven points. A six-point drift went unflagged,
+        # silently: the chart simply did not mark it.
         trend_len = 1
         direction = 0
         for i in range(1, n):
             d = np.sign(values[i] - values[i - 1])
-            trend_len = trend_len + 1 if d == direction and d != 0 else 1
+            if d != 0 and d == direction:
+                trend_len += 1
+            elif d != 0:
+                # A new direction. This point and the one before it are the
+                # first two points of the run.
+                trend_len = 2
+            else:
+                trend_len = 1
             direction = d if d != 0 else direction
             if trend_len >= 6:
                 _record("Sustained drift (6+ consecutive points trending)", i)
