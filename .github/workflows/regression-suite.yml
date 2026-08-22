@@ -1,0 +1,151 @@
+# Permanent automated regression suite.
+#
+# Work package 9 of the regression-suite CR. Two triggers, both required by
+# that CR: every pull request aimed at main, and every push that lands on main.
+# The first is the gate; the second catches anything that reached main another
+# way - a direct commit, a merge made outside a pull request, a revert.
+#
+# The PostgreSQL service is not optional. The migration-runner checks are
+# mandatory for a technical release, and they skip silently on any machine
+# without a PostgreSQL to talk to. A green run that skipped them is not a green
+# run, so this workflow checks that they actually executed and fails if they
+# did not - see the last step.
+
+name: Regression suite
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# A newer commit on the same branch supersedes an older run. Not applied to
+# main: every commit that lands there gets its own recorded result.
+concurrency:
+  group: regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    name: Full suite, PostgreSQL included
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        # Matches the major version of the Supabase project this application
+        # runs against. The migration runner relies on transactional DDL,
+        # dollar-quoted function bodies and to_regclass; proving it against
+        # anything else would prove the wrong thing.
+        image: postgres:16
+        env:
+          POSTGRES_USER: pi3
+          POSTGRES_PASSWORD: pi3
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pi3"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # No database name on the end, deliberately. Each migration-runner check
+      # creates and drops its own throwaway database, so it needs a server.
+      PI3_TEST_DB_URL: postgresql+psycopg2://pi3:pi3@localhost:5432
+
+    steps:
+      - name: Check out the commit under test
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install the pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Confirm the versions that are actually installed
+        # requirements.txt argues at length that a bumped pin is a deliberate
+        # act. This puts what resolved into the log, so a run can be read back
+        # months later without guessing.
+        run: pip freeze
+
+      - name: Run the suite
+        run: python -m pytest --junitxml=junit.xml
+
+      - name: The PostgreSQL checks must have actually run
+        # Charlie's rule of 21 August 2026: a release return may not report a
+        # clean mandatory suite from a run in which these skipped. Enforced
+        # here rather than left to whoever reads the log.
+        if: always()
+        run: python .github/scripts/assert_postgres_ran.py junit.xml
+
+      - name: Keep the result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ github.run_id }}
+          path: junit.xml
+          if-no-files-found: warn
+
+  deployment-target:
+    # INFORMATIONAL ONLY - this job cannot fail the gate.
+    #
+    # The application is deployed on Streamlit Community Cloud, which forces
+    # its own Python version and had moved to 3.14 by July 2026 (see the
+    # history in requirements.txt). The repository's own devcontainer pins
+    # 3.11, and that is what the gate above runs, because it is the version
+    # this suite has been proved against.
+    #
+    # So the deployed version is not currently gated. This job reports on it
+    # without blocking, and it should be promoted into the gate above - or the
+    # gap closed some other way - once someone has confirmed the pins resolve
+    # cleanly on 3.14. Leaving it silent would be the worse option: a suite
+    # that never runs on the version customers use is a suite with a hole in
+    # it, and the hole should be visible.
+    name: Python 3.14 (deployment target, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pi3
+          POSTGRES_PASSWORD: pi3
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pi3"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      PI3_TEST_DB_URL: postgresql+psycopg2://pi3:pi3@localhost:5432
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install the pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run the suite
+        run: python -m pytest
