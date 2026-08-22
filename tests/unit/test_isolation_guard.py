@@ -318,6 +318,75 @@ def test_a_production_secrets_file_does_not_win():
     assert "2 passed" in output
 
 
+# --- the evidence store -----------------------------------------------------
+
+def test_the_live_evidence_store_is_not_configured_during_a_run():
+    """Regulatory originals are evidence. A fixture file written into the live
+    bucket is indistinguishable from a real one afterwards."""
+    import regulatory_storage
+
+    assert not regulatory_storage.is_configured()
+    assert not os.environ.get("SUPABASE_URL")
+    assert not os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+
+
+def test_the_storage_guard_is_installed_in_this_very_session():
+    assert isolation.STATE.storage_installed
+
+
+def test_a_storage_call_that_injects_a_transport_still_works():
+    """The control. Without it, the refusal below could just be a broken store.
+
+    This is how every storage case in the suite is written, and it must keep
+    working - a guard that blocks the legitimate path as well is not a guard,
+    it is an outage.
+    """
+    import regulatory_storage as rs
+
+    calls = []
+
+    def transport(**kwargs):
+        calls.append(kwargs)
+        return 200, b"{}"
+
+    os.environ["SUPABASE_URL"] = "https://example.supabase.co"
+    os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "test-key"
+    try:
+        result = rs.put_original(
+            "candidate_list", b"fixture bytes", "fixture.xlsx", transport=transport
+        )
+    finally:
+        isolation.forget_storage_credentials(os.environ)
+
+    assert calls, "the injected transport should have been used"
+    assert result["storage_bucket"] == rs.BUCKET
+
+
+def test_the_session_aborts_when_a_test_would_really_write_to_the_bucket():
+    """Proof by refusal, for the evidence store.
+
+    The probe configures the store and calls put_original without injecting a
+    transport - the mistake a future test could make - and the session must
+    stop rather than PUT a fixture file into the live bucket.
+    """
+    result = run_probe(
+        """
+        import os
+
+        import regulatory_storage as rs
+
+        def test_forgets_to_inject_a_transport():
+            os.environ["SUPABASE_URL"] = "https://example.supabase.co"
+            os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "test-key"
+            rs.put_original("candidate_list", b"fixture", "fixture.xlsx")
+        """
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "TEST ISOLATION GUARD - SESSION ABORTED" in output
+    assert "object store" in output
+
+
 def test_a_normal_run_has_the_guard_installed_and_pointing_at_memory():
     """The live session this test is running in is itself isolated."""
     import db

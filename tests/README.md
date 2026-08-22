@@ -75,6 +75,13 @@ installed it on 3.11 until this workflow did.
 > application's own requirements. Bumping the image should be done by someone
 > who can confirm the image exists and rebuild it.
 
+## Proving the migration, later
+
+`tools/verify_check_migration.py` re-runs the before/after comparison that
+proved the 321 pre-CR checks survived the move into this suite. It needs a
+checkout of the old commit, so it is not part of the release run — see
+`tools/README.md`.
+
 ## Isolation — the suite refuses to run against anything real
 
 `tests/isolation.py` is a fail-closed guard. It aborts the **whole session**,
@@ -112,6 +119,24 @@ then the guard re-reads the engine that was *actually built*, and wraps
 unfiltered with unfiltered and passes whatever the code does. That has already
 produced one false pass in this project.
 
+### The evidence store
+
+The database guard says nothing about object storage, and regulatory originals
+are evidence in exactly the sense that matters: a fixture file written into the
+live `regulatory-sources` bucket is indistinguishable from a real one
+afterwards. `regulatory_storage` reads `SUPABASE_URL` and
+`SUPABASE_SERVICE_ROLE_KEY` the same way `db` reads its settings — secrets
+first, then the environment — so with those set, a test that called
+`put_original()` without injecting a transport would write into the live store.
+
+Same shape as the database guard: `conftest.py` removes both variables before
+anything reads them, and the guard wraps the one point where the module would
+really reach the network. A test that injects a transport — which is how every
+storage case here is written — never reaches it. A test that forgets is
+stopped, not discovered in the bucket.
+
+### Contexts
+
 For the same reason, `tests/fixtures/tenancy.py` will not build a context with
 no company:
 
@@ -121,6 +146,21 @@ ctx = tenant(company_id=1, platform_owner=True)  # an owner, still scoped
 ctx = platform_owner_all_companies()             # deliberately unfiltered
 ctx = tenant(company_id=None)                    # raises UnfilteredScope
 ```
+
+A test whose *claim* is company isolation must go further: it must run as a
+real company **and** as a user who is neither the platform owner nor a super
+admin, because both of those bypass scoping by design. That is a separate
+constructor, and it raises before the test reaches its business assertion:
+
+```python
+ctx = isolation_tenant(company_id=1)                       # the only valid shape
+ctx = isolation_tenant(company_id=None)                    # raises
+ctx = isolation_tenant(company_id=1, platform_owner=True)  # raises
+```
+
+This is not a ban on those contexts. Access-control tests legitimately need
+them and keep using `tenant()`. The strict rule applies only where the claim
+being made is isolation.
 
 **What the guard cannot do.** It cannot tell that the server named in
 `PI3_TEST_DB_URL` is production. It narrows that to one deliberate act by the

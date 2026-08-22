@@ -57,6 +57,9 @@ def _learn_production():
     for source in (os.environ.get("DATABASE_URL"), _secret("DATABASE_URL")):
         if source:
             isolation.remember_production_host(source)
+    for store in (os.environ.get("SUPABASE_URL"), _secret("SUPABASE_URL")):
+        if store:
+            isolation.remember_production_host(store)
     isolation.nominate_test_server(os.environ.get("PI3_TEST_DB_URL"))
 
 
@@ -103,18 +106,22 @@ if "db" in sys.modules:  # pragma: no cover - would mean something imported firs
 _empty_streamlit_secrets()
 
 
-# --- 3. Point the application at an in-memory database ----------------------
+# --- 3. Point the application at an in-memory database, and put the live -----
+#        evidence store out of reach
 os.environ["DATABASE_URL"] = "sqlite://"
+isolation.forget_storage_credentials(os.environ)
 
 
-# --- 4. Check every engine as it is opened ----------------------------------
+# --- 4. Check every engine as it is opened, and every trip to the store ------
 isolation.install()
+isolation.install_storage_guard()
 
 
 # --- 5. Verify the outcome --------------------------------------------------
 def pytest_sessionstart(session):
     isolation.verify_module_engine()
     isolation.verify_auth_not_disabled()
+    isolation.verify_storage_out_of_reach()
     # One in-memory database the AppTest thread can see too. See the function's
     # docstring for why the default pool is not good enough. Checked by the
     # allow-list like any other engine.

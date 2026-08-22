@@ -79,6 +79,8 @@ class IsolationState:
         self.production_hosts = set()    # hosts we know are not for testing
         self.installed = False
         self.original_create_engine = None
+        self.storage_installed = False
+        self.original_urlopen = None
         self.aborted = None
 
     def describe(self):
@@ -270,6 +272,87 @@ def verify_module_engine():
     if not check.allowed:
         _refuse(db.ENGINE.url, check.reason, "db.ENGINE, built at import time")
     return check
+
+
+# --- the evidence store -----------------------------------------------------
+#
+# Charlie, 22 August 2026, guard A: "test evidence and fixture documents never
+# enter live evidence stores."
+#
+# The database guard above says nothing about object storage, and regulatory
+# originals are evidence in exactly the sense that matters. regulatory_storage
+# reads SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY the same way db reads its
+# settings - st.secrets first, then the environment - and PUTs the file into
+# the "regulatory-sources" bucket over HTTP. conftest empties st.secrets, so
+# with those two variables in the environment of a developer machine or a CI
+# runner, a test that called put_original() without injecting a transport
+# would write a fixture file into the live evidence store. Nothing today does;
+# nothing stopped it either.
+#
+# Same shape as the database guard: neutralise, then verify. conftest removes
+# the two variables; this wraps the single point where the module would
+# actually reach the network, and aborts the session if anything gets there.
+
+_STORAGE_ENV = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")
+
+
+def forget_storage_credentials(env):
+    """Take the live evidence store out of reach before anything reads it."""
+    for name in _STORAGE_ENV:
+        env.pop(name, None)
+
+
+def install_storage_guard():
+    """Abort the session if a test would really talk to the evidence store.
+
+    A test that injects a transport - which is how every storage case in this
+    suite is written - never reaches this. A test that forgets to is stopped
+    here rather than discovered in the bucket.
+    """
+    if STATE.storage_installed:
+        return
+    import urllib.request
+
+    STATE.original_urlopen = urllib.request.urlopen
+
+    def guarded_urlopen(req, *args, **kwargs):
+        url = getattr(req, "full_url", None) or (req if isinstance(req, str) else "?")
+        _refuse(
+            "sqlite://",
+            "a test tried to reach the object store over the network at "
+            f"{url}. Regulatory originals are evidence: a fixture file written "
+            "into a live bucket is indistinguishable from a real one "
+            "afterwards. Inject a transport into the storage call instead.",
+            "urllib.request.urlopen, from a test",
+        )
+
+    urllib.request.urlopen = guarded_urlopen
+    STATE.storage_installed = True
+
+
+def uninstall_storage_guard():
+    """Only used by the tests that prove the guard."""
+    if not STATE.storage_installed:
+        return
+    import urllib.request
+
+    urllib.request.urlopen = STATE.original_urlopen
+    STATE.storage_installed = False
+
+
+def verify_storage_out_of_reach():
+    """Confirm the evidence store is not configured for this session."""
+    import regulatory_storage
+
+    if regulatory_storage.is_configured():
+        _refuse(
+            "sqlite://",
+            "the live evidence store is configured for this test session. "
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must not be readable "
+            "while tests run.",
+            "regulatory_storage.is_configured()",
+        )
+    return True
 
 
 def rebind_to_shared_memory():

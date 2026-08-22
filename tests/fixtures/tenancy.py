@@ -27,6 +27,23 @@ meant.
     ctx = tenant(company_id=1, platform_owner=True)  # owner, still scoped
     ctx = platform_owner_all_companies()          # deliberately unfiltered
     ctx = tenant(company_id=None)                 # raises UnfilteredScope
+
+The stricter control, for isolation claims
+------------------------------------------
+Charlie, 22 August 2026: a test that *claims to prove* company isolation or
+visibility must run as a real company, and as a user who is neither the
+platform owner nor a super admin. Both of those states bypass scoping by
+design, so an isolation test written in one of them can pass while proving
+nothing - the same failure as leaving company_id unset, one step further along.
+
+He was equally clear that this is not a general prohibition: access-control
+tests legitimately need owner and super-admin contexts, and those keep using
+``tenant()``. So the strict rule lives in its own constructor, and it raises
+before the test reaches its business assertion:
+
+    ctx = isolation_tenant(company_id=1)                    # the only valid shape
+    ctx = isolation_tenant(company_id=None)                 # raises
+    ctx = isolation_tenant(company_id=1, platform_owner=True)  # raises
 """
 
 from __future__ import annotations
@@ -36,6 +53,10 @@ from dataclasses import dataclass
 
 class UnfilteredScope(RuntimeError):
     """Raised when a test asks for a context with no company scope."""
+
+
+class InvalidIsolationContext(RuntimeError):
+    """Raised when a test claiming to prove isolation cannot prove anything."""
 
 
 @dataclass(frozen=True)
@@ -83,3 +104,33 @@ def tenant(company_id, *, platform_owner: bool = False, super_admin: bool = Fals
 def platform_owner_all_companies() -> TenantContext:
     """The deliberately unfiltered context, named so it cannot happen by accident."""
     return TenantContext(company_id=None, is_platform_owner=True, is_super_admin=False)
+
+
+def isolation_tenant(company_id, **flags) -> TenantContext:
+    """The only context a company-isolation test may run in.
+
+    Refuses, before the test reaches its business assertion:
+
+    * ``company_id=None`` - the unfiltered sentinel;
+    * ``platform_owner=True`` or ``super_admin=True`` - both bypass scoping,
+      so an isolation assertion made in either state is comparing something
+      unscoped with something unscoped.
+
+    Use :func:`tenant` for access-control tests that genuinely need those
+    states. This one is for tests whose claim is isolation.
+    """
+    if company_id is None:
+        raise InvalidIsolationContext(
+            "an isolation test needs a real company_id. None is the UNFILTERED "
+            "sentinel, so the test would compare unfiltered with unfiltered "
+            "and pass whatever the code does."
+        )
+    forbidden = [name for name in ("platform_owner", "super_admin") if flags.get(name)]
+    if forbidden:
+        raise InvalidIsolationContext(
+            f"an isolation test may not run as {' and '.join(forbidden)}. That "
+            "state bypasses company scoping by design, so the assertion would "
+            "hold whatever the scoping code did. Use tenant() if the point of "
+            "the test is the access-control behaviour of that state itself."
+        )
+    return tenant(company_id, **flags)

@@ -20,7 +20,13 @@ import pytest
 import access_control as ac
 import db as m
 import tenant_scope as ts
-from tests.fixtures import UnfilteredScope, platform_owner_all_companies, tenant
+from tests.fixtures import (
+    InvalidIsolationContext,
+    UnfilteredScope,
+    isolation_tenant,
+    platform_owner_all_companies,
+    tenant,
+)
 
 
 # --- the scope resolvers ----------------------------------------------------
@@ -44,7 +50,7 @@ SCOPES = [
 
 @pytest.mark.parametrize("label,resolve,attribute", SCOPES, ids=[s[0] for s in SCOPES])
 def test_a_company_resolves_its_own_rows(world, label, resolve, attribute):
-    ctx = tenant(company_id=world.a.company_id)
+    ctx = isolation_tenant(company_id=world.a.company_id)
     ids = resolve(world.session, ctx.company_id)
     assert getattr(world.a, attribute) in ids
 
@@ -52,7 +58,7 @@ def test_a_company_resolves_its_own_rows(world, label, resolve, attribute):
 @pytest.mark.parametrize("label,resolve,attribute", SCOPES, ids=[s[0] for s in SCOPES])
 def test_a_company_does_not_resolve_the_other_companys_rows(world, label, resolve, attribute):
     """The denial half. This is the assertion that makes the pair meaningful."""
-    ctx = tenant(company_id=world.a.company_id)
+    ctx = isolation_tenant(company_id=world.a.company_id)
     ids = resolve(world.session, ctx.company_id)
     assert getattr(world.b, attribute) not in ids
 
@@ -61,7 +67,7 @@ def test_a_company_does_not_resolve_the_other_companys_rows(world, label, resolv
 def test_the_denial_holds_in_the_other_direction_too(world, label, resolve, attribute):
     """B must not see A either. A filter that happens to work one way round
     because of insertion order is not a filter."""
-    ctx = tenant(company_id=world.b.company_id)
+    ctx = isolation_tenant(company_id=world.b.company_id)
     ids = resolve(world.session, ctx.company_id)
     assert getattr(world.b, attribute) in ids
     assert getattr(world.a, attribute) not in ids
@@ -71,7 +77,7 @@ def test_the_denial_holds_in_the_other_direction_too(world, label, resolve, attr
 
 def test_a_scoped_query_returns_this_companys_run_and_not_the_others(world):
     """Not the id list - the rows a page would actually put on screen."""
-    ctx = tenant(company_id=world.a.company_id)
+    ctx = isolation_tenant(company_id=world.a.company_id)
     run_ids = ts.run_ids_for_company(world.session, ctx.company_id)
 
     query = ts.apply_scope(
@@ -102,7 +108,7 @@ def test_a_company_with_no_plants_sees_nothing_rather_than_everything(world):
     yet". Treating the second as the first is how a brand-new company would be
     shown every other company's production runs on its first login.
     """
-    ctx = tenant(company_id=world.empty_company_id)
+    ctx = isolation_tenant(company_id=world.empty_company_id)
     run_ids = ts.run_ids_for_company(world.session, ctx.company_id)
     assert run_ids == []
 
@@ -131,6 +137,32 @@ def test_a_context_with_no_company_cannot_be_built_by_accident():
     with pytest.raises(UnfilteredScope) as raised:
         tenant(company_id=None)
     assert "UNFILTERED" in str(raised.value)
+
+
+def test_an_isolation_test_cannot_be_written_without_a_company():
+    with pytest.raises(InvalidIsolationContext) as raised:
+        isolation_tenant(company_id=None)
+    assert "UNFILTERED" in str(raised.value)
+
+
+@pytest.mark.parametrize("flag", ["platform_owner", "super_admin"])
+def test_an_isolation_test_cannot_be_written_as_a_scope_bypassing_user(flag):
+    """Both states bypass company scoping by design.
+
+    An isolation assertion made in either would hold whatever the scoping code
+    did - the same false pass as leaving company_id unset, one step further
+    along. It fails here, before the business assertion is reached.
+    """
+    with pytest.raises(InvalidIsolationContext) as raised:
+        isolation_tenant(company_id=1, **{flag: True})
+    assert "bypasses company scoping" in str(raised.value)
+
+
+def test_the_strict_rule_is_not_a_ban_on_those_contexts_everywhere():
+    """Access-control tests legitimately need them, and still get them."""
+    assert tenant(company_id=1, platform_owner=True).is_platform_owner
+    assert tenant(company_id=1, super_admin=True).is_super_admin
+    assert platform_owner_all_companies().is_unfiltered
 
 
 def test_a_platform_owner_scoped_to_one_company_is_still_scoped(world):
