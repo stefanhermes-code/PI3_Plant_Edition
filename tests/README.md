@@ -103,7 +103,7 @@ aborted. A safety mechanism nobody has watched fail is not evidence.
 |---|---|
 | `tests/unit/` | Runs with no external service. In-memory SQLite is allowed. |
 | `tests/integration/` | Needs a real service. Today that means PostgreSQL. |
-| `tests/pages/` | Streamlit page-render checks. Empty until work package 6. |
+| `tests/pages/` | Streamlit page-render checks via `AppTest`. See `tests/pages/README.md`. |
 | `tests/fixtures/` | Builders shared by more than one area: in-memory databases, tenant contexts, the two-company world. |
 | `tests/checks/` | The pre-CR scripts, carried across. See below. |
 | `tests/_recorder.py` | The machinery that replays them. |

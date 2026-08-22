@@ -115,6 +115,11 @@ isolation.install()
 def pytest_sessionstart(session):
     isolation.verify_module_engine()
     isolation.verify_auth_not_disabled()
+    # One in-memory database the AppTest thread can see too. See the function's
+    # docstring for why the default pool is not good enough. Checked by the
+    # allow-list like any other engine.
+    isolation.rebind_to_shared_memory()
+    isolation.verify_module_engine()
 
 
 def pytest_report_header(config):

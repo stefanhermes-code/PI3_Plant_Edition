@@ -272,6 +272,39 @@ def verify_module_engine():
     return check
 
 
+def rebind_to_shared_memory():
+    """Give the application one in-memory database that every thread can see.
+
+    ``db._database_url()`` returns ``sqlite://`` here, and SQLAlchemy's default
+    pool for an in-memory SQLite is ``SingletonThreadPool``: one connection per
+    thread, and each connection to ``sqlite://`` gets its **own** empty
+    database. That is fine while everything runs on one thread, and wrong the
+    moment it does not - ``streamlit.testing.v1.AppTest`` runs the page script
+    on a separate thread, so a page would see an empty database however
+    carefully a test had seeded it.
+
+    ``StaticPool`` keeps one connection for the life of the engine and hands
+    the same one to every thread, so the seed and the page agree about what
+    exists.
+
+    The new engine is created through the wrapped ``create_engine``, so it is
+    checked by the allow-list exactly like any other.
+    """
+    from sqlalchemy.pool import StaticPool
+
+    import db
+
+    engine = sa.create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    db.ENGINE = engine
+    db.SessionLocal.configure(bind=engine)
+    db.Base.metadata.create_all(engine)
+    return engine
+
+
 def verify_auth_not_disabled():
     """AUTH_DISABLED changes what a visibility test proves, so refuse it.
 
